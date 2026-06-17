@@ -73,7 +73,7 @@ class SchedulerFailureIntegrationTest extends AbstractSchedulerFlowIntegrationTe
 
         UUID jobId = submitCleanupJob(null, "redis-down-worker-" + UUID.randomUUID());
         jobService.markDispatchSucceeded(jobId);
-        JobDispatchEvent event = new JobDispatchEvent(jobId, com.job.scheduler.enums.JobType.CLEANUP);
+        JobDispatchEvent event = new JobDispatchEvent(jobId);
 
         assertThatThrownBy(() -> workerService.processJob(event))
                 .isInstanceOf(RedisUnavailableException.class)

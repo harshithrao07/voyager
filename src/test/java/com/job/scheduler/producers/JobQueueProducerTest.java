@@ -2,7 +2,6 @@ package com.job.scheduler.producers;
 
 import com.job.scheduler.constants.Topics;
 import com.job.scheduler.dto.JobDispatchEvent;
-import com.job.scheduler.enums.JobType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -34,7 +33,7 @@ class JobQueueProducerTest {
 
     @Test
     void sendToMainQueueUsesMainTopic() throws Exception {
-        JobDispatchEvent event = new JobDispatchEvent(UUID.randomUUID(), JobType.WEBHOOK);
+        JobDispatchEvent event = new JobDispatchEvent(UUID.randomUUID());
         when(kafkaTemplate.send(Topics.TOPIC_JOB_QUEUE, event.jobId(), event))
                 .thenReturn(CompletableFuture.completedFuture(null));
 
@@ -46,7 +45,7 @@ class JobQueueProducerTest {
 
     @Test
     void sendToHighPriorityQueueUsesHighPriorityTopic() throws Exception {
-        JobDispatchEvent event = new JobDispatchEvent(UUID.randomUUID(), JobType.CLEANUP);
+        JobDispatchEvent event = new JobDispatchEvent(UUID.randomUUID());
         when(kafkaTemplate.send(Topics.TOPIC_JOB_QUEUE_HIGH, event.jobId(), event))
                 .thenReturn(CompletableFuture.completedFuture(null));
 
@@ -58,7 +57,7 @@ class JobQueueProducerTest {
 
     @Test
     void sendToDlqUsesDlqTopic() throws Exception {
-        JobDispatchEvent event = new JobDispatchEvent(UUID.randomUUID(), JobType.SEND_EMAIL);
+        JobDispatchEvent event = new JobDispatchEvent(UUID.randomUUID());
         when(kafkaTemplate.send(Topics.TOPIC_JOB_DLQ, event.jobId(), event))
                 .thenReturn(CompletableFuture.completedFuture(null));
 
@@ -70,7 +69,7 @@ class JobQueueProducerTest {
 
     @Test
     void sendToMainQueuePropagatesKafkaFailure() {
-        JobDispatchEvent event = new JobDispatchEvent(UUID.randomUUID(), JobType.WEBHOOK);
+        JobDispatchEvent event = new JobDispatchEvent(UUID.randomUUID());
         CompletableFuture<?> failedFuture = CompletableFuture.failedFuture(new RuntimeException("kafka down"));
         when(kafkaTemplate.send(Topics.TOPIC_JOB_QUEUE, event.jobId(), event))
                 .thenReturn((CompletableFuture) failedFuture);

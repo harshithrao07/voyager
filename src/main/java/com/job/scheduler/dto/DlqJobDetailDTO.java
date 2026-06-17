@@ -27,6 +27,7 @@ public record DlqJobDetailDTO(
         Instant requeuedAt,
         Instant createdAt,
         Instant updatedAt,
+        List<JobStepResponseDTO> steps,
         List<ExecutionLogDTO> executionLogs,
         boolean canRequeue,
         boolean canRetryDeadLetterPublish

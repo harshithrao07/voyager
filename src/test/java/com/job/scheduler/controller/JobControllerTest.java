@@ -3,8 +3,10 @@ package com.job.scheduler.controller;
 import com.job.scheduler.dto.CancelJobResponseDTO;
 import com.job.scheduler.dto.JobDetailDTO;
 import com.job.scheduler.dto.JobPageDTO;
+import com.job.scheduler.dto.JobStepResponseDTO;
 import com.job.scheduler.dto.JobSummaryDTO;
 import com.job.scheduler.dto.RequeueJobResponseDTO;
+import com.job.scheduler.dto.WorkflowJobRequestDTO;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
 import com.job.scheduler.enums.JobType;
@@ -76,6 +78,62 @@ class JobControllerTest {
     }
 
     @Test
+    void submitWorkflowJobReturnsJobId() throws Exception {
+        UUID jobId = UUID.randomUUID();
+        when(jobService.submitWorkflowJob(org.mockito.ArgumentMatchers.any(WorkflowJobRequestDTO.class))).thenReturn(jobId);
+
+        String body = """
+                {
+                  "jobPriority": "MEDIUM",
+                  "maxAttempts": 3,
+                  "idempotencyKey": "workflow-controller-job-1",
+                  "steps": [
+                    {
+                      "stepOrder": 1,
+                      "stepType": "CLEANUP",
+                      "payload": {
+                        "olderThanDays": 7
+                      }
+                    },
+                    {
+                      "stepOrder": 2,
+                      "stepType": "WEBHOOK",
+                      "payload": {
+                        "url": "https://example.com/hook",
+                        "body": {
+                          "message": "cleanup complete"
+                        }
+                      }
+                    }
+                  ]
+                }
+                """;
+
+        mockMvc.perform(post("/app/v1/jobs/workflow")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").value(jobId.toString()));
+    }
+
+    @Test
+    void submitWorkflowJobValidatesEmptySteps() throws Exception {
+        String body = """
+                {
+                  "jobPriority": "MEDIUM",
+                  "idempotencyKey": "workflow-controller-job-empty",
+                  "steps": []
+                }
+                """;
+
+        mockMvc.perform(post("/app/v1/jobs/workflow")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_ERROR"));
+    }
+
+    @Test
     void getJobsReturnsPagedResponse() throws Exception {
         UUID jobId = UUID.randomUUID();
         Instant now = Instant.parse("2026-04-26T00:00:00Z");
@@ -132,6 +190,15 @@ class JobControllerTest {
         Instant now = Instant.parse("2026-04-26T00:00:00Z");
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("url", "https://example.com/hook");
+        JobStepResponseDTO step = new JobStepResponseDTO(
+                UUID.randomUUID(),
+                1,
+                JobType.WEBHOOK,
+                payload,
+                true,
+                now,
+                now
+        );
 
         JobDetailDTO detail = new JobDetailDTO(
                 jobId,
@@ -155,6 +222,7 @@ class JobControllerTest {
                 null,
                 null,
                 null,
+                List.of(step),
                 now,
                 now
         );
@@ -166,7 +234,11 @@ class JobControllerTest {
                 .andExpect(jsonPath("$.id").value(jobId.toString()))
                 .andExpect(jsonPath("$.jobType").value("WEBHOOK"))
                 .andExpect(jsonPath("$.jobStatus").value("PENDING"))
-                .andExpect(jsonPath("$.payload.url").value("https://example.com/hook"));
+                .andExpect(jsonPath("$.payload.url").value("https://example.com/hook"))
+                .andExpect(jsonPath("$.steps.length()").value(1))
+                .andExpect(jsonPath("$.steps[0].stepOrder").value(1))
+                .andExpect(jsonPath("$.steps[0].stepType").value("WEBHOOK"))
+                .andExpect(jsonPath("$.steps[0].payload.url").value("https://example.com/hook"));
     }
 
     @Test

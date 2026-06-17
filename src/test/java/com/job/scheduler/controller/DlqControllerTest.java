@@ -3,6 +3,7 @@ package com.job.scheduler.controller;
 import com.job.scheduler.dto.DlqJobDetailDTO;
 import com.job.scheduler.dto.DlqJobSummaryDTO;
 import com.job.scheduler.dto.DlqPageDTO;
+import com.job.scheduler.dto.JobStepResponseDTO;
 import com.job.scheduler.enums.DeadLetterStatus;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobType;
@@ -98,6 +99,15 @@ class DlqControllerTest {
         Instant now = Instant.parse("2026-04-26T00:00:00Z");
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("url", "https://example.com/hook");
+        JobStepResponseDTO step = new JobStepResponseDTO(
+                UUID.randomUUID(),
+                1,
+                JobType.WEBHOOK,
+                payload,
+                true,
+                now,
+                now
+        );
 
         DlqJobDetailDTO detail = new DlqJobDetailDTO(
                 jobId,
@@ -117,6 +127,7 @@ class DlqControllerTest {
                 null,
                 now,
                 now,
+                List.of(step),
                 List.of(),
                 true,
                 true
@@ -131,6 +142,9 @@ class DlqControllerTest {
                 .andExpect(jsonPath("$.attemptCount").value(4))
                 .andExpect(jsonPath("$.canRequeue").value(true))
                 .andExpect(jsonPath("$.canRetryDeadLetterPublish").value(true))
-                .andExpect(jsonPath("$.payload.url").value("https://example.com/hook"));
+                .andExpect(jsonPath("$.payload.url").value("https://example.com/hook"))
+                .andExpect(jsonPath("$.steps.length()").value(1))
+                .andExpect(jsonPath("$.steps[0].stepType").value("WEBHOOK"))
+                .andExpect(jsonPath("$.steps[0].payload.url").value("https://example.com/hook"));
     }
 }

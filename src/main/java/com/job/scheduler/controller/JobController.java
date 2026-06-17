@@ -7,6 +7,7 @@ import com.job.scheduler.dto.JobPageDTO;
 import com.job.scheduler.dto.JobRequestDTO;
 import com.job.scheduler.dto.JobSummaryDTO;
 import com.job.scheduler.dto.RequeueJobResponseDTO;
+import com.job.scheduler.dto.WorkflowJobRequestDTO;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
 import com.job.scheduler.enums.JobType;
@@ -35,6 +36,12 @@ public class JobController {
     @PostMapping
     public ResponseEntity<UUID> submitJob(@Valid @RequestBody JobRequestDTO jobRequestDTO) {
         UUID jobId = jobService.submitJob(jobRequestDTO);
+        return ResponseEntity.ok(jobId);
+    }
+
+    @PostMapping("/workflow")
+    public ResponseEntity<UUID> submitWorkflowJob(@Valid @RequestBody WorkflowJobRequestDTO workflowJobRequestDTO) {
+        UUID jobId = jobService.submitWorkflowJob(workflowJobRequestDTO);
         return ResponseEntity.ok(jobId);
     }
 

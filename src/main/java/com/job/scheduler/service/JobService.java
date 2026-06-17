@@ -10,13 +10,18 @@ import com.job.scheduler.dto.ExecutionLogDTO;
 import com.job.scheduler.dto.JobDetailDTO;
 import com.job.scheduler.dto.JobPageDTO;
 import com.job.scheduler.dto.JobRequestDTO;
+import com.job.scheduler.dto.JobStepRequestDTO;
+import com.job.scheduler.dto.JobStepResponseDTO;
 import com.job.scheduler.dto.JobSummaryDTO;
 import com.job.scheduler.dto.RequeueJobResponseDTO;
+import com.job.scheduler.dto.WorkflowJobRequestDTO;
 import com.job.scheduler.dto.payload.CleanupPayload;
+import com.job.scheduler.dto.payload.McpToolPayload;
 import com.job.scheduler.dto.payload.SendEmailPayload;
 import com.job.scheduler.dto.payload.WebhookPayload;
 import com.job.scheduler.entity.ExecutionLog;
 import com.job.scheduler.entity.Job;
+import com.job.scheduler.entity.JobStep;
 import com.job.scheduler.enums.DeadLetterStatus;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
@@ -28,12 +33,14 @@ import com.job.scheduler.monitoring.events.JobRequeuedEvent;
 import com.job.scheduler.monitoring.events.JobSubmittedEvent;
 import com.job.scheduler.repository.ExecutionLogRepository;
 import com.job.scheduler.repository.JobRepository;
+import com.job.scheduler.repository.JobStepRepository;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Validator;
+import org.hibernate.Hibernate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -49,7 +56,9 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 
@@ -61,6 +70,7 @@ public class JobService {
     private final JobRepository jobRepository;
     private final ObjectMapper objectMapper;
     private final ExecutionLogRepository executionLogRepository;
+    private final JobStepRepository jobStepRepository;
     private final Validator validator;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -69,12 +79,14 @@ public class JobService {
             JobRepository jobRepository,
             ObjectMapper objectMapper,
             ExecutionLogRepository executionLogRepository,
+            JobStepRepository jobStepRepository,
             Validator validator,
             ApplicationEventPublisher eventPublisher
     ) {
         this.jobRepository = jobRepository;
         this.objectMapper = objectMapper;
         this.executionLogRepository = executionLogRepository;
+        this.jobStepRepository = jobStepRepository;
         this.validator = validator;
         this.eventPublisher = eventPublisher;
     }
@@ -83,44 +95,84 @@ public class JobService {
             JobRepository jobRepository,
             ObjectMapper objectMapper,
             ExecutionLogRepository executionLogRepository,
+            JobStepRepository jobStepRepository,
             Validator validator
     ) {
-        this(jobRepository, objectMapper, executionLogRepository, validator, event -> {
+        this(jobRepository, objectMapper, executionLogRepository, jobStepRepository, validator, event -> {
         });
     }
 
     public UUID submitJob(JobRequestDTO jobRequestDTO) {
-        validateTypedPayload(jobRequestDTO.jobType(), jobRequestDTO.payload());
-        CronExpression cronExpression = parseCronExpression(jobRequestDTO.cronExpression());
-        UUID existingJobId = findExistingJobId(jobRequestDTO.idempotencyKey());
+        JobStepRequestDTO step = new JobStepRequestDTO(1, jobRequestDTO.jobType(), jobRequestDTO.payload());
+        return submitJob(
+                jobRequestDTO.jobPriority(),
+                jobRequestDTO.cronExpression(),
+                jobRequestDTO.maxAttempts(),
+                jobRequestDTO.idempotencyKey(),
+                List.of(step)
+        );
+    }
+
+    public UUID submitWorkflowJob(WorkflowJobRequestDTO workflowJobRequestDTO) {
+        validateWorkflowSteps(workflowJobRequestDTO.steps());
+        return submitJob(
+                workflowJobRequestDTO.jobPriority(),
+                workflowJobRequestDTO.cronExpression(),
+                workflowJobRequestDTO.maxAttempts(),
+                workflowJobRequestDTO.idempotencyKey(),
+                workflowJobRequestDTO.steps()
+        );
+    }
+
+    private UUID submitJob(
+            JobPriority jobPriority,
+            String cronExpressionValue,
+            Integer maxAttempts,
+            String idempotencyKey,
+            List<JobStepRequestDTO> steps
+    ) {
+        steps.forEach(step -> validateTypedPayload(step.stepType(), step.payload()));
+        CronExpression cronExpression = parseCronExpression(cronExpressionValue);
+        UUID existingJobId = findExistingJobId(idempotencyKey);
         if (existingJobId != null) {
             return existingJobId;
         }
 
         Job job = new Job();
-        job.setJobType(jobRequestDTO.jobType());
         job.setJobStatus(JobStatus.PENDING);
-        job.setJobPriority(jobRequestDTO.jobPriority());
-        job.setPayload(writePayload(jobRequestDTO.payload()));
-        job.setCronExpression(jobRequestDTO.cronExpression());
+        job.setJobPriority(jobPriority);
+        job.setCronExpression(cronExpressionValue);
         if (cronExpression != null) {
             job.setNextRunAt(nextRunAt(cronExpression));
         } else {
             job.setNextRunAt(Instant.now());
         }
-        job.setMaxAttempts(jobRequestDTO.maxAttempts() != null ? jobRequestDTO.maxAttempts() : job.getMaxAttempts());
-        job.setIdempotencyKey(jobRequestDTO.idempotencyKey());
+        job.setMaxAttempts(maxAttempts != null ? maxAttempts : job.getMaxAttempts());
+        job.setIdempotencyKey(idempotencyKey);
+        job.setSteps(steps.stream()
+                .sorted(Comparator.comparingInt(JobStepRequestDTO::stepOrder))
+                .map(step -> createStep(job, step.stepOrder(), step.stepType(), step.payload()))
+                .toList());
 
         try {
             Job savedJob = jobRepository.save(job);
-            publish(new JobSubmittedEvent(savedJob.getJobType(), savedJob.getJobPriority()));
+            publish(new JobSubmittedEvent(primaryStepType(savedJob), savedJob.getJobPriority()));
             return savedJob.getId();
         } catch (DataIntegrityViolationException exception) {
-            UUID duplicateJobId = findExistingJobId(jobRequestDTO.idempotencyKey());
+            UUID duplicateJobId = findExistingJobId(idempotencyKey);
             if (duplicateJobId != null) {
                 return duplicateJobId;
             }
             throw exception;
+        }
+    }
+
+    private void validateWorkflowSteps(List<JobStepRequestDTO> steps) {
+        Set<Integer> seenOrders = new HashSet<>();
+        for (JobStepRequestDTO step : steps) {
+            if (!seenOrders.add(step.stepOrder())) {
+                throw new IllegalArgumentException("Workflow step order must be unique");
+            }
         }
     }
 
@@ -202,9 +254,9 @@ public class JobService {
 
         return new DlqJobDetailDTO(
                 job.getId(),
-                job.getJobType(),
+                primaryStepType(job),
                 job.getJobPriority(),
-                readPayload(job.getPayload()),
+                readPayload(primaryStep(job).getPayload()),
                 job.getCronExpression(),
                 job.getLastErrorMessage(),
                 getAttemptCount(job.getId()),
@@ -218,6 +270,7 @@ public class JobService {
                 job.getRequeuedAt(),
                 job.getCreatedAt(),
                 job.getUpdatedAt(),
+                toStepResponses(job),
                 executionLogs,
                 true,
                 job.getDeadLetterStatus() == DeadLetterStatus.PENDING
@@ -248,19 +301,18 @@ public class JobService {
         }
 
         Job requeuedJob = new Job();
-        requeuedJob.setJobType(deadJob.getJobType());
         requeuedJob.setJobStatus(JobStatus.PENDING);
         requeuedJob.setJobPriority(deadJob.getJobPriority());
-        requeuedJob.setPayload(deadJob.getPayload());
         requeuedJob.setCronExpression(deadJob.getCronExpression());
         requeuedJob.setMaxAttempts(deadJob.getMaxAttempts());
         requeuedJob.setIdempotencyKey(deadJob.getIdempotencyKey() + ":requeue:" + UUID.randomUUID());
         requeuedJob.setNextRunAt(Instant.now());
         requeuedJob.setRequeuedFromJobId(deadJob.getId());
         requeuedJob.setRequeuedAt(Instant.now());
+        requeuedJob.setSteps(copySteps(deadJob, requeuedJob));
 
         Job savedJob = jobRepository.save(requeuedJob);
-        publish(new JobRequeuedEvent(savedJob.getJobType(), savedJob.getJobPriority()));
+        publish(new JobRequeuedEvent(primaryStepType(savedJob), savedJob.getJobPriority()));
         return new RequeueJobResponseDTO(savedJob.getId());
     }
 
@@ -286,7 +338,7 @@ public class JobService {
         job.setLastErrorMessage("Canceled by request");
 
         Job savedJob = jobRepository.save(job);
-        publish(new JobCanceledEvent(savedJob.getJobType(), savedJob.getJobPriority()));
+        publish(new JobCanceledEvent(primaryStepType(savedJob), savedJob.getJobPriority()));
         return new CancelJobResponseDTO(savedJob.getId(), savedJob.getJobStatus());
     }
 
@@ -295,8 +347,54 @@ public class JobService {
             case SEND_EMAIL -> validateRecord(payload, SendEmailPayload.class);
             case WEBHOOK -> validateRecord(payload, WebhookPayload.class);
             case CLEANUP -> validateRecord(payload, CleanupPayload.class);
+            case MCP_TOOL -> validateRecord(payload, McpToolPayload.class);
             default -> throw new IllegalArgumentException("Unsupported job type: " + jobType);
         }
+    }
+
+    private JobStep createStep(Job job, int stepOrder, JobType stepType, JsonNode payload) {
+        JobStep step = new JobStep();
+        step.setJob(job);
+        step.setStepOrder(stepOrder);
+        step.setStepType(stepType);
+        step.setPayload(writePayload(payload));
+        step.setEnabled(true);
+        return step;
+    }
+
+    private List<JobStep> copySteps(Job sourceJob, Job targetJob) {
+        return jobStepRepository.findByJobOrderByStepOrderAsc(sourceJob)
+                .stream()
+                .map(sourceStep -> {
+                    JobStep targetStep = new JobStep();
+                    targetStep.setJob(targetJob);
+                    targetStep.setStepOrder(sourceStep.getStepOrder());
+                    targetStep.setStepType(sourceStep.getStepType());
+                    targetStep.setPayload(sourceStep.getPayload());
+                    targetStep.setEnabled(sourceStep.isEnabled());
+                    return targetStep;
+                })
+                .toList();
+    }
+
+    public List<JobStep> getEnabledSteps(Job job) {
+        return jobStepRepository.findByJobAndEnabledTrueOrderByStepOrderAsc(job);
+    }
+
+    public JobType primaryStepType(Job job) {
+        return primaryStep(job).getStepType();
+    }
+
+    private JobStep primaryStep(Job job) {
+        if (Hibernate.isInitialized(job.getSteps()) && job.getSteps() != null && !job.getSteps().isEmpty()) {
+            return job.getSteps()
+                    .stream()
+                    .min(java.util.Comparator.comparingInt(JobStep::getStepOrder))
+                    .orElseThrow();
+        }
+
+        return jobStepRepository.findFirstByJobOrderByStepOrderAsc(job)
+                .orElseThrow(() -> new IllegalStateException("Job has no steps"));
     }
 
     private <T> void validateRecord(JsonNode payload, Class<T> payloadClass) {
@@ -357,7 +455,7 @@ public class JobService {
         job.setLastErrorMessage(errorMessage);
         markDeadLetterPending(job, errorMessage);
         jobRepository.save(job);
-        publish(new JobDeadLetteredEvent(job.getJobType(), job.getJobPriority()));
+        publish(new JobDeadLetteredEvent(primaryStepType(job), job.getJobPriority()));
     }
 
     @Transactional
@@ -505,7 +603,7 @@ public class JobService {
         job.setNextRunAt(null);
         job.setQueuedAt(Instant.now());
         jobRepository.save(job);
-        publish(new JobDispatchedEvent(job.getJobType(), job.getJobPriority()));
+        publish(new JobDispatchedEvent(primaryStepType(job), job.getJobPriority()));
     }
 
     @Transactional
@@ -590,7 +688,7 @@ public class JobService {
     private JobSummaryDTO toSummary(Job job) {
         return new JobSummaryDTO(
                 job.getId(),
-                job.getJobType(),
+                primaryStepType(job),
                 job.getJobStatus(),
                 job.getJobPriority(),
                 job.getCronExpression(),
@@ -623,7 +721,8 @@ public class JobService {
                 predicates.add(criteriaBuilder.equal(root.get("jobStatus"), status));
             }
             if (type != null) {
-                predicates.add(criteriaBuilder.equal(root.get("jobType"), type));
+                predicates.add(criteriaBuilder.equal(root.join("steps").get("stepType"), type));
+                query.distinct(true);
             }
             if (priority != null) {
                 predicates.add(criteriaBuilder.equal(root.get("jobPriority"), priority));
@@ -654,7 +753,8 @@ public class JobService {
                 predicates.add(criteriaBuilder.equal(root.get("deadLetterStatus"), deadLetterStatus));
             }
             if (type != null) {
-                predicates.add(criteriaBuilder.equal(root.get("jobType"), type));
+                predicates.add(criteriaBuilder.equal(root.join("steps").get("stepType"), type));
+                query.distinct(true);
             }
             if (priority != null) {
                 predicates.add(criteriaBuilder.equal(root.get("jobPriority"), priority));
@@ -673,7 +773,7 @@ public class JobService {
     private DlqJobSummaryDTO toDlqSummary(Job job) {
         return new DlqJobSummaryDTO(
                 job.getId(),
-                job.getJobType(),
+                primaryStepType(job),
                 job.getJobPriority(),
                 job.getLastErrorMessage(),
                 getAttemptCount(job.getId()),
@@ -693,10 +793,10 @@ public class JobService {
     private JobDetailDTO toDetail(Job job) {
         return new JobDetailDTO(
                 job.getId(),
-                job.getJobType(),
+                primaryStepType(job),
                 job.getJobStatus(),
                 job.getJobPriority(),
-                readPayload(job.getPayload()),
+                readPayload(primaryStep(job).getPayload()),
                 job.getCronExpression(),
                 job.getMaxAttempts(),
                 job.getIdempotencyKey(),
@@ -713,9 +813,35 @@ public class JobService {
                 job.getDeadLetterLastAttemptAt(),
                 job.getNextDeadLetterAttemptAt(),
                 job.getDeadLetterErrorMessage(),
+                toStepResponses(job),
                 job.getCreatedAt(),
                 job.getUpdatedAt()
         );
+    }
+
+    private List<JobStepResponseDTO> toStepResponses(Job job) {
+        return orderedSteps(job).stream()
+                .map(step -> new JobStepResponseDTO(
+                        step.getId(),
+                        step.getStepOrder(),
+                        step.getStepType(),
+                        readPayload(step.getPayload()),
+                        step.isEnabled(),
+                        step.getCreatedAt(),
+                        step.getUpdatedAt()
+                ))
+                .toList();
+    }
+
+    private List<JobStep> orderedSteps(Job job) {
+        if (Hibernate.isInitialized(job.getSteps()) && job.getSteps() != null && !job.getSteps().isEmpty()) {
+            return job.getSteps()
+                    .stream()
+                    .sorted(Comparator.comparingInt(JobStep::getStepOrder))
+                    .toList();
+        }
+
+        return jobStepRepository.findByJobOrderByStepOrderAsc(job);
     }
 
     private ExecutionLogDTO toExecutionLog(ExecutionLog executionLog) {

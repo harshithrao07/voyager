@@ -3,6 +3,7 @@ package com.job.scheduler.integration;
 import com.job.scheduler.dto.JobRequestDTO;
 import com.job.scheduler.entity.ExecutionLog;
 import com.job.scheduler.entity.Job;
+import com.job.scheduler.entity.JobStep;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
 import com.job.scheduler.enums.JobType;
@@ -21,6 +22,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.List;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Predicate;
 
@@ -68,13 +70,22 @@ abstract class AbstractSchedulerFlowIntegrationTest extends AbstractSchedulerCon
 
     protected Job saveCleanupJob(JobStatus status, Instant nextRunAt, String idempotencyKey) {
         Job job = new Job();
-        job.setJobType(JobType.CLEANUP);
         job.setJobStatus(status);
         job.setJobPriority(JobPriority.MEDIUM);
-        job.setPayload(objectMapper.createObjectNode().put("olderThanDays", 1).toString());
+        job.setSteps(List.of(cleanupStep(job)));
         job.setIdempotencyKey(idempotencyKey);
         job.setNextRunAt(nextRunAt);
         return jobRepository.saveAndFlush(job);
+    }
+
+    private JobStep cleanupStep(Job job) {
+        JobStep step = new JobStep();
+        step.setJob(job);
+        step.setStepOrder(1);
+        step.setStepType(JobType.CLEANUP);
+        step.setPayload(objectMapper.createObjectNode().put("olderThanDays", 1).toString());
+        step.setEnabled(true);
+        return step;
     }
 
     protected Job waitForJob(UUID jobId, Predicate<Job> predicate, Duration timeout, String expectation) {

@@ -1,6 +1,7 @@
 package com.job.scheduler.repository;
 
 import com.job.scheduler.entity.Job;
+import com.job.scheduler.entity.JobStep;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
 import com.job.scheduler.enums.JobType;
@@ -99,19 +100,19 @@ class JobRepositoryIntegrationTest {
     @Test
     void savePersistsJsonbPayload() {
         Job job = new Job();
-        job.setJobType(JobType.WEBHOOK);
         job.setJobStatus(JobStatus.PENDING);
         job.setJobPriority(JobPriority.MEDIUM);
-        job.setPayload(OBJECT_MAPPER.createObjectNode()
+        JobStep step = step(job, OBJECT_MAPPER.createObjectNode()
                 .put("url", "https://example.com/hook")
                 .set("body", OBJECT_MAPPER.createObjectNode().put("kind", "integration"))
                 .toString());
+        job.setSteps(List.of(step));
         job.setIdempotencyKey("jsonb-payload");
         job.setNextRunAt(Instant.now());
 
         Job saved = jobRepository.saveAndFlush(job);
         Job reloaded = jobRepository.findById(saved.getId()).orElseThrow();
-        var payload = OBJECT_MAPPER.readTree(reloaded.getPayload());
+        var payload = OBJECT_MAPPER.readTree(reloaded.getSteps().get(0).getPayload());
 
         assertThat(payload.get("url").stringValue()).isEqualTo("https://example.com/hook");
         assertThat(payload.get("body").get("kind").stringValue()).isEqualTo("integration");
@@ -119,12 +120,24 @@ class JobRepositoryIntegrationTest {
 
     private Job saveJob(JobStatus status, Instant nextRunAt, String idempotencyKey) {
         Job job = new Job();
-        job.setJobType(JobType.WEBHOOK);
         job.setJobStatus(status);
         job.setJobPriority(JobPriority.MEDIUM);
-        job.setPayload(OBJECT_MAPPER.createObjectNode().put("url", "https://example.com/hook").toString());
+        job.setSteps(List.of(step(
+                job,
+                OBJECT_MAPPER.createObjectNode().put("url", "https://example.com/hook").toString()
+        )));
         job.setIdempotencyKey(idempotencyKey);
         job.setNextRunAt(nextRunAt);
         return jobRepository.saveAndFlush(job);
+    }
+
+    private JobStep step(Job job, String payload) {
+        JobStep step = new JobStep();
+        step.setJob(job);
+        step.setStepOrder(1);
+        step.setStepType(JobType.WEBHOOK);
+        step.setPayload(payload);
+        step.setEnabled(true);
+        return step;
     }
 }

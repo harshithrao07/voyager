@@ -3,7 +3,6 @@ package com.job.scheduler.scheduler;
 import com.job.scheduler.dto.JobDispatchEvent;
 import com.job.scheduler.entity.Job;
 import com.job.scheduler.enums.JobPriority;
-import com.job.scheduler.enums.JobType;
 import com.job.scheduler.producers.JobQueueProducer;
 import com.job.scheduler.repository.JobRepository;
 import com.job.scheduler.service.JobService;
@@ -89,7 +88,7 @@ class DueJobSchedulerServiceTest {
     @Test
     void dispatchDueJobsSendsHighPriorityJobsToHighPriorityQueue() {
         UUID jobId = UUID.randomUUID();
-        Job job = job(jobId, JobPriority.HIGH, JobType.WEBHOOK);
+        Job job = job(jobId, JobPriority.HIGH);
 
         when(redisHealthService.isRedisAvailable()).thenReturn(true);
         when(jobRepository.claimDueJobsForDispatch(any(), any(), any(Integer.class))).thenReturn(List.of(job));
@@ -106,13 +105,12 @@ class DueJobSchedulerServiceTest {
 
         JobDispatchEvent event = eventCaptor.getValue();
         assertThat(event.jobId()).isEqualTo(jobId);
-        assertThat(event.jobType()).isEqualTo(JobType.WEBHOOK);
     }
 
     @Test
     void dispatchDueJobsSendsNonHighPriorityJobsToMainQueue() {
         UUID jobId = UUID.randomUUID();
-        Job job = job(jobId, JobPriority.MEDIUM, JobType.CLEANUP);
+        Job job = job(jobId, JobPriority.MEDIUM);
 
         when(redisHealthService.isRedisAvailable()).thenReturn(true);
         when(jobRepository.claimDueJobsForDispatch(any(), any(), any(Integer.class))).thenReturn(List.of(job));
@@ -129,13 +127,12 @@ class DueJobSchedulerServiceTest {
 
         JobDispatchEvent event = eventCaptor.getValue();
         assertThat(event.jobId()).isEqualTo(jobId);
-        assertThat(event.jobType()).isEqualTo(JobType.CLEANUP);
     }
 
     @Test
     void dispatchDueJobsMovesJobBackToRetryWhenKafkaSendFails() {
         UUID jobId = UUID.randomUUID();
-        Job job = job(jobId, JobPriority.LOW, JobType.WEBHOOK);
+        Job job = job(jobId, JobPriority.LOW);
 
         when(redisHealthService.isRedisAvailable()).thenReturn(true);
         when(jobRepository.claimDueJobsForDispatch(any(), any(), any(Integer.class))).thenReturn(List.of(job));
@@ -150,11 +147,10 @@ class DueJobSchedulerServiceTest {
         verify(jobService).scheduleRetry(eq(jobId), any(Instant.class), eq(null));
     }
 
-    private Job job(UUID id, JobPriority priority, JobType type) {
+    private Job job(UUID id, JobPriority priority) {
         Job job = new Job();
         job.setId(id);
         job.setJobPriority(priority);
-        job.setJobType(type);
         return job;
     }
 }

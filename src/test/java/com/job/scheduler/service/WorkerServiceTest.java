@@ -5,7 +5,6 @@ import com.job.scheduler.entity.ExecutionLog;
 import com.job.scheduler.entity.Job;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
-import com.job.scheduler.enums.JobType;
 import com.job.scheduler.exception.RedisUnavailableException;
 import com.job.scheduler.handlers.JobHandlerRouter;
 import com.job.scheduler.utility.Utilities;
@@ -84,7 +83,7 @@ class WorkerServiceTest {
 
     @Test
     void processJobThrowsWhenRedisIsUnavailable() {
-        JobDispatchEvent event = new JobDispatchEvent(UUID.randomUUID(), JobType.WEBHOOK);
+        JobDispatchEvent event = new JobDispatchEvent(UUID.randomUUID());
         when(redisHealthService.isRedisAvailable()).thenReturn(false);
 
         assertThatThrownBy(() -> workerService.processJob(event))
@@ -95,8 +94,8 @@ class WorkerServiceTest {
     @Test
     void processJobSkipsWhenDoneMarkerExists() {
         UUID jobId = UUID.randomUUID();
-        JobDispatchEvent event = new JobDispatchEvent(jobId, JobType.WEBHOOK);
-        Job job = activeJob(jobId, JobType.WEBHOOK);
+        JobDispatchEvent event = new JobDispatchEvent(jobId);
+        Job job = activeJob(jobId);
 
         when(redisHealthService.isRedisAvailable()).thenReturn(true);
         when(jobService.findById(jobId)).thenReturn(job);
@@ -111,8 +110,8 @@ class WorkerServiceTest {
     @Test
     void processJobSkipsWhenLockIsNotAcquired() {
         UUID jobId = UUID.randomUUID();
-        JobDispatchEvent event = new JobDispatchEvent(jobId, JobType.WEBHOOK);
-        Job job = activeJob(jobId, JobType.WEBHOOK);
+        JobDispatchEvent event = new JobDispatchEvent(jobId);
+        Job job = activeJob(jobId);
 
         when(redisHealthService.isRedisAvailable()).thenReturn(true);
         when(jobService.findById(jobId)).thenReturn(job);
@@ -128,8 +127,8 @@ class WorkerServiceTest {
     @Test
     void processJobMarksOneTimeJobSuccess() {
         UUID jobId = UUID.randomUUID();
-        JobDispatchEvent event = new JobDispatchEvent(jobId, JobType.WEBHOOK);
-        Job job = activeJob(jobId, JobType.WEBHOOK);
+        JobDispatchEvent event = new JobDispatchEvent(jobId);
+        Job job = activeJob(jobId);
         ExecutionLog executionLog = new ExecutionLog();
         String doneKey = Utilities.getDoneKey(job.getIdempotencyKey());
 
@@ -143,7 +142,7 @@ class WorkerServiceTest {
         workerService.processJob(event);
 
         verify(jobService).markJobStartingAtomic(jobId, "worker-test");
-        verify(jobHandlerRouter).route(event);
+        verify(jobHandlerRouter).route(event, executionLog);
         verify(jobService).markJobCompletedAtomic(jobId, executionLog, "worker-test");
         verify(valueOperations).set(doneKey, "true", Duration.ofHours(24));
         verify(redisLockService).releaseLock("job-lock:" + jobId, "token-1");
@@ -152,8 +151,8 @@ class WorkerServiceTest {
     @Test
     void processJobSchedulesNextCronRunForCronJobs() {
         UUID jobId = UUID.randomUUID();
-        JobDispatchEvent event = new JobDispatchEvent(jobId, JobType.CLEANUP);
-        Job job = activeJob(jobId, JobType.CLEANUP);
+        JobDispatchEvent event = new JobDispatchEvent(jobId);
+        Job job = activeJob(jobId);
         ExecutionLog executionLog = new ExecutionLog();
 
         when(redisHealthService.isRedisAvailable()).thenReturn(true);
@@ -174,8 +173,8 @@ class WorkerServiceTest {
     @Test
     void processJobMarksDeadForIllegalArgumentException() {
         UUID jobId = UUID.randomUUID();
-        JobDispatchEvent event = new JobDispatchEvent(jobId, JobType.WEBHOOK);
-        Job job = activeJob(jobId, JobType.WEBHOOK);
+        JobDispatchEvent event = new JobDispatchEvent(jobId);
+        Job job = activeJob(jobId);
         ExecutionLog executionLog = new ExecutionLog();
 
         when(redisHealthService.isRedisAvailable()).thenReturn(true);
@@ -184,7 +183,8 @@ class WorkerServiceTest {
         when(jobService.findById(jobId)).thenReturn(job);
         when(jobService.maxAttemptsExceeded(jobId)).thenReturn(false);
         when(jobService.markJobStartingAtomic(jobId, "worker-test")).thenReturn(executionLog);
-        org.mockito.Mockito.doThrow(new IllegalArgumentException("bad payload")).when(jobHandlerRouter).route(event);
+        org.mockito.Mockito.doThrow(new IllegalArgumentException("bad payload"))
+                .when(jobHandlerRouter).route(event, executionLog);
 
         workerService.processJob(event);
 
@@ -198,8 +198,8 @@ class WorkerServiceTest {
     @Test
     void processJobSchedulesRetryForRetryableFailure() {
         UUID jobId = UUID.randomUUID();
-        JobDispatchEvent event = new JobDispatchEvent(jobId, JobType.WEBHOOK);
-        Job job = activeJob(jobId, JobType.WEBHOOK);
+        JobDispatchEvent event = new JobDispatchEvent(jobId);
+        Job job = activeJob(jobId);
         ExecutionLog executionLog = new ExecutionLog();
 
         when(redisHealthService.isRedisAvailable()).thenReturn(true);
@@ -209,7 +209,8 @@ class WorkerServiceTest {
         when(jobService.maxAttemptsExceeded(jobId)).thenReturn(false);
         when(jobService.markJobStartingAtomic(jobId, "worker-test")).thenReturn(executionLog);
         when(jobService.getAttemptCount(jobId)).thenReturn(1L);
-        org.mockito.Mockito.doThrow(new RuntimeException("temporary failure")).when(jobHandlerRouter).route(event);
+        org.mockito.Mockito.doThrow(new RuntimeException("temporary failure"))
+                .when(jobHandlerRouter).route(event, executionLog);
 
         workerService.processJob(event);
 
@@ -224,8 +225,8 @@ class WorkerServiceTest {
     @Test
     void processJobMarksDeadWhenAttemptsAlreadyExceeded() {
         UUID jobId = UUID.randomUUID();
-        JobDispatchEvent event = new JobDispatchEvent(jobId, JobType.WEBHOOK);
-        Job job = activeJob(jobId, JobType.WEBHOOK);
+        JobDispatchEvent event = new JobDispatchEvent(jobId);
+        Job job = activeJob(jobId);
 
         when(redisHealthService.isRedisAvailable()).thenReturn(true);
         when(redisTemplate.hasKey(Utilities.getDoneKey(job.getIdempotencyKey()))).thenReturn(false);
@@ -240,13 +241,12 @@ class WorkerServiceTest {
         verify(redisLockService).releaseLock("job-lock:" + jobId, "token-5");
     }
 
-    private Job activeJob(UUID id, JobType type) {
+    private Job activeJob(UUID id) {
         Job job = new Job();
         job.setId(id);
-        job.setJobType(type);
         job.setJobPriority(JobPriority.MEDIUM);
         job.setJobStatus(JobStatus.QUEUED);
-        job.setIdempotencyKey(type.name().toLowerCase() + "-" + id);
+        job.setIdempotencyKey("job-" + id);
         return job;
     }
 }

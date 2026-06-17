@@ -47,7 +47,7 @@ public class DueJobSchedulerService {
         );
 
         for (Job job : dueJobs) {
-            JobDispatchEvent event = new JobDispatchEvent(job.getId(), job.getJobType());
+            JobDispatchEvent event = new JobDispatchEvent(job.getId());
             CompletableFuture<Void> sendFuture;
             jobService.markDispatchQueued(job.getId());
 

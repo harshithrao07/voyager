@@ -3,7 +3,6 @@ package com.job.scheduler.integration;
 import com.job.scheduler.dto.JobDispatchEvent;
 import com.job.scheduler.entity.Job;
 import com.job.scheduler.enums.JobStatus;
-import com.job.scheduler.enums.JobType;
 import com.job.scheduler.service.WorkerService;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
@@ -91,7 +90,10 @@ class SchedulerConcurrencyIntegrationTest extends AbstractSchedulerFlowIntegrati
                 throw new AssertionError("Timed out waiting to release handler execution");
             }
             return null;
-        }).when(jobHandlerRouter).route(any(JobDispatchEvent.class));
+        }).when(jobHandlerRouter).route(
+                any(JobDispatchEvent.class),
+                any(com.job.scheduler.entity.ExecutionLog.class)
+        );
 
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
@@ -99,7 +101,7 @@ class SchedulerConcurrencyIntegrationTest extends AbstractSchedulerFlowIntegrati
             Runnable workerCall = () -> {
                 try {
                     barrier.await(5, TimeUnit.SECONDS);
-                    workerService.processJob(new JobDispatchEvent(jobId, JobType.CLEANUP));
+                    workerService.processJob(new JobDispatchEvent(jobId));
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
@@ -124,7 +126,10 @@ class SchedulerConcurrencyIntegrationTest extends AbstractSchedulerFlowIntegrati
             assertThat(processed.getCompletedAt()).isNotNull();
             assertThat(executionLogRepository.countByJobId(jobId)).isEqualTo(1);
             assertThat(handlerThreads).hasSize(1);
-            verify(jobHandlerRouter, times(1)).route(any(JobDispatchEvent.class));
+            verify(jobHandlerRouter, times(1)).route(
+                    any(JobDispatchEvent.class),
+                    any(com.job.scheduler.entity.ExecutionLog.class)
+            );
         } finally {
             releaseHandler.countDown();
             executor.shutdownNow();

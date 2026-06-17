@@ -3,14 +3,11 @@ package com.job.scheduler.entity;
 import com.job.scheduler.enums.DeadLetterStatus;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
-import com.job.scheduler.enums.JobType;
 import jakarta.persistence.*;
 import lombok.Data;
 import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
-import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.List;
@@ -37,20 +34,12 @@ public class Job {
     private UUID id;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "job_type",  nullable = false)
-    private JobType jobType;
-
-    @Enumerated(EnumType.STRING)
     @Column(name = "job_status",  nullable = false)
     private JobStatus jobStatus;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "job_priority",  nullable = false)
     private JobPriority jobPriority;
-
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "payload", columnDefinition = "jsonb", nullable = false)
-    private String payload;
 
     @Column(name = "cron_expression")
     private String cronExpression;
@@ -112,4 +101,7 @@ public class Job {
 
     @OneToMany(mappedBy = "jobDetails", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<ExecutionLog> executionLogs;
+
+    @OneToMany(mappedBy = "job", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<JobStep> steps;
 }

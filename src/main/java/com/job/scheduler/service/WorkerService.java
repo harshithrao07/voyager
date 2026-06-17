@@ -133,9 +133,9 @@ public class WorkerService {
 
             // Route it to right per type handler
             Instant executionStartedAt = Instant.now();
-            jobHandlerRouter.route(jobDispatchEvent);
+            jobHandlerRouter.route(jobDispatchEvent, executionLog);
             publish(new JobExecutedEvent(
-                    job.getJobType(),
+                    jobService.primaryStepType(job),
                     job.getJobPriority(),
                     JobStatus.SUCCESS,
                     Duration.between(executionStartedAt, Instant.now())
@@ -163,7 +163,7 @@ public class WorkerService {
         if (executionLog != null) {
             executionLogService.updateExecutionStatus(executionLog, JobStatus.FAILED, e.getMessage(), workerId);
             publish(new JobExecutedEvent(
-                    job.getJobType(),
+                    jobService.primaryStepType(job),
                     job.getJobPriority(),
                     JobStatus.FAILED,
                     durationSince(executionLog.getStartedAt())

@@ -37,7 +37,7 @@ public class DeadLetterSchedulerService {
 
         for (Job job : jobs) {
             jobService.markDeadLetterAttempt(job.getId(), Instant.now().plusMillis(deadLetterDispatchRetryDelayMs));
-            JobDispatchEvent event = new JobDispatchEvent(job.getId(), job.getJobType());
+            JobDispatchEvent event = new JobDispatchEvent(job.getId());
 
             jobQueueProducer.sendToDlq(event).whenComplete((ignored, ex) -> {
                 if (ex == null) {

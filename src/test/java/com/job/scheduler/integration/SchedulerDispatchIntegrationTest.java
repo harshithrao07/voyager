@@ -4,7 +4,6 @@ import com.job.scheduler.dto.JobDispatchEvent;
 import com.job.scheduler.entity.Job;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
-import com.job.scheduler.enums.JobType;
 import com.job.scheduler.scheduler.DueJobSchedulerService;
 import com.job.scheduler.service.WorkerService;
 import com.job.scheduler.utility.Utilities;
@@ -30,7 +29,10 @@ class SchedulerDispatchIntegrationTest extends AbstractSchedulerFlowIntegrationT
 
     @Test
     void dispatchDueJobsProcessesJobEndToEndThroughKafka() {
-        doNothing().when(jobHandlerRouter).route(any(JobDispatchEvent.class));
+        doNothing().when(jobHandlerRouter).route(
+                any(JobDispatchEvent.class),
+                any(com.job.scheduler.entity.ExecutionLog.class)
+        );
 
         UUID jobId = submitCleanupJob(null, "e2e-success-" + UUID.randomUUID());
 
@@ -49,7 +51,6 @@ class SchedulerDispatchIntegrationTest extends AbstractSchedulerFlowIntegrationT
                 "execution log to be marked SUCCESS"
         );
 
-        assertThat(processed.getJobType()).isEqualTo(JobType.CLEANUP);
         assertThat(processed.getJobPriority()).isEqualTo(JobPriority.MEDIUM);
         assertThat(processed.getQueuedAt()).isNull();
         assertThat(processed.getStartedAt()).isNotNull();
@@ -73,7 +74,7 @@ class SchedulerDispatchIntegrationTest extends AbstractSchedulerFlowIntegrationT
         Job queued = jobRepository.findById(jobId).orElseThrow();
         redisTemplate.opsForValue().set(Utilities.getDoneKey(queued.getIdempotencyKey()), "true", Duration.ofHours(24));
 
-        workerService.processJob(new JobDispatchEvent(jobId, JobType.CLEANUP));
+        workerService.processJob(new JobDispatchEvent(jobId));
 
         var untouched = jobRepository.findById(jobId).orElseThrow();
         assertThat(untouched.getJobStatus()).isEqualTo(JobStatus.QUEUED);
@@ -85,12 +86,15 @@ class SchedulerDispatchIntegrationTest extends AbstractSchedulerFlowIntegrationT
 
     @Test
     void processJobSchedulesRetryAfterHandlerFailure() {
-        doThrow(new RuntimeException("temporary failure")).when(jobHandlerRouter).route(any(JobDispatchEvent.class));
+        doThrow(new RuntimeException("temporary failure")).when(jobHandlerRouter).route(
+                any(JobDispatchEvent.class),
+                any(com.job.scheduler.entity.ExecutionLog.class)
+        );
 
         UUID jobId = submitCleanupJob(null, "retry-flow-" + UUID.randomUUID());
         jobService.markDispatchSucceeded(jobId);
 
-        workerService.processJob(new JobDispatchEvent(jobId, JobType.CLEANUP));
+        workerService.processJob(new JobDispatchEvent(jobId));
 
         var retried = jobRepository.findById(jobId).orElseThrow();
         var executionLog = waitForExecutionLog(
@@ -117,12 +121,15 @@ class SchedulerDispatchIntegrationTest extends AbstractSchedulerFlowIntegrationT
 
     @Test
     void processJobReschedulesCronJobAfterSuccess() {
-        doNothing().when(jobHandlerRouter).route(any(JobDispatchEvent.class));
+        doNothing().when(jobHandlerRouter).route(
+                any(JobDispatchEvent.class),
+                any(com.job.scheduler.entity.ExecutionLog.class)
+        );
 
         UUID jobId = submitCleanupJob("*/5 * * * * *", "cron-flow-" + UUID.randomUUID());
         jobService.markDispatchSucceeded(jobId);
 
-        workerService.processJob(new JobDispatchEvent(jobId, JobType.CLEANUP));
+        workerService.processJob(new JobDispatchEvent(jobId));
 
         var rescheduled = jobRepository.findById(jobId).orElseThrow();
         var executionLog = waitForExecutionLog(

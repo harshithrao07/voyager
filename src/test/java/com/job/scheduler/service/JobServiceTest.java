@@ -1,15 +1,20 @@
 package com.job.scheduler.service;
 
 import com.job.scheduler.dto.CancelJobResponseDTO;
+import com.job.scheduler.dto.JobStepRequestDTO;
 import com.job.scheduler.dto.JobRequestDTO;
 import com.job.scheduler.dto.RequeueJobResponseDTO;
+import com.job.scheduler.dto.WorkflowJobRequestDTO;
+import com.job.scheduler.dto.JobDetailDTO;
 import com.job.scheduler.entity.Job;
+import com.job.scheduler.entity.JobStep;
 import com.job.scheduler.enums.DeadLetterStatus;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
 import com.job.scheduler.enums.JobType;
 import com.job.scheduler.repository.ExecutionLogRepository;
 import com.job.scheduler.repository.JobRepository;
+import com.job.scheduler.repository.JobStepRepository;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -26,6 +31,7 @@ import tools.jackson.databind.node.ObjectNode;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -44,6 +50,9 @@ class JobServiceTest {
     private ExecutionLogRepository executionLogRepository;
 
     @Mock
+    private JobStepRepository jobStepRepository;
+
+    @Mock
     private Validator validator;
 
     private ObjectMapper objectMapper;
@@ -57,6 +66,7 @@ class JobServiceTest {
                 jobRepository,
                 objectMapper,
                 executionLogRepository,
+                jobStepRepository,
                 validator
         );
     }
@@ -95,10 +105,11 @@ class JobServiceTest {
 
         Job savedJob = jobCaptor.getValue();
 
-        assertThat(savedJob.getJobType()).isEqualTo(JobType.WEBHOOK);
         assertThat(savedJob.getJobPriority()).isEqualTo(JobPriority.MEDIUM);
         assertThat(savedJob.getJobStatus()).isEqualTo(JobStatus.PENDING);
-        assertThat(savedJob.getPayload()).isEqualTo(payload.toString());
+        assertThat(savedJob.getSteps()).hasSize(1);
+        assertThat(savedJob.getSteps().get(0).getStepType()).isEqualTo(JobType.WEBHOOK);
+        assertThat(savedJob.getSteps().get(0).getPayload()).isEqualTo(payload.toString());
         assertThat(savedJob.getCronExpression()).isNull();
         assertThat(savedJob.getNextRunAt()).isNotNull();
         assertThat(savedJob.getMaxAttempts()).isEqualTo(5);
@@ -193,6 +204,116 @@ class JobServiceTest {
         assertThat(savedJob.getJobStatus()).isEqualTo(JobStatus.PENDING);
         assertThat(savedJob.getCronExpression()).isEqualTo("0 */5 * * * *");
         assertThat(savedJob.getNextRunAt()).isAfter(Instant.now().minusSeconds(1));
+    }
+
+    @Test
+    void submitJobCreatesMcpToolJob() {
+        ObjectNode arguments = objectMapper.createObjectNode();
+        arguments.put("message", "hello");
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("serverId", "local-tools");
+        payload.put("toolName", "ping");
+        payload.set("arguments", arguments);
+        payload.put("maxAllowedTrustLevel", "READ_ONLY");
+
+        JobRequestDTO request = new JobRequestDTO(
+                JobType.MCP_TOOL,
+                JobPriority.MEDIUM,
+                payload,
+                null,
+                3,
+                "mcp-job-key"
+        );
+
+        when(validator.validate(any())).thenReturn(Set.of());
+        when(jobRepository.findByIdempotencyKey("mcp-job-key")).thenReturn(Optional.empty());
+        when(jobRepository.save(any(Job.class))).thenAnswer(invocation -> {
+            Job job = invocation.getArgument(0);
+            job.setId(UUID.randomUUID());
+            return job;
+        });
+
+        jobService.submitJob(request);
+
+        ArgumentCaptor<Job> jobCaptor = ArgumentCaptor.forClass(Job.class);
+        verify(jobRepository).save(jobCaptor.capture());
+
+        Job savedJob = jobCaptor.getValue();
+        assertThat(savedJob.getSteps()).hasSize(1);
+        assertThat(savedJob.getSteps().get(0).getStepType()).isEqualTo(JobType.MCP_TOOL);
+        assertThat(savedJob.getSteps().get(0).getPayload()).isEqualTo(payload.toString());
+    }
+
+    @Test
+    void submitWorkflowJobCreatesOrderedSteps() {
+        ObjectNode cleanupPayload = objectMapper.createObjectNode();
+        cleanupPayload.put("olderThanDays", 30);
+
+        ObjectNode webhookPayload = objectMapper.createObjectNode();
+        webhookPayload.put("url", "https://example.com/hook");
+        webhookPayload.set("body", objectMapper.createObjectNode().put("message", "done"));
+
+        WorkflowJobRequestDTO request = new WorkflowJobRequestDTO(
+                JobPriority.HIGH,
+                null,
+                4,
+                "workflow-job-key",
+                List.of(
+                        new JobStepRequestDTO(2, JobType.WEBHOOK, webhookPayload),
+                        new JobStepRequestDTO(1, JobType.CLEANUP, cleanupPayload)
+                )
+        );
+
+        when(validator.validate(any())).thenReturn(Set.of());
+        when(jobRepository.findByIdempotencyKey("workflow-job-key")).thenReturn(Optional.empty());
+
+        UUID savedId = UUID.randomUUID();
+        when(jobRepository.save(any(Job.class))).thenAnswer(invocation -> {
+            Job job = invocation.getArgument(0);
+            job.setId(savedId);
+            return job;
+        });
+
+        UUID result = jobService.submitWorkflowJob(request);
+
+        assertThat(result).isEqualTo(savedId);
+
+        ArgumentCaptor<Job> jobCaptor = ArgumentCaptor.forClass(Job.class);
+        verify(jobRepository).save(jobCaptor.capture());
+
+        Job savedJob = jobCaptor.getValue();
+
+        assertThat(savedJob.getJobPriority()).isEqualTo(JobPriority.HIGH);
+        assertThat(savedJob.getMaxAttempts()).isEqualTo(4);
+        assertThat(savedJob.getIdempotencyKey()).isEqualTo("workflow-job-key");
+        assertThat(savedJob.getSteps()).hasSize(2);
+        assertThat(savedJob.getSteps().get(0).getStepOrder()).isEqualTo(1);
+        assertThat(savedJob.getSteps().get(0).getStepType()).isEqualTo(JobType.CLEANUP);
+        assertThat(savedJob.getSteps().get(0).getPayload()).isEqualTo(cleanupPayload.toString());
+        assertThat(savedJob.getSteps().get(1).getStepOrder()).isEqualTo(2);
+        assertThat(savedJob.getSteps().get(1).getStepType()).isEqualTo(JobType.WEBHOOK);
+        assertThat(savedJob.getSteps().get(1).getPayload()).isEqualTo(webhookPayload.toString());
+    }
+
+    @Test
+    void submitWorkflowJobRejectsDuplicateStepOrder() {
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("olderThanDays", 30);
+
+        WorkflowJobRequestDTO request = new WorkflowJobRequestDTO(
+                JobPriority.MEDIUM,
+                null,
+                3,
+                "workflow-duplicate-step-order",
+                List.of(
+                        new JobStepRequestDTO(1, JobType.CLEANUP, payload),
+                        new JobStepRequestDTO(1, JobType.CLEANUP, payload)
+                )
+        );
+
+        assertThatThrownBy(() -> jobService.submitWorkflowJob(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Workflow step order must be unique");
     }
 
     @Test
@@ -305,6 +426,42 @@ class JobServiceTest {
     }
 
     @Test
+    void getJobReturnsWorkflowSteps() {
+        UUID jobId = UUID.randomUUID();
+        Job job = new Job();
+        job.setId(jobId);
+        job.setJobStatus(JobStatus.PENDING);
+        job.setJobPriority(JobPriority.MEDIUM);
+        job.setMaxAttempts(3);
+        job.setIdempotencyKey("workflow-detail-key");
+
+        ObjectNode cleanupPayload = objectMapper.createObjectNode().put("olderThanDays", 7);
+        ObjectNode webhookPayload = objectMapper.createObjectNode();
+        webhookPayload.put("url", "https://example.com/hook");
+        webhookPayload.set("body", objectMapper.createObjectNode().put("message", "done"));
+
+        JobStep secondStep = step(job, JobType.WEBHOOK, webhookPayload.toString());
+        secondStep.setStepOrder(2);
+        JobStep firstStep = step(job, JobType.CLEANUP, cleanupPayload.toString());
+        firstStep.setStepOrder(1);
+        job.setSteps(List.of(secondStep, firstStep));
+
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        JobDetailDTO detail = jobService.getJob(jobId);
+
+        assertThat(detail.jobType()).isEqualTo(JobType.CLEANUP);
+        assertThat(detail.payload().get("olderThanDays").intValue()).isEqualTo(7);
+        assertThat(detail.steps()).hasSize(2);
+        assertThat(detail.steps().get(0).stepOrder()).isEqualTo(1);
+        assertThat(detail.steps().get(0).stepType()).isEqualTo(JobType.CLEANUP);
+        assertThat(detail.steps().get(0).payload().get("olderThanDays").intValue()).isEqualTo(7);
+        assertThat(detail.steps().get(1).stepOrder()).isEqualTo(2);
+        assertThat(detail.steps().get(1).stepType()).isEqualTo(JobType.WEBHOOK);
+        assertThat(detail.steps().get(1).payload().get("url").stringValue()).isEqualTo("https://example.com/hook");
+    }
+
+    @Test
     void getExecutionLogsThrowsWhenJobDoesNotExist() {
         UUID jobId = UUID.randomUUID();
 
@@ -321,7 +478,7 @@ class JobServiceTest {
 
         Job job = new Job();
         job.setId(jobId);
-        job.setJobType(JobType.WEBHOOK);
+        job.setSteps(List.of(step(job, JobType.WEBHOOK, "{}")));
         job.setJobPriority(JobPriority.MEDIUM);
         job.setJobStatus(JobStatus.PENDING);
         job.setNextRunAt(Instant.now());
@@ -415,15 +572,20 @@ class JobServiceTest {
 
         Job deadJob = new Job();
         deadJob.setId(deadJobId);
-        deadJob.setJobType(JobType.WEBHOOK);
         deadJob.setJobPriority(JobPriority.HIGH);
         deadJob.setJobStatus(JobStatus.DEAD);
-        deadJob.setPayload(objectMapper.createObjectNode().put("url", "https://example.com").toString());
+        JobStep deadStep = step(
+                deadJob,
+                JobType.WEBHOOK,
+                objectMapper.createObjectNode().put("url", "https://example.com").toString()
+        );
+        deadJob.setSteps(List.of(deadStep));
         deadJob.setCronExpression(null);
         deadJob.setMaxAttempts(4);
         deadJob.setIdempotencyKey("old-key");
 
         when(jobRepository.findById(deadJobId)).thenReturn(Optional.of(deadJob));
+        when(jobStepRepository.findByJobOrderByStepOrderAsc(deadJob)).thenReturn(List.of(deadStep));
         when(jobRepository.save(any(Job.class))).thenAnswer(invocation -> {
             Job job = invocation.getArgument(0);
             job.setId(requeuedJobId);
@@ -440,7 +602,8 @@ class JobServiceTest {
         Job savedJob = jobCaptor.getValue();
 
         assertThat(savedJob.getJobStatus()).isEqualTo(JobStatus.PENDING);
-        assertThat(savedJob.getJobType()).isEqualTo(JobType.WEBHOOK);
+        assertThat(savedJob.getSteps()).hasSize(1);
+        assertThat(savedJob.getSteps().get(0).getStepType()).isEqualTo(JobType.WEBHOOK);
         assertThat(savedJob.getJobPriority()).isEqualTo(JobPriority.HIGH);
         assertThat(savedJob.getMaxAttempts()).isEqualTo(4);
         assertThat(savedJob.getRequeuedFromJobId()).isEqualTo(deadJobId);
@@ -471,6 +634,7 @@ class JobServiceTest {
         Job job = new Job();
         job.setId(jobId);
         job.setJobStatus(JobStatus.PENDING);
+        job.setSteps(List.of(step(job, JobType.WEBHOOK, "{}")));
         job.setNextRunAt(Instant.now());
 
         when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
@@ -494,6 +658,7 @@ class JobServiceTest {
         Job job = new Job();
         job.setId(jobId);
         job.setJobStatus(JobStatus.RUNNING);
+        job.setSteps(List.of(step(job, JobType.WEBHOOK, "{}")));
 
         when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
@@ -727,5 +892,16 @@ class JobServiceTest {
         boolean result = jobService.maxAttemptsExceeded(jobId);
 
         assertThat(result).isFalse();
+    }
+
+    private JobStep step(Job job, JobType stepType, String payload) {
+        JobStep step = new JobStep();
+        step.setId(UUID.randomUUID());
+        step.setJob(job);
+        step.setStepOrder(1);
+        step.setStepType(stepType);
+        step.setPayload(payload);
+        step.setEnabled(true);
+        return step;
     }
 }

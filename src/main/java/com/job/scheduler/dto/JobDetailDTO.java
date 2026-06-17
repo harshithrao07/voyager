@@ -7,6 +7,7 @@ import com.job.scheduler.enums.JobStatus;
 import com.job.scheduler.enums.JobType;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 public record JobDetailDTO(
@@ -31,6 +32,7 @@ public record JobDetailDTO(
         Instant deadLetterLastAttemptAt,
         Instant nextDeadLetterAttemptAt,
         String deadLetterErrorMessage,
+        List<JobStepResponseDTO> steps,
         Instant createdAt,
         Instant updatedAt
 ) {
