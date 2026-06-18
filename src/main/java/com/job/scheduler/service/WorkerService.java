@@ -56,26 +56,6 @@ public class WorkerService {
         this.eventPublisher = eventPublisher;
     }
 
-    public WorkerService(
-            RedisTemplate<String, String> redisTemplate,
-            JobService jobService,
-            ExecutionLogService executionLogService,
-            JobHandlerRouter jobHandlerRouter,
-            RedisLockService redisLockService,
-            RedisHealthService redisHealthService
-    ) {
-        this(
-                redisTemplate,
-                jobService,
-                executionLogService,
-                jobHandlerRouter,
-                redisLockService,
-                redisHealthService,
-                event -> {
-                }
-        );
-    }
-
     @Value("${scheduler.worker-id}")
     private String workerId;
 
@@ -134,14 +114,15 @@ public class WorkerService {
             // Route it to right per type handler
             Instant executionStartedAt = Instant.now();
             jobHandlerRouter.route(jobDispatchEvent, executionLog);
-            publish(new JobExecutedEvent(
+            Duration executionDuration = Duration.between(executionStartedAt, Instant.now());
+
+            handleSuccessfulExecution(jobId, executionLog, doneKey);
+            publishApplicationEvent(new JobExecutedEvent(
                     jobService.primaryStepType(job),
                     job.getJobPriority(),
                     JobStatus.SUCCESS,
-                    Duration.between(executionStartedAt, Instant.now())
+                    executionDuration
             ));
-
-            handleSuccessfulExecution(jobId, executionLog, doneKey);
         } catch (Exception e) {
             handleFailedExecution(job, jobId, executionLog, e);
         } finally {
@@ -162,7 +143,7 @@ public class WorkerService {
         jobService.updateJobStatus(jobId, JobStatus.FAILED);
         if (executionLog != null) {
             executionLogService.updateExecutionStatus(executionLog, JobStatus.FAILED, e.getMessage(), workerId);
-            publish(new JobExecutedEvent(
+            publishApplicationEvent(new JobExecutedEvent(
                     jobService.primaryStepType(job),
                     job.getJobPriority(),
                     JobStatus.FAILED,
@@ -264,7 +245,7 @@ public class WorkerService {
         return !jobService.hasCronExpression(job);
     }
 
-    private void publish(Object event) {
+    private void publishApplicationEvent(Object event) {
         eventPublisher.publishEvent(event);
     }
 

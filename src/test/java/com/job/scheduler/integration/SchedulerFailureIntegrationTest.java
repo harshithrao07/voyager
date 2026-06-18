@@ -72,7 +72,7 @@ class SchedulerFailureIntegrationTest extends AbstractSchedulerFlowIntegrationTe
         doReturn(false).when(redisHealthService).isRedisAvailable();
 
         UUID jobId = submitCleanupJob(null, "redis-down-worker-" + UUID.randomUUID());
-        jobService.markDispatchSucceeded(jobId);
+        jobService.markDispatchQueued(jobId);
         JobDispatchEvent event = new JobDispatchEvent(jobId);
 
         assertThatThrownBy(() -> workerService.processJob(event))

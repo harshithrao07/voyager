@@ -9,6 +9,8 @@ import com.job.scheduler.monitoring.events.JobSubmittedEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 @Component
 @RequiredArgsConstructor
@@ -16,17 +18,17 @@ public class SchedulerMetricsListener {
 
     private final SchedulerMetrics schedulerMetrics;
 
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onJobSubmitted(JobSubmittedEvent event) {
         schedulerMetrics.recordJobSubmitted(event.jobType(), event.jobPriority());
     }
 
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onJobRequeued(JobRequeuedEvent event) {
         schedulerMetrics.recordJobRequeued(event.jobType(), event.jobPriority());
     }
 
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onJobCanceled(JobCanceledEvent event) {
         schedulerMetrics.recordJobCanceled(event.jobType(), event.jobPriority());
     }
@@ -46,7 +48,7 @@ public class SchedulerMetricsListener {
         );
     }
 
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onJobDeadLettered(JobDeadLetteredEvent event) {
         schedulerMetrics.recordJobDeadLettered(event.jobType(), event.jobPriority());
     }

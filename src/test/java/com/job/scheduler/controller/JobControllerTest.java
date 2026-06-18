@@ -1,11 +1,14 @@
 package com.job.scheduler.controller;
 
 import com.job.scheduler.dto.CancelJobResponseDTO;
+import com.job.scheduler.dto.ExecutionLogDTO;
 import com.job.scheduler.dto.JobDetailDTO;
 import com.job.scheduler.dto.JobPageDTO;
 import com.job.scheduler.dto.JobStepResponseDTO;
 import com.job.scheduler.dto.JobSummaryDTO;
+import com.job.scheduler.dto.McpToolExecutionDetailDTO;
 import com.job.scheduler.dto.RequeueJobResponseDTO;
+import com.job.scheduler.dto.StepExecutionDTO;
 import com.job.scheduler.dto.WorkflowJobRequestDTO;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
@@ -239,6 +242,82 @@ class JobControllerTest {
                 .andExpect(jsonPath("$.steps[0].stepOrder").value(1))
                 .andExpect(jsonPath("$.steps[0].stepType").value("WEBHOOK"))
                 .andExpect(jsonPath("$.steps[0].payload.url").value("https://example.com/hook"));
+    }
+
+    @Test
+    void getExecutionLogsReturnsStepExecutions() throws Exception {
+        UUID jobId = UUID.randomUUID();
+        UUID executionLogId = UUID.randomUUID();
+        UUID jobStepId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-04-26T00:00:00Z");
+        ObjectNode arguments = objectMapper.createObjectNode().put("message", "hello");
+        ObjectNode result = objectMapper.createObjectNode().put("ok", true);
+        McpToolExecutionDetailDTO details = new McpToolExecutionDetailDTO(
+                UUID.randomUUID(),
+                "local-tools",
+                "ping",
+                arguments,
+                result,
+                com.job.scheduler.enums.McpToolExecutionStatus.SUCCESS,
+                com.job.scheduler.enums.McpTrustLevel.READ_ONLY,
+                null,
+                now,
+                now.plusSeconds(1),
+                1000L,
+                now,
+                now.plusSeconds(1)
+        );
+
+        StepExecutionDTO stepExecution = new StepExecutionDTO(
+                UUID.randomUUID(),
+                jobStepId,
+                1,
+                JobType.MCP_TOOL,
+                JobStatus.SUCCESS,
+                now,
+                now.plusSeconds(1),
+                1000L,
+                null,
+                objectMapper.createObjectNode().put("message", "hello"),
+                null,
+                objectMapper.createObjectNode().put("ok", true),
+                null,
+                now,
+                details
+        );
+        ExecutionLogDTO executionLog = new ExecutionLogDTO(
+                executionLogId,
+                jobId,
+                1,
+                JobStatus.SUCCESS,
+                now,
+                now.plusSeconds(1),
+                1000L,
+                null,
+                "worker-1",
+                now,
+                List.of(stepExecution)
+        );
+
+        when(jobService.getExecutionLogs(jobId)).thenReturn(List.of(executionLog));
+
+        mockMvc.perform(get("/app/v1/jobs/{jobId}/logs", jobId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(executionLogId.toString()))
+                .andExpect(jsonPath("$[0].steps.length()").value(1))
+                .andExpect(jsonPath("$[0].steps[0].jobStepId").value(jobStepId.toString()))
+                .andExpect(jsonPath("$[0].steps[0].stepOrder").value(1))
+                .andExpect(jsonPath("$[0].steps[0].stepType").value("MCP_TOOL"))
+                .andExpect(jsonPath("$[0].steps[0].executionStatus").value("SUCCESS"))
+                .andExpect(jsonPath("$[0].steps[0].durationMs").value(1000))
+                .andExpect(jsonPath("$[0].steps[0].resolvedInput.message").value("hello"))
+                .andExpect(jsonPath("$[0].steps[0].output.ok").value(true))
+                .andExpect(jsonPath("$[0].steps[0].details.kind").value("MCP_TOOL"))
+                .andExpect(jsonPath("$[0].steps[0].details.serverId").value("local-tools"))
+                .andExpect(jsonPath("$[0].steps[0].details.toolName").value("ping"))
+                .andExpect(jsonPath("$[0].steps[0].details.arguments.message").value("hello"))
+                .andExpect(jsonPath("$[0].steps[0].details.result.ok").value(true));
     }
 
     @Test

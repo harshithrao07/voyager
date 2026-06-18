@@ -77,7 +77,7 @@ class SchedulerConcurrencyIntegrationTest extends AbstractSchedulerFlowIntegrati
     @Test
     void concurrentWorkersAllowOnlyOneExecutionForSameQueuedJob() throws Exception {
         UUID jobId = submitCleanupJob(null, "worker-race-" + UUID.randomUUID());
-        jobService.markDispatchSucceeded(jobId);
+        jobService.markDispatchQueued(jobId);
 
         CountDownLatch firstInvocationEntered = new CountDownLatch(1);
         CountDownLatch releaseHandler = new CountDownLatch(1);

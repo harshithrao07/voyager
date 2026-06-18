@@ -13,7 +13,9 @@ import com.job.scheduler.dto.JobRequestDTO;
 import com.job.scheduler.dto.JobStepRequestDTO;
 import com.job.scheduler.dto.JobStepResponseDTO;
 import com.job.scheduler.dto.JobSummaryDTO;
+import com.job.scheduler.dto.McpToolExecutionDetailDTO;
 import com.job.scheduler.dto.RequeueJobResponseDTO;
+import com.job.scheduler.dto.StepExecutionDTO;
 import com.job.scheduler.dto.WorkflowJobRequestDTO;
 import com.job.scheduler.dto.payload.CleanupPayload;
 import com.job.scheduler.dto.payload.McpToolPayload;
@@ -22,18 +24,21 @@ import com.job.scheduler.dto.payload.WebhookPayload;
 import com.job.scheduler.entity.ExecutionLog;
 import com.job.scheduler.entity.Job;
 import com.job.scheduler.entity.JobStep;
+import com.job.scheduler.entity.McpToolExecution;
+import com.job.scheduler.entity.StepExecution;
 import com.job.scheduler.enums.DeadLetterStatus;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
 import com.job.scheduler.enums.JobType;
 import com.job.scheduler.monitoring.events.JobCanceledEvent;
 import com.job.scheduler.monitoring.events.JobDeadLetteredEvent;
-import com.job.scheduler.monitoring.events.JobDispatchedEvent;
 import com.job.scheduler.monitoring.events.JobRequeuedEvent;
 import com.job.scheduler.monitoring.events.JobSubmittedEvent;
 import com.job.scheduler.repository.ExecutionLogRepository;
 import com.job.scheduler.repository.JobRepository;
 import com.job.scheduler.repository.JobStepRepository;
+import com.job.scheduler.repository.McpToolExecutionRepository;
+import com.job.scheduler.repository.StepExecutionRepository;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
@@ -59,8 +64,11 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 public class JobService {
@@ -71,6 +79,8 @@ public class JobService {
     private final ObjectMapper objectMapper;
     private final ExecutionLogRepository executionLogRepository;
     private final JobStepRepository jobStepRepository;
+    private final StepExecutionRepository stepExecutionRepository;
+    private final McpToolExecutionRepository mcpToolExecutionRepository;
     private final Validator validator;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -80,6 +90,8 @@ public class JobService {
             ObjectMapper objectMapper,
             ExecutionLogRepository executionLogRepository,
             JobStepRepository jobStepRepository,
+            StepExecutionRepository stepExecutionRepository,
+            McpToolExecutionRepository mcpToolExecutionRepository,
             Validator validator,
             ApplicationEventPublisher eventPublisher
     ) {
@@ -87,21 +99,13 @@ public class JobService {
         this.objectMapper = objectMapper;
         this.executionLogRepository = executionLogRepository;
         this.jobStepRepository = jobStepRepository;
+        this.stepExecutionRepository = stepExecutionRepository;
+        this.mcpToolExecutionRepository = mcpToolExecutionRepository;
         this.validator = validator;
         this.eventPublisher = eventPublisher;
     }
 
-    public JobService(
-            JobRepository jobRepository,
-            ObjectMapper objectMapper,
-            ExecutionLogRepository executionLogRepository,
-            JobStepRepository jobStepRepository,
-            Validator validator
-    ) {
-        this(jobRepository, objectMapper, executionLogRepository, jobStepRepository, validator, event -> {
-        });
-    }
-
+    @Transactional
     public UUID submitJob(JobRequestDTO jobRequestDTO) {
         JobStepRequestDTO step = new JobStepRequestDTO(1, jobRequestDTO.jobType(), jobRequestDTO.payload());
         return submitJob(
@@ -113,6 +117,7 @@ public class JobService {
         );
     }
 
+    @Transactional
     public UUID submitWorkflowJob(WorkflowJobRequestDTO workflowJobRequestDTO) {
         validateWorkflowSteps(workflowJobRequestDTO.steps());
         return submitJob(
@@ -156,7 +161,7 @@ public class JobService {
 
         try {
             Job savedJob = jobRepository.save(job);
-            publish(new JobSubmittedEvent(primaryStepType(savedJob), savedJob.getJobPriority()));
+            publishApplicationEvent(new JobSubmittedEvent(primaryStepType(savedJob), savedJob.getJobPriority()));
             return savedJob.getId();
         } catch (DataIntegrityViolationException exception) {
             UUID duplicateJobId = findExistingJobId(idempotencyKey);
@@ -247,10 +252,9 @@ public class JobService {
             throw new IllegalStateException("Only DEAD jobs can be inspected through the DLQ API");
         }
 
-        List<ExecutionLogDTO> executionLogs = executionLogRepository.findByJobIdOrderByAttemptNumberAsc(jobId)
-                .stream()
-                .map(this::toExecutionLog)
-                .toList();
+        List<ExecutionLogDTO> executionLogs = toExecutionLogs(
+                executionLogRepository.findByJobIdOrderByAttemptNumberAsc(jobId)
+        );
 
         return new DlqJobDetailDTO(
                 job.getId(),
@@ -286,10 +290,7 @@ public class JobService {
             throw new EntityNotFoundException(JOB_NOT_FOUND_MESSAGE);
         }
 
-        return executionLogRepository.findByJobIdOrderByAttemptNumberAsc(jobId)
-                .stream()
-                .map(this::toExecutionLog)
-                .toList();
+        return toExecutionLogs(executionLogRepository.findByJobIdOrderByAttemptNumberAsc(jobId));
     }
 
     @Transactional
@@ -312,7 +313,7 @@ public class JobService {
         requeuedJob.setSteps(copySteps(deadJob, requeuedJob));
 
         Job savedJob = jobRepository.save(requeuedJob);
-        publish(new JobRequeuedEvent(primaryStepType(savedJob), savedJob.getJobPriority()));
+        publishApplicationEvent(new JobRequeuedEvent(primaryStepType(savedJob), savedJob.getJobPriority()));
         return new RequeueJobResponseDTO(savedJob.getId());
     }
 
@@ -338,7 +339,7 @@ public class JobService {
         job.setLastErrorMessage("Canceled by request");
 
         Job savedJob = jobRepository.save(job);
-        publish(new JobCanceledEvent(primaryStepType(savedJob), savedJob.getJobPriority()));
+        publishApplicationEvent(new JobCanceledEvent(primaryStepType(savedJob), savedJob.getJobPriority()));
         return new CancelJobResponseDTO(savedJob.getId(), savedJob.getJobStatus());
     }
 
@@ -455,7 +456,7 @@ public class JobService {
         job.setLastErrorMessage(errorMessage);
         markDeadLetterPending(job, errorMessage);
         jobRepository.save(job);
-        publish(new JobDeadLetteredEvent(primaryStepType(job), job.getJobPriority()));
+        publishApplicationEvent(new JobDeadLetteredEvent(primaryStepType(job), job.getJobPriority()));
     }
 
     @Transactional
@@ -485,30 +486,9 @@ public class JobService {
         jobRepository.save(job);
     }
 
-    @Transactional
-    public void scheduleNextCronRun(UUID jobId) {
-        Job job = findById(jobId);
-        CronExpression cronExpression = parseCronExpression(job.getCronExpression());
-
-        if (cronExpression == null) {
-            job.setJobStatus(JobStatus.SUCCESS);
-            job.setNextRunAt(null);
-            job.setCompletedAt(Instant.now());
-        } else {
-            job.setJobStatus(JobStatus.PENDING);
-            job.setNextRunAt(nextRunAt(cronExpression));
-            job.setQueuedAt(null);
-            job.setStartedAt(null);
-            job.setCompletedAt(null);
-            job.setLastErrorMessage(null);
-        }
-
-        jobRepository.save(job);
-    }
-
     // Combined start-of-execution write: flips the job from QUEUED -> RUNNING and creates
     // its execution log row in a single transaction. Replaces three separate transactions
-    // (updateJobStatus + ExecutionLogService.createEntry + ExecutionLogService.updateExecutionStatus)
+    // (job status update + execution-log creation and status update)
     // along the worker hot path. Returns the new ExecutionLog so the caller can update it on completion.
     @Transactional
     public ExecutionLog markJobStartingAtomic(UUID jobId, String workerId) {
@@ -593,23 +573,6 @@ public class JobService {
         job.setJobStatus(JobStatus.QUEUED);
         job.setNextRunAt(null);
         job.setQueuedAt(Instant.now());
-        jobRepository.save(job);
-    }
-
-    @Transactional
-    public void markDispatchSucceeded(UUID jobId) {
-        Job job = findById(jobId);
-        job.setJobStatus(JobStatus.QUEUED);
-        job.setNextRunAt(null);
-        job.setQueuedAt(Instant.now());
-        jobRepository.save(job);
-        publish(new JobDispatchedEvent(primaryStepType(job), job.getJobPriority()));
-    }
-
-    @Transactional
-    public void markDispatchAttempt(UUID jobId, Instant retryDispatchAt) {
-        Job job = findById(jobId);
-        job.setNextRunAt(retryDispatchAt);
         jobRepository.save(job);
     }
 
@@ -844,7 +807,49 @@ public class JobService {
         return jobStepRepository.findByJobOrderByStepOrderAsc(job);
     }
 
-    private ExecutionLogDTO toExecutionLog(ExecutionLog executionLog) {
+    private List<ExecutionLogDTO> toExecutionLogs(List<ExecutionLog> executionLogs) {
+        if (executionLogs.isEmpty()) {
+            return List.of();
+        }
+
+        List<UUID> executionLogIds = executionLogs.stream()
+                .map(ExecutionLog::getId)
+                .toList();
+        List<StepExecution> stepExecutions = stepExecutionRepository
+                .findByExecutionLogIdsOrderByExecutionLogIdAndStepOrder(executionLogIds);
+
+        Map<UUID, List<StepExecution>> stepExecutionsByLogId = stepExecutions.stream()
+                .collect(Collectors.groupingBy(stepExecution -> stepExecution.getExecutionLog().getId()));
+
+        List<UUID> mcpStepExecutionIds = stepExecutions.stream()
+                .filter(stepExecution -> stepExecution.getStepType() == JobType.MCP_TOOL)
+                .map(StepExecution::getId)
+                .toList();
+
+        Map<UUID, McpToolExecution> mcpExecutionByStepExecutionId = mcpStepExecutionIds.isEmpty()
+                ? Map.of()
+                : mcpToolExecutionRepository.findByStepExecutionIds(mcpStepExecutionIds)
+                        .stream()
+                        .collect(Collectors.toMap(
+                                execution -> execution.getStepExecution().getId(),
+                                Function.identity(),
+                                (first, duplicate) -> first
+                        ));
+
+        return executionLogs.stream()
+                .map(executionLog -> toExecutionLog(
+                        executionLog,
+                        stepExecutionsByLogId.getOrDefault(executionLog.getId(), List.of()),
+                        mcpExecutionByStepExecutionId
+                ))
+                .toList();
+    }
+
+    private ExecutionLogDTO toExecutionLog(
+            ExecutionLog executionLog,
+            List<StepExecution> stepExecutions,
+            Map<UUID, McpToolExecution> mcpExecutionByStepExecutionId
+    ) {
         return new ExecutionLogDTO(
                 executionLog.getId(),
                 executionLog.getJobDetails().getId(),
@@ -855,7 +860,71 @@ public class JobService {
                 executionLog.getDurationMs(),
                 executionLog.getErrorMessage(),
                 executionLog.getWorkerId(),
-                executionLog.getCreatedAt()
+                executionLog.getCreatedAt(),
+                toStepExecutionDTOs(stepExecutions, mcpExecutionByStepExecutionId)
+        );
+    }
+
+    private List<StepExecutionDTO> toStepExecutionDTOs(
+            List<StepExecution> stepExecutions,
+            Map<UUID, McpToolExecution> mcpExecutionByStepExecutionId
+    ) {
+        return stepExecutions.stream()
+                .map(stepExecution -> toStepExecutionDTO(stepExecution, mcpExecutionByStepExecutionId))
+                .toList();
+    }
+
+    private StepExecutionDTO toStepExecutionDTO(
+            StepExecution stepExecution,
+            Map<UUID, McpToolExecution> mcpExecutionByStepExecutionId
+    ) {
+        return new StepExecutionDTO(
+                stepExecution.getId(),
+                stepExecution.getJobStep().getId(),
+                stepExecution.getStepOrder(),
+                stepExecution.getStepType(),
+                stepExecution.getExecutionStatus(),
+                stepExecution.getStartedAt(),
+                stepExecution.getCompletedAt(),
+                stepExecution.getDurationMs(),
+                stepExecution.getErrorMessage(),
+                readNullablePayload(stepExecution.getResolvedInput()),
+                readNullablePayload(stepExecution.getInputRef()),
+                readNullablePayload(stepExecution.getOutput()),
+                readNullablePayload(stepExecution.getOutputRef()),
+                stepExecution.getCreatedAt(),
+                stepExecutionDetails(stepExecution, mcpExecutionByStepExecutionId)
+        );
+    }
+
+    private Object stepExecutionDetails(
+            StepExecution stepExecution,
+            Map<UUID, McpToolExecution> mcpExecutionByStepExecutionId
+    ) {
+        return switch (stepExecution.getStepType()) {
+            case MCP_TOOL -> {
+                McpToolExecution execution = mcpExecutionByStepExecutionId.get(stepExecution.getId());
+                yield execution == null ? null : toMcpToolExecutionDetail(execution);
+            }
+            case SEND_EMAIL, WEBHOOK, CLEANUP -> null;
+        };
+    }
+
+    private McpToolExecutionDetailDTO toMcpToolExecutionDetail(McpToolExecution execution) {
+        return new McpToolExecutionDetailDTO(
+                execution.getId(),
+                execution.getServerId(),
+                execution.getToolName(),
+                readPayload(execution.getArguments()),
+                execution.getResult() == null ? null : readPayload(execution.getResult()),
+                execution.getStatus(),
+                execution.getMaxAllowedTrustLevel(),
+                execution.getErrorMessage(),
+                execution.getStartedAt(),
+                execution.getCompletedAt(),
+                execution.getDurationMs(),
+                execution.getCreatedAt(),
+                execution.getUpdatedAt()
         );
     }
 
@@ -875,7 +944,11 @@ public class JobService {
         }
     }
 
-    private void publish(Object event) {
+    private JsonNode readNullablePayload(String payload) {
+        return payload == null ? null : readPayload(payload);
+    }
+
+    private void publishApplicationEvent(Object event) {
         eventPublisher.publishEvent(event);
     }
 }

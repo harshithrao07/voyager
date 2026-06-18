@@ -4,6 +4,7 @@ import com.job.scheduler.dto.JobDispatchEvent;
 import com.job.scheduler.entity.Job;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
+import com.job.scheduler.monitoring.events.JobDispatchedEvent;
 import com.job.scheduler.producers.JobQueueProducer;
 import com.job.scheduler.repository.JobRepository;
 import com.job.scheduler.service.JobService;
@@ -11,6 +12,7 @@ import com.job.scheduler.service.RedisHealthService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -26,6 +28,7 @@ public class DueJobSchedulerService {
     private final JobService jobService;
     private final JobQueueProducer jobQueueProducer;
     private final RedisHealthService redisHealthService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Value("${scheduler.due-job.dispatch-retry-delay-ms:5000}")
     private long dispatchRetryDelayMs;
@@ -64,11 +67,16 @@ public class DueJobSchedulerService {
                             Instant.now().plusMillis(dispatchRetryDelayMs),
                             null
                     );
+                } else {
+                    eventPublisher.publishEvent(
+                            new JobDispatchedEvent(
+                                    jobService.primaryStepType(job),
+                                    job.getJobPriority()
+                            )
+                    );
                 }
-                // Success path is intentionally a no-op: markDispatchQueued above already
-                // set status=QUEUED. Re-writing it here races with the worker, which can
-                // already be transitioning the job through RUNNING -> SUCCESS by the time
-                // this callback fires (especially with concurrent listeners and fast handlers).
+                // The success callback records the Kafka acknowledgement only. It must not
+                // rewrite job state because the worker may already be running or completed.
             });
         }
     }

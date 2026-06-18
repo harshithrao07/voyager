@@ -3,6 +3,7 @@ package com.job.scheduler.scheduler;
 import com.job.scheduler.dto.JobDispatchEvent;
 import com.job.scheduler.entity.Job;
 import com.job.scheduler.enums.JobPriority;
+import com.job.scheduler.monitoring.events.JobDispatchedEvent;
 import com.job.scheduler.producers.JobQueueProducer;
 import com.job.scheduler.repository.JobRepository;
 import com.job.scheduler.service.JobService;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
@@ -42,6 +44,9 @@ class DueJobSchedulerServiceTest {
     @Mock
     private RedisHealthService redisHealthService;
 
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     private DueJobSchedulerService dueJobSchedulerService;
 
     @BeforeEach
@@ -50,7 +55,8 @@ class DueJobSchedulerServiceTest {
                 jobRepository,
                 jobService,
                 jobQueueProducer,
-                redisHealthService
+                redisHealthService,
+                eventPublisher
         );
 
         ReflectionTestUtils.setField(dueJobSchedulerService, "dispatchRetryDelayMs", 5000L);
@@ -67,7 +73,6 @@ class DueJobSchedulerServiceTest {
         verify(jobQueueProducer, never()).sendToMainQueue(any());
         verify(jobQueueProducer, never()).sendToHighPriorityQueue(any());
         verify(jobService, never()).markDispatchQueued(any());
-        verify(jobService, never()).markDispatchSucceeded(any());
     }
 
     @Test
@@ -101,7 +106,7 @@ class DueJobSchedulerServiceTest {
         verify(jobQueueProducer).sendToHighPriorityQueue(eventCaptor.capture());
         verify(jobQueueProducer, never()).sendToMainQueue(any());
         verify(jobService).markDispatchQueued(jobId);
-        verify(jobService, never()).markDispatchSucceeded(jobId);
+        verify(eventPublisher).publishEvent(any(JobDispatchedEvent.class));
 
         JobDispatchEvent event = eventCaptor.getValue();
         assertThat(event.jobId()).isEqualTo(jobId);
@@ -123,7 +128,7 @@ class DueJobSchedulerServiceTest {
         verify(jobQueueProducer).sendToMainQueue(eventCaptor.capture());
         verify(jobQueueProducer, never()).sendToHighPriorityQueue(any());
         verify(jobService).markDispatchQueued(jobId);
-        verify(jobService, never()).markDispatchSucceeded(jobId);
+        verify(eventPublisher).publishEvent(any(JobDispatchedEvent.class));
 
         JobDispatchEvent event = eventCaptor.getValue();
         assertThat(event.jobId()).isEqualTo(jobId);
@@ -143,8 +148,8 @@ class DueJobSchedulerServiceTest {
 
         verify(jobQueueProducer).sendToMainQueue(any(JobDispatchEvent.class));
         verify(jobService).markDispatchQueued(jobId);
-        verify(jobService, never()).markDispatchSucceeded(jobId);
         verify(jobService).scheduleRetry(eq(jobId), any(Instant.class), eq(null));
+        verify(eventPublisher, never()).publishEvent(any(JobDispatchedEvent.class));
     }
 
     private Job job(UUID id, JobPriority priority) {

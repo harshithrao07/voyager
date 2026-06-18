@@ -6,15 +6,23 @@ import com.job.scheduler.dto.JobRequestDTO;
 import com.job.scheduler.dto.RequeueJobResponseDTO;
 import com.job.scheduler.dto.WorkflowJobRequestDTO;
 import com.job.scheduler.dto.JobDetailDTO;
+import com.job.scheduler.dto.ExecutionLogDTO;
+import com.job.scheduler.entity.ExecutionLog;
 import com.job.scheduler.entity.Job;
 import com.job.scheduler.entity.JobStep;
+import com.job.scheduler.entity.McpToolExecution;
+import com.job.scheduler.entity.StepExecution;
 import com.job.scheduler.enums.DeadLetterStatus;
 import com.job.scheduler.enums.JobPriority;
 import com.job.scheduler.enums.JobStatus;
 import com.job.scheduler.enums.JobType;
+import com.job.scheduler.enums.McpToolExecutionStatus;
+import com.job.scheduler.enums.McpTrustLevel;
 import com.job.scheduler.repository.ExecutionLogRepository;
 import com.job.scheduler.repository.JobRepository;
 import com.job.scheduler.repository.JobStepRepository;
+import com.job.scheduler.repository.McpToolExecutionRepository;
+import com.job.scheduler.repository.StepExecutionRepository;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -25,6 +33,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -53,7 +62,16 @@ class JobServiceTest {
     private JobStepRepository jobStepRepository;
 
     @Mock
+    private StepExecutionRepository stepExecutionRepository;
+
+    @Mock
+    private McpToolExecutionRepository mcpToolExecutionRepository;
+
+    @Mock
     private Validator validator;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     private ObjectMapper objectMapper;
     private JobService jobService;
@@ -67,7 +85,10 @@ class JobServiceTest {
                 objectMapper,
                 executionLogRepository,
                 jobStepRepository,
-                validator
+                stepExecutionRepository,
+                mcpToolExecutionRepository,
+                validator,
+                eventPublisher
         );
     }
 
@@ -473,6 +494,81 @@ class JobServiceTest {
     }
 
     @Test
+    void getExecutionLogsReturnsStepExecutions() {
+        UUID jobId = UUID.randomUUID();
+        UUID executionLogId = UUID.randomUUID();
+
+        Job job = new Job();
+        job.setId(jobId);
+
+        JobStep jobStep = step(job, JobType.MCP_TOOL, "{}");
+
+        ExecutionLog executionLog = new ExecutionLog();
+        executionLog.setId(executionLogId);
+        executionLog.setJobDetails(job);
+        executionLog.setAttemptNumber(1);
+        executionLog.setExecutionStatus(JobStatus.SUCCESS);
+        executionLog.setStartedAt(Instant.parse("2026-06-17T00:00:00Z"));
+        executionLog.setCompletedAt(Instant.parse("2026-06-17T00:00:01Z"));
+        executionLog.setDurationMs(1000L);
+        executionLog.setWorkerId("worker-1");
+
+        StepExecution stepExecution = new StepExecution();
+        stepExecution.setId(UUID.randomUUID());
+        stepExecution.setExecutionLog(executionLog);
+        stepExecution.setJobStep(jobStep);
+        stepExecution.setStepOrder(1);
+        stepExecution.setStepType(JobType.MCP_TOOL);
+        stepExecution.setExecutionStatus(JobStatus.SUCCESS);
+        stepExecution.setStartedAt(Instant.parse("2026-06-17T00:00:00Z"));
+        stepExecution.setCompletedAt(Instant.parse("2026-06-17T00:00:01Z"));
+        stepExecution.setDurationMs(1000L);
+        stepExecution.setResolvedInput(objectMapper.createObjectNode().put("message", "hello").toString());
+        stepExecution.setOutput(objectMapper.createObjectNode().put("ok", true).toString());
+
+        McpToolExecution mcpExecution = new McpToolExecution();
+        mcpExecution.setId(UUID.randomUUID());
+        mcpExecution.setStepExecution(stepExecution);
+        mcpExecution.setServerId("local-tools");
+        mcpExecution.setToolName("ping");
+        mcpExecution.setArguments(objectMapper.createObjectNode().put("message", "hello").toString());
+        mcpExecution.setResult(objectMapper.createObjectNode().put("ok", true).toString());
+        mcpExecution.setStatus(McpToolExecutionStatus.SUCCESS);
+        mcpExecution.setMaxAllowedTrustLevel(McpTrustLevel.READ_ONLY);
+        mcpExecution.setStartedAt(Instant.parse("2026-06-17T00:00:00Z"));
+        mcpExecution.setCompletedAt(Instant.parse("2026-06-17T00:00:01Z"));
+        mcpExecution.setDurationMs(1000L);
+
+        when(jobRepository.existsById(jobId)).thenReturn(true);
+        when(executionLogRepository.findByJobIdOrderByAttemptNumberAsc(jobId)).thenReturn(List.of(executionLog));
+        when(stepExecutionRepository.findByExecutionLogIdsOrderByExecutionLogIdAndStepOrder(List.of(executionLogId)))
+                .thenReturn(List.of(stepExecution));
+        when(mcpToolExecutionRepository.findByStepExecutionIds(List.of(stepExecution.getId())))
+                .thenReturn(List.of(mcpExecution));
+
+        List<ExecutionLogDTO> logs = jobService.getExecutionLogs(jobId);
+
+        assertThat(logs).hasSize(1);
+        assertThat(logs.get(0).id()).isEqualTo(executionLogId);
+        assertThat(logs.get(0).steps()).hasSize(1);
+        assertThat(logs.get(0).steps().get(0).jobStepId()).isEqualTo(jobStep.getId());
+        assertThat(logs.get(0).steps().get(0).stepType()).isEqualTo(JobType.MCP_TOOL);
+        assertThat(logs.get(0).steps().get(0).executionStatus()).isEqualTo(JobStatus.SUCCESS);
+        assertThat(logs.get(0).steps().get(0).durationMs()).isEqualTo(1000L);
+        assertThat(logs.get(0).steps().get(0).resolvedInput().get("message").stringValue()).isEqualTo("hello");
+        assertThat(logs.get(0).steps().get(0).output().get("ok").booleanValue()).isTrue();
+        assertThat(logs.get(0).steps().get(0).details())
+                .isInstanceOf(com.job.scheduler.dto.McpToolExecutionDetailDTO.class);
+        com.job.scheduler.dto.McpToolExecutionDetailDTO details =
+                (com.job.scheduler.dto.McpToolExecutionDetailDTO) logs.get(0).steps().get(0).details();
+        assertThat(details.kind()).isEqualTo("MCP_TOOL");
+        assertThat(details.serverId()).isEqualTo("local-tools");
+        assertThat(details.toolName()).isEqualTo("ping");
+        assertThat(details.arguments().get("message").stringValue()).isEqualTo("hello");
+        assertThat(details.result().get("ok").booleanValue()).isTrue();
+    }
+
+    @Test
     void cancelJobCancelsPendingJob() {
         UUID jobId = UUID.randomUUID();
 
@@ -628,7 +724,7 @@ class JobServiceTest {
     }
 
     @Test
-    void markDispatchSucceededMovesJobToQueued() {
+    void markDispatchQueuedMovesJobToQueued() {
         UUID jobId = UUID.randomUUID();
 
         Job job = new Job();
@@ -639,7 +735,7 @@ class JobServiceTest {
 
         when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
 
-        jobService.markDispatchSucceeded(jobId);
+        jobService.markDispatchQueued(jobId);
 
         ArgumentCaptor<Job> jobCaptor = ArgumentCaptor.forClass(Job.class);
         verify(jobRepository).save(jobCaptor.capture());
@@ -708,59 +804,6 @@ class JobServiceTest {
         assertThat(savedJob.getStartedAt()).isNull();
         assertThat(savedJob.getCompletedAt()).isNull();
         assertThat(savedJob.getLastErrorMessage()).isEqualTo("temporary failure");
-    }
-
-    @Test
-    void scheduleNextCronRunReschedulesCronJob() {
-        UUID jobId = UUID.randomUUID();
-
-        Job job = new Job();
-        job.setId(jobId);
-        job.setJobStatus(JobStatus.RUNNING);
-        job.setCronExpression("0 */5 * * * *");
-        job.setQueuedAt(Instant.now());
-        job.setStartedAt(Instant.now());
-        job.setCompletedAt(Instant.now());
-        job.setLastErrorMessage("old error");
-
-        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
-
-        jobService.scheduleNextCronRun(jobId);
-
-        ArgumentCaptor<Job> jobCaptor = ArgumentCaptor.forClass(Job.class);
-        verify(jobRepository).save(jobCaptor.capture());
-
-        Job savedJob = jobCaptor.getValue();
-
-        assertThat(savedJob.getJobStatus()).isEqualTo(JobStatus.PENDING);
-        assertThat(savedJob.getNextRunAt()).isAfter(Instant.now().minusSeconds(1));
-        assertThat(savedJob.getQueuedAt()).isNull();
-        assertThat(savedJob.getStartedAt()).isNull();
-        assertThat(savedJob.getCompletedAt()).isNull();
-        assertThat(savedJob.getLastErrorMessage()).isNull();
-    }
-
-    @Test
-    void scheduleNextCronRunMarksOneTimeJobSuccess() {
-        UUID jobId = UUID.randomUUID();
-
-        Job job = new Job();
-        job.setId(jobId);
-        job.setJobStatus(JobStatus.RUNNING);
-        job.setCronExpression(null);
-
-        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
-
-        jobService.scheduleNextCronRun(jobId);
-
-        ArgumentCaptor<Job> jobCaptor = ArgumentCaptor.forClass(Job.class);
-        verify(jobRepository).save(jobCaptor.capture());
-
-        Job savedJob = jobCaptor.getValue();
-
-        assertThat(savedJob.getJobStatus()).isEqualTo(JobStatus.SUCCESS);
-        assertThat(savedJob.getNextRunAt()).isNull();
-        assertThat(savedJob.getCompletedAt()).isNotNull();
     }
 
     @Test

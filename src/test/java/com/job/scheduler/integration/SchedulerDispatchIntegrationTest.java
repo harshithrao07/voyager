@@ -70,7 +70,7 @@ class SchedulerDispatchIntegrationTest extends AbstractSchedulerFlowIntegrationT
     @Test
     void processJobSkipsWhenDoneMarkerAlreadyExistsInRedis() {
         UUID jobId = submitCleanupJob(null, "done-marker-" + UUID.randomUUID());
-        jobService.markDispatchSucceeded(jobId);
+        jobService.markDispatchQueued(jobId);
         Job queued = jobRepository.findById(jobId).orElseThrow();
         redisTemplate.opsForValue().set(Utilities.getDoneKey(queued.getIdempotencyKey()), "true", Duration.ofHours(24));
 
@@ -92,7 +92,7 @@ class SchedulerDispatchIntegrationTest extends AbstractSchedulerFlowIntegrationT
         );
 
         UUID jobId = submitCleanupJob(null, "retry-flow-" + UUID.randomUUID());
-        jobService.markDispatchSucceeded(jobId);
+        jobService.markDispatchQueued(jobId);
 
         workerService.processJob(new JobDispatchEvent(jobId));
 
@@ -127,7 +127,7 @@ class SchedulerDispatchIntegrationTest extends AbstractSchedulerFlowIntegrationT
         );
 
         UUID jobId = submitCleanupJob("*/5 * * * * *", "cron-flow-" + UUID.randomUUID());
-        jobService.markDispatchSucceeded(jobId);
+        jobService.markDispatchQueued(jobId);
 
         workerService.processJob(new JobDispatchEvent(jobId));
 

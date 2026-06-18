@@ -17,6 +17,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
@@ -57,6 +58,9 @@ class WorkerServiceTest {
     @Mock
     private RedisHealthService redisHealthService;
 
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     private WorkerService workerService;
 
     @BeforeEach
@@ -67,7 +71,8 @@ class WorkerServiceTest {
                 executionLogService,
                 jobHandlerRouter,
                 redisLockService,
-                redisHealthService
+                redisHealthService,
+                eventPublisher
         );
         ReflectionTestUtils.setField(workerService, "workerId", "worker-test");
         ReflectionTestUtils.setField(workerService, "retryBaseDelayMs", 1000L);

@@ -16,6 +16,8 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import lombok.Data;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -67,6 +69,22 @@ public class StepExecution {
 
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "resolved_input", columnDefinition = "jsonb")
+    private String resolvedInput;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "input_ref", columnDefinition = "jsonb")
+    private String inputRef;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "output", columnDefinition = "jsonb")
+    private String output;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "output_ref", columnDefinition = "jsonb")
+    private String outputRef;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

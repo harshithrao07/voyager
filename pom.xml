@@ -144,6 +144,11 @@
 			<groupId>io.modelcontextprotocol.sdk</groupId>
 			<artifactId>mcp</artifactId>
 		</dependency>
+		<dependency>
+			<groupId>io.minio</groupId>
+			<artifactId>minio</artifactId>
+			<version>9.0.3</version>
+		</dependency>
 	</dependencies>
 	<dependencyManagement>
 		<dependencies>

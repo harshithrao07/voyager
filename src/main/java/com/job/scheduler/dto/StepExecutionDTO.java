@@ -1,22 +1,27 @@
 package com.job.scheduler.dto;
 
 import com.job.scheduler.enums.JobStatus;
+import com.job.scheduler.enums.JobType;
+import tools.jackson.databind.JsonNode;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.UUID;
 
-public record ExecutionLogDTO(
+public record StepExecutionDTO(
         UUID id,
-        UUID jobId,
-        int attemptNumber,
+        UUID jobStepId,
+        int stepOrder,
+        JobType stepType,
         JobStatus executionStatus,
         Instant startedAt,
         Instant completedAt,
         Long durationMs,
         String errorMessage,
-        String workerId,
+        JsonNode resolvedInput,
+        JsonNode inputRef,
+        JsonNode output,
+        JsonNode outputRef,
         Instant createdAt,
-        List<StepExecutionDTO> steps
+        Object details
 ) {
 }

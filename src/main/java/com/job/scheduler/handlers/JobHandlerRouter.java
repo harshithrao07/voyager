@@ -24,10 +24,6 @@ public class JobHandlerRouter {
     private final McpToolHandler mcpToolHandler;
     private final StepExecutionService stepExecutionService;
 
-    public void route(JobDispatchEvent jobDispatchEvent) {
-        route(jobDispatchEvent, null);
-    }
-
     public void route(JobDispatchEvent jobDispatchEvent, ExecutionLog executionLog) {
         Job job = jobService.findById(jobDispatchEvent.jobId());
 

@@ -11,11 +11,13 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 public class StepExecutionService {
     private final StepExecutionRepository stepExecutionRepository;
+    private final WorkflowPayloadStorageService workflowPayloadStorageService;
 
     public StepExecution start(ExecutionLog executionLog, JobStep jobStep) {
         StepExecution stepExecution = new StepExecution();
@@ -25,6 +27,12 @@ public class StepExecutionService {
         stepExecution.setStepType(jobStep.getStepType());
         stepExecution.setExecutionStatus(JobStatus.RUNNING);
         stepExecution.setStartedAt(Instant.now());
+        var storedInput = workflowPayloadStorageService.store(
+                payloadKey(executionLog, jobStep, "input"),
+                jobStep.getPayload()
+        );
+        stepExecution.setResolvedInput(storedInput.inlineValue());
+        stepExecution.setInputRef(storedInput.reference());
 
         return stepExecutionRepository.save(stepExecution);
     }
@@ -35,6 +43,17 @@ public class StepExecutionService {
         stepExecution.setErrorMessage(null);
         complete(stepExecution);
         stepExecutionRepository.save(stepExecution);
+    }
+
+    @Transactional
+    public void markSuccess(StepExecution stepExecution, String output) {
+        var storedOutput = workflowPayloadStorageService.store(
+                payloadKey(stepExecution.getExecutionLog(), stepExecution.getJobStep(), "output"),
+                output
+        );
+        stepExecution.setOutput(storedOutput.inlineValue());
+        stepExecution.setOutputRef(storedOutput.reference());
+        markSuccess(stepExecution);
     }
 
     @Transactional
@@ -52,5 +71,11 @@ public class StepExecutionService {
         if (stepExecution.getStartedAt() != null) {
             stepExecution.setDurationMs(Duration.between(stepExecution.getStartedAt(), completedAt).toMillis());
         }
+    }
+
+    private String payloadKey(ExecutionLog executionLog, JobStep jobStep, String direction) {
+        return "executions/" + executionLog.getId()
+                + "/steps/" + jobStep.getId()
+                + "/" + direction + "-" + UUID.randomUUID() + ".json";
     }
 }

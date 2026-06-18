@@ -14,6 +14,10 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
+      SCHEDULER_STORAGE_ENDPOINT: http://minio:9000
+      SCHEDULER_STORAGE_ACCESS_KEY: minioadmin
+      SCHEDULER_STORAGE_SECRET_KEY: minioadmin
+      SCHEDULER_STORAGE_BUCKET: scheduler-workflow-data
       # Worker id picks up the per-replica container hostname so logs and Redis
       # lock tokens (workerId:randomUUID) are debuggable across instances.
       SCHEDULER_WORKER_ID: worker-${HOSTNAME:-host}
@@ -23,6 +27,8 @@ services:
       redis:
         condition: service_healthy
       kafka:
+        condition: service_healthy
+      minio:
         condition: service_healthy
 
   lb:
@@ -96,6 +102,24 @@ services:
       timeout: 10s
       retries: 10
 
+  minio:
+    image: minio/minio:latest
+    container_name: scheduler-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   prometheus:
     image: prom/prometheus:latest
     ports:
@@ -109,3 +133,4 @@ volumes:
   postgres-data:
   redis-data:
   kafka-data:
+  minio-data:

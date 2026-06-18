@@ -82,7 +82,7 @@ class JobHandlerRouterTest {
         when(jobService.findById(jobId)).thenReturn(job);
         when(jobService.getEnabledSteps(job)).thenReturn(List.of(step));
 
-        jobHandlerRouter.route(new JobDispatchEvent(jobId));
+        jobHandlerRouter.route(new JobDispatchEvent(jobId), new ExecutionLog());
 
         ArgumentCaptor<SendEmailPayload> captor = ArgumentCaptor.forClass(SendEmailPayload.class);
         verify(sendEmailHandler).handle(captor.capture());
@@ -107,7 +107,7 @@ class JobHandlerRouterTest {
         when(jobService.findById(jobId)).thenReturn(job);
         when(jobService.getEnabledSteps(job)).thenReturn(List.of(step));
 
-        jobHandlerRouter.route(new JobDispatchEvent(jobId));
+        jobHandlerRouter.route(new JobDispatchEvent(jobId), new ExecutionLog());
 
         ArgumentCaptor<WebhookPayload> captor = ArgumentCaptor.forClass(WebhookPayload.class);
         verify(webhookHandler).handle(captor.capture());
@@ -128,7 +128,7 @@ class JobHandlerRouterTest {
         when(jobService.findById(jobId)).thenReturn(job);
         when(jobService.getEnabledSteps(job)).thenReturn(List.of(step));
 
-        jobHandlerRouter.route(new JobDispatchEvent(jobId));
+        jobHandlerRouter.route(new JobDispatchEvent(jobId), new ExecutionLog());
 
         ArgumentCaptor<CleanupPayload> captor = ArgumentCaptor.forClass(CleanupPayload.class);
         verify(cleanupHandler).handle(captor.capture());
@@ -182,7 +182,7 @@ class JobHandlerRouterTest {
 
         JobDispatchEvent event = new JobDispatchEvent(jobId);
 
-        assertThatThrownBy(() -> jobHandlerRouter.route(event))
+        assertThatThrownBy(() -> jobHandlerRouter.route(event, new ExecutionLog()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Payload does not match expected shape");
     }
