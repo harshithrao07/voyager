@@ -9,9 +9,6 @@ import java.util.UUID;
 
 public record McpToolExecutionResponseDTO(
         UUID id,
-        UUID jobId,
-        UUID executionLogId,
-        UUID stepExecutionId,
         String serverId,
         String toolName,
         JsonNode arguments,

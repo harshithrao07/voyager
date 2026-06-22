@@ -30,8 +30,7 @@ import java.util.UUID;
         indexes = {
                 @Index(name = "idx_mcp_tool_executions_server_tool", columnList = "server_id,tool_name"),
                 @Index(name = "idx_mcp_tool_executions_status", columnList = "status"),
-                @Index(name = "idx_mcp_tool_executions_started_at", columnList = "started_at"),
-                @Index(name = "idx_mcp_tool_executions_step_execution_id", columnList = "step_execution_id")
+                @Index(name = "idx_mcp_tool_executions_started_at", columnList = "started_at")
         }
 )
 public class McpToolExecution {
@@ -47,18 +46,6 @@ public class McpToolExecution {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "mcp_tool_id")
     private McpTool mcpTool;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "job_id")
-    private Job job;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "execution_log_id")
-    private ExecutionLog executionLog;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "step_execution_id")
-    private StepExecution stepExecution;
 
     @Column(name = "server_id", nullable = false)
     private String serverId;

@@ -1,5 +1,6 @@
 package com.job.scheduler.handlers;
 
+import com.job.scheduler.dto.StepResult;
 import com.job.scheduler.dto.payload.SendEmailPayload;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,7 +35,7 @@ class SendEmailHandlerTest {
                 "world"
         );
 
-        sendEmailHandler.handle(payload);
+        StepResult result = sendEmailHandler.handle(payload);
 
         ArgumentCaptor<SimpleMailMessage> captor = ArgumentCaptor.forClass(SimpleMailMessage.class);
         verify(mailSender).send(captor.capture());
@@ -43,5 +44,6 @@ class SendEmailHandlerTest {
         assertThat(message.getTo()).containsExactly("user@example.com");
         assertThat(message.getSubject()).isEqualTo("hello");
         assertThat(message.getText()).isEqualTo("world");
+        assertThat(result.output()).isNull();
     }
 }

@@ -292,9 +292,6 @@ class McpServerControllerTest {
         tools.jackson.databind.ObjectMapper objectMapper = new tools.jackson.databind.ObjectMapper();
         return new McpToolExecutionResponseDTO(
                 UUID.randomUUID(),
-                null,
-                null,
-                null,
                 serverId,
                 toolName,
                 objectMapper.createObjectNode().put("message", "hello"),

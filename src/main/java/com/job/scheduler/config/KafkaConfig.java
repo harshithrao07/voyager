@@ -11,25 +11,9 @@ import org.springframework.kafka.config.TopicBuilder;
 @EnableKafka
 public class KafkaConfig {
     @Bean
-    public NewTopic jobQueueTopic() {
-        return TopicBuilder.name(Topics.TOPIC_JOB_QUEUE)
+    public NewTopic workflowTaskQueueTopic() {
+        return TopicBuilder.name(Topics.TOPIC_WORKFLOW_TASK_QUEUE)
                 .partitions(36)
-                .replicas(1)
-                .build();
-    }
-
-    @Bean
-    public NewTopic jobQueueHighTopic() {
-        return TopicBuilder.name(Topics.TOPIC_JOB_QUEUE_HIGH)
-                .partitions(36)
-                .replicas(1)
-                .build();
-    }
-
-    @Bean
-    public NewTopic jobDLQTopic() {
-        return TopicBuilder.name(Topics.TOPIC_JOB_DLQ)
-                .partitions(1)
                 .replicas(1)
                 .build();
     }

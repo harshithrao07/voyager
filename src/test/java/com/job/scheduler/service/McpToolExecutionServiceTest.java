@@ -3,8 +3,6 @@ package com.job.scheduler.service;
 import com.job.scheduler.entity.McpServer;
 import com.job.scheduler.entity.McpTool;
 import com.job.scheduler.entity.McpToolExecution;
-import com.job.scheduler.entity.ExecutionLog;
-import com.job.scheduler.entity.Job;
 import com.job.scheduler.enums.McpAuthType;
 import com.job.scheduler.enums.McpServerStatus;
 import com.job.scheduler.enums.McpToolExecutionStatus;
@@ -273,32 +271,6 @@ class McpToolExecutionServiceTest {
                 execution.getStatus() == McpToolExecutionStatus.FAILED
                         && execution.getErrorMessage().equals("remote failed")
                         && execution.getCompletedAt() != null
-        ));
-    }
-
-    @Test
-    void callToolLinksExecutionHistoryToSchedulerExecutionLog() {
-        McpServer server = server(McpServerStatus.ENABLED, McpTrustLevel.READ_ONLY);
-        McpTool tool = tool(server, true);
-        Job job = new Job();
-        job.setId(UUID.randomUUID());
-        ExecutionLog executionLog = new ExecutionLog();
-        executionLog.setId(UUID.randomUUID());
-        executionLog.setJobDetails(job);
-
-        when(mcpServerRepository.findByServerId("local-tools")).thenReturn(Optional.of(server));
-        when(mcpToolRepository.findByMcpServerAndToolName(server, "ping")).thenReturn(Optional.of(tool));
-        when(mcpClientService.callTool("local-tools", "ping", Map.of()))
-                .thenReturn(Mono.just(new McpSchema.CallToolResult(List.of(), false, Map.of(), Map.of())));
-
-        mcpToolExecutionService
-                .callTool("local-tools", "ping", Map.of(), null, executionLog)
-                .block();
-
-        verify(mcpToolExecutionRepository).save(org.mockito.ArgumentMatchers.argThat(execution ->
-                execution.getExecutionLog() == executionLog
-                        && execution.getJob() == job
-                        && execution.getStatus() == McpToolExecutionStatus.RUNNING
         ));
     }
 

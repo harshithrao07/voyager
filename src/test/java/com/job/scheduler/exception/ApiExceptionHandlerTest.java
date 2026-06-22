@@ -1,120 +1,184 @@
 package com.job.scheduler.exception;
 
-import com.job.scheduler.controller.JobController;
-import com.job.scheduler.service.JobService;
+import com.job.scheduler.dto.ApiErrorDTO;
+import com.job.scheduler.workflow.asl.validation.AslDefinitionValidationException;
+import com.job.scheduler.workflow.asl.validation.AslValidationCategory;
+import com.job.scheduler.workflow.asl.validation.AslValidationIssue;
 import jakarta.persistence.EntityNotFoundException;
-import org.junit.jupiter.api.BeforeEach;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.Path;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.servlet.resource.NoResourceFoundException;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.http.HttpStatus;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.validation.BeanPropertyBindingResult;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 
-import java.util.UUID;
+import java.util.List;
+import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@ExtendWith(MockitoExtension.class)
 class ApiExceptionHandlerTest {
+    private final ApiExceptionHandler handler = new ApiExceptionHandler();
+    private final MockHttpServletRequest request =
+            new MockHttpServletRequest("POST", "/app/v1/workflows");
 
-    @Mock
-    private JobService jobService;
+    @Test
+    void mapsAslValidationIssuesToFieldErrors() {
+        var exception = new AslDefinitionValidationException(List.of(
+                new AslValidationIssue(
+                        "$.States.Call",
+                        AslValidationCategory.ASL,
+                        "MISSING_RESOURCE",
+                        "Task Resource is required"
+                )
+        ));
 
-    private MockMvc mockMvc;
+        var response =
+                handler.handleAslDefinitionValidation(exception, request);
 
-    @BeforeEach
-    void setUp() {
-        mockMvc = MockMvcBuilders
-                .standaloneSetup(new JobController(jobService), new MissingResourceController())
-                .setControllerAdvice(new ApiExceptionHandler())
-                .build();
+        assertResponse(
+                response.getBody(),
+                HttpStatus.BAD_REQUEST,
+                "ASL_VALIDATION_ERROR"
+        );
+        assertThat(response.getBody().fieldErrors()).singleElement()
+                .satisfies(error -> {
+                    assertThat(error.field()).isEqualTo("$.States.Call");
+                    assertThat(error.message())
+                            .contains("MISSING_RESOURCE")
+                            .contains("Task Resource is required");
+                });
     }
 
     @Test
-    void invalidRequestBodyReturnsValidationError() throws Exception {
-        String body = """
-                {
-                  "jobPriority": "MEDIUM",
-                  "payload": {},
-                  "idempotencyKey": ""
-                }
-                """;
+    void mapsRequestBindingErrors() {
+        RequestModel target = new RequestModel();
+        BeanPropertyBindingResult binding =
+                new BeanPropertyBindingResult(target, "request");
+        binding.rejectValue("name", "required", "Name is required");
 
-        mockMvc.perform(post("/app/v1/jobs")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(body))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("VALIDATION_ERROR"))
-                .andExpect(jsonPath("$.message").value("Request validation failed"))
-                .andExpect(jsonPath("$.path").value("/app/v1/jobs"))
-                .andExpect(jsonPath("$.fieldErrors.length()").value(2));
+        var response = handler.handleRequestValidation(
+                new MethodArgumentNotValidException(null, binding),
+                request
+        );
+
+        assertResponse(
+                response.getBody(),
+                HttpStatus.BAD_REQUEST,
+                "VALIDATION_ERROR"
+        );
+        assertThat(response.getBody().fieldErrors()).singleElement()
+                .satisfies(error -> {
+                    assertThat(error.field()).isEqualTo("name");
+                    assertThat(error.message()).isEqualTo("Name is required");
+                });
     }
 
     @Test
-    void entityNotFoundReturnsNotFoundResponse() throws Exception {
-        UUID jobId = UUID.randomUUID();
-        when(jobService.getJob(jobId)).thenThrow(new EntityNotFoundException("Job does not exist"));
+    void mapsConstraintViolations() {
+        @SuppressWarnings("unchecked")
+        ConstraintViolation<Object> violation =
+                mock(ConstraintViolation.class);
+        Path path = mock(Path.class);
+        when(path.toString()).thenReturn("startExecution.input");
+        when(violation.getPropertyPath()).thenReturn(path);
+        when(violation.getMessage()).thenReturn("must not be null");
 
-        mockMvc.perform(get("/app/v1/jobs/{jobId}", jobId))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error").value("RESOURCE_NOT_FOUND"))
-                .andExpect(jsonPath("$.message").value("Job does not exist"));
+        var response = handler.handleConstraintViolation(
+                new ConstraintViolationException(Set.of(violation)),
+                request
+        );
+
+        assertResponse(
+                response.getBody(),
+                HttpStatus.BAD_REQUEST,
+                "VALIDATION_ERROR"
+        );
+        assertThat(response.getBody().fieldErrors()).singleElement()
+                .satisfies(error -> {
+                    assertThat(error.field())
+                            .isEqualTo("startExecution.input");
+                    assertThat(error.message()).isEqualTo("must not be null");
+                });
     }
 
     @Test
-    void noResourceFoundReturnsNotFoundResponse() throws Exception {
-        mockMvc.perform(get("/missing-resource"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error").value("RESOURCE_NOT_FOUND"))
-                .andExpect(jsonPath("$.path").value("/missing-resource"));
+    void mapsBadRequestNotFoundConflictAndVersionConflict() {
+        assertResponse(
+                handler.handleBadRequest(
+                        new IllegalArgumentException("bad input"),
+                        request
+                ).getBody(),
+                HttpStatus.BAD_REQUEST,
+                "BAD_REQUEST"
+        );
+        assertResponse(
+                handler.handleNotFound(
+                        new EntityNotFoundException("missing"),
+                        request
+                ).getBody(),
+                HttpStatus.NOT_FOUND,
+                "RESOURCE_NOT_FOUND"
+        );
+        assertResponse(
+                handler.handleConflict(
+                        new IllegalStateException("wrong state"),
+                        request
+                ).getBody(),
+                HttpStatus.CONFLICT,
+                "INVALID_STATE"
+        );
+        ApiErrorDTO version = handler.handleOptimisticLock(
+                new OptimisticLockingFailureException("stale"),
+                request
+        ).getBody();
+        assertResponse(version, HttpStatus.CONFLICT, "VERSION_CONFLICT");
+        assertThat(version.message()).contains("modified by another request");
     }
 
     @Test
-    void illegalStateReturnsConflictResponse() throws Exception {
-        UUID jobId = UUID.randomUUID();
-        when(jobService.cancelJob(jobId)).thenThrow(new IllegalStateException("RUNNING jobs cannot be canceled"));
+    void hidesUnexpectedExceptionDetails() {
+        ApiErrorDTO body = handler.handleUnexpected(
+                new RuntimeException("database password leaked"),
+                request
+        ).getBody();
 
-        mockMvc.perform(post("/app/v1/jobs/{jobId}/cancel", jobId))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error").value("INVALID_STATE"))
-                .andExpect(jsonPath("$.message").value("RUNNING jobs cannot be canceled"));
+        assertResponse(
+                body,
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "INTERNAL_SERVER_ERROR"
+        );
+        assertThat(body.message())
+                .isEqualTo("An unexpected error occurred")
+                .doesNotContain("password");
     }
 
-    @Test
-    void badEnumQueryParameterReturnsBadRequest() throws Exception {
-        mockMvc.perform(get("/app/v1/jobs").param("status", "NOT_A_STATUS"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("BAD_REQUEST"))
-                .andExpect(jsonPath("$.path").value("/app/v1/jobs"));
+    private void assertResponse(
+            ApiErrorDTO body,
+            HttpStatus status,
+            String error
+    ) {
+        assertThat(body).isNotNull();
+        assertThat(body.status()).isEqualTo(status.value());
+        assertThat(body.error()).isEqualTo(error);
+        assertThat(body.path()).isEqualTo("/app/v1/workflows");
+        assertThat(body.timestamp()).isNotNull();
     }
 
-    @Test
-    void unexpectedExceptionReturnsInternalServerError() throws Exception {
-        UUID jobId = UUID.randomUUID();
-        when(jobService.getJob(jobId)).thenThrow(new RuntimeException("boom"));
+    public static class RequestModel {
+        private String name;
 
-        mockMvc.perform(get("/app/v1/jobs/{jobId}", jobId))
-                .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.error").value("INTERNAL_SERVER_ERROR"))
-                .andExpect(jsonPath("$.message").value("An unexpected error occurred"));
-    }
+        public String getName() {
+            return name;
+        }
 
-    @RestController
-    private static class MissingResourceController {
-
-        @GetMapping("/missing-resource")
-        void missingResource() throws NoResourceFoundException {
-            throw new NoResourceFoundException(HttpMethod.GET, "/missing-resource", "No static resource /missing-resource.");
+        public void setName(String name) {
+            this.name = name;
         }
     }
 }

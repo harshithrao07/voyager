@@ -4,7 +4,6 @@ public class Topics {
     private Topics() {
     }
 
-    public static final String TOPIC_JOB_QUEUE = "job-queue";
-    public static final String TOPIC_JOB_QUEUE_HIGH = "job-queue-high";
-    public static final String TOPIC_JOB_DLQ = "job-dlq";
+    public static final String TOPIC_WORKFLOW_TASK_QUEUE =
+            "workflow-task-queue";
 }

@@ -14,12 +14,36 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import org.springframework.dao.OptimisticLockingFailureException;
+import com.job.scheduler.workflow.asl.validation.AslDefinitionValidationException;
 
 import java.time.Instant;
 import java.util.List;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(AslDefinitionValidationException.class)
+    public ResponseEntity<ApiErrorDTO> handleAslDefinitionValidation(
+            AslDefinitionValidationException exception,
+            HttpServletRequest request
+    ) {
+        List<ApiFieldErrorDTO> fieldErrors = exception.getIssues()
+                .stream()
+                .map(issue -> new ApiFieldErrorDTO(
+                        issue.location(),
+                        issue.code() + ": " + issue.message()
+                ))
+                .toList();
+
+        return build(
+                HttpStatus.BAD_REQUEST,
+                "ASL_VALIDATION_ERROR",
+                exception.getMessage(),
+                request,
+                fieldErrors
+        );
+    }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiErrorDTO> handleRequestValidation(
@@ -77,6 +101,19 @@ public class ApiExceptionHandler {
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<ApiErrorDTO> handleConflict(IllegalStateException exception, HttpServletRequest request) {
         return build(HttpStatus.CONFLICT, "INVALID_STATE", exception.getMessage(), request);
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ApiErrorDTO> handleOptimisticLock(
+            OptimisticLockingFailureException exception,
+            HttpServletRequest request
+    ) {
+        return build(
+                HttpStatus.CONFLICT,
+                "VERSION_CONFLICT",
+                "Workflow metadata was modified by another request",
+                request
+        );
     }
 
     @ExceptionHandler(Exception.class)

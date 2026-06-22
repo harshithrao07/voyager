@@ -8,8 +8,6 @@ import com.job.scheduler.entity.McpServer;
 import com.job.scheduler.entity.McpTool;
 import com.job.scheduler.entity.McpToolExecution;
 import com.job.scheduler.dto.McpToolExecutionResponseDTO;
-import com.job.scheduler.entity.ExecutionLog;
-import com.job.scheduler.entity.StepExecution;
 import com.job.scheduler.enums.McpServerStatus;
 import com.job.scheduler.enums.McpToolExecutionStatus;
 import com.job.scheduler.enums.McpTrustLevel;
@@ -49,36 +47,13 @@ public class McpToolExecutionService {
             Map<String, Object> arguments,
             McpTrustLevel maxAllowedTrustLevel
     ) {
-        return callTool(serverId, toolName, arguments, maxAllowedTrustLevel, null);
-    }
-
-    public Mono<McpSchema.CallToolResult> callTool(
-            String serverId,
-            String toolName,
-            Map<String, Object> arguments,
-            McpTrustLevel maxAllowedTrustLevel,
-            ExecutionLog schedulerExecutionLog
-    ) {
-        return callTool(serverId, toolName, arguments, maxAllowedTrustLevel, schedulerExecutionLog, null);
-    }
-
-    public Mono<McpSchema.CallToolResult> callTool(
-            String serverId,
-            String toolName,
-            Map<String, Object> arguments,
-            McpTrustLevel maxAllowedTrustLevel,
-            ExecutionLog schedulerExecutionLog,
-            StepExecution stepExecution
-    ) {
         Map<String, Object> safeArguments = arguments == null ? Map.of() : arguments;
         return Mono.defer(() -> {
             ExecutionContext context = createExecutionContext(
                     serverId,
                     toolName,
                     safeArguments,
-                    maxAllowedTrustLevel,
-                    schedulerExecutionLog,
-                    stepExecution
+                    maxAllowedTrustLevel
             );
             try {
                 validateExecution(context, safeArguments, maxAllowedTrustLevel);
@@ -143,9 +118,7 @@ public class McpToolExecutionService {
             String serverId,
             String toolName,
             Map<String, Object> arguments,
-            McpTrustLevel maxAllowedTrustLevel,
-            ExecutionLog schedulerExecutionLog,
-            StepExecution stepExecution
+            McpTrustLevel maxAllowedTrustLevel
     ) {
         McpServer server = mcpServerRepository.findByServerId(serverId)
                 .orElseThrow(() -> new EntityNotFoundException(MCP_SERVER_NOT_FOUND_MESSAGE));
@@ -159,12 +132,6 @@ public class McpToolExecutionService {
         execution.setStatus(McpToolExecutionStatus.RUNNING);
         execution.setMaxAllowedTrustLevel(maxAllowedTrustLevel == null ? McpTrustLevel.READ_ONLY : maxAllowedTrustLevel);
         execution.setStartedAt(Instant.now());
-        execution.setExecutionLog(schedulerExecutionLog);
-        execution.setStepExecution(stepExecution);
-        if (schedulerExecutionLog != null) {
-            execution.setJob(schedulerExecutionLog.getJobDetails());
-        }
-
         return new ExecutionContext(server, tool, mcpToolExecutionRepository.save(execution));
     }
 
@@ -229,9 +196,6 @@ public class McpToolExecutionService {
     private McpToolExecutionResponseDTO toResponse(McpToolExecution execution) {
         return new McpToolExecutionResponseDTO(
                 execution.getId(),
-                execution.getJob() == null ? null : execution.getJob().getId(),
-                execution.getExecutionLog() == null ? null : execution.getExecutionLog().getId(),
-                execution.getStepExecution() == null ? null : execution.getStepExecution().getId(),
                 execution.getServerId(),
                 execution.getToolName(),
                 readJson(execution.getArguments(), "execution arguments"),

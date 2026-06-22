@@ -1,0 +1,4 @@
+interface:
+  display_name: "ASL JSONata"
+  short_description: "Design and validate JSONata-only ASL workflows"
+  default_prompt: "Use $asl-jsonata to design or validate a JSONata-only ASL workflow."

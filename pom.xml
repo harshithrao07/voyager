@@ -149,6 +149,11 @@
 			<artifactId>minio</artifactId>
 			<version>9.0.3</version>
 		</dependency>
+		<dependency>
+			<groupId>com.ibm.jsonata4java</groupId>
+			<artifactId>JSONata4Java</artifactId>
+			<version>2.6.3</version>
+		</dependency>
 	</dependencies>
 	<dependencyManagement>
 		<dependencies>
