@@ -1,97 +1,129 @@
 # ASL with JSONata
 
-This scheduler uses the [Amazon States Language (ASL) 1.0](https://states-language.net/spec.html) to define state machines. However, it replaces the standard JSONPath expressions with **JSONata** for richer data mapping, querying, and transformations. 
+This scheduler defines state machines in the
+[Amazon States Language (ASL) 1.0](https://states-language.net/spec.html), but
+replaces JSONPath with **JSONata** for all data mapping, querying, and
+transformation. This document is the guide to that dialect.
 
-This document explains the differences between standard ASL and our JSONata dialect.
-
-## Core Differences
-
-1. **No JSONPath**: Fields like `InputPath`, `ResultPath`, `OutputPath`, `Parameters`, and `ResultSelector` are **not supported**. They have been entirely replaced by `Arguments`, `Assign`, and `Output`.
-2. **Explicit Expressions**: JSONata expressions must be enclosed in `{% ... %}`.
-3. **No Intrinsic Functions**: `States.Format`, `States.Array`, etc., are unnecessary. You can construct arrays and format strings directly using native JSONata syntax.
-4. **Context Object & Reserved Variables**: In place of `$$`, you interact with a reserved `$states` variable containing context information.
+> Code: `AslJsonataEvaluator` (expression engine), the `*StateExecutor` beans,
+> and `contextObject(...)` in `WorkflowInterpreter` (what `$states.context`
+> contains).
 
 ---
 
-## State Variables (`$states`)
+## 1. One idea: every value can be an expression
 
-Within any expression `{% ... %}`, the interpreter exposes the `$states` variable:
-
-```json
-{
-  "input": "The input provided to the current state",
-  "result": "The result returned by a Task, Parallel, or Map",
-  "errorOutput": "The error object caught within a Catch block",
-  "context": "Interpreter context metadata"
-}
-```
-
-- `$states.input`: Available everywhere.
-- `$states.result`: Available only in `Assign` and `Output` fields of a `Task`, `Parallel`, or `Map` state.
-- `$states.errorOutput`: Available only inside a `Catch` block's `Assign` or `Output` fields.
-
----
-
-## Data Flow: Arguments, Assign, and Output
-
-The standard ASL data flow mechanism (`Parameters` -> `ResultSelector` -> `ResultPath` -> `OutputPath`) is consolidated into three JSONata-aware fields:
-
-### 1. `Arguments` (Replaces `Parameters`)
-Allowed on `Task` and `Parallel`. Prepares the input specifically for the worker or child branch. You can use `$states.input` and `$states.context` here.
+Anywhere a state takes data, you can write a literal **or** a JSONata expression
+wrapped in `{% … %}`. The evaluator walks objects/arrays recursively, so an
+expression can sit at any depth:
 
 ```json
 "Arguments": {
-  "customerId": "{% $states.input.userId %}",
-  "timestamp": "{% $states.context.startTime %}"
+  "id":   "{% $states.input.userId %}",
+  "tier": "GOLD",
+  "tags": "{% [$states.input.region, 'priority'] %}"
 }
 ```
 
-### 2. `Assign` (Replaces `ResultPath`)
-Allowed on all states except `Succeed` and `Fail`. Allows you to declare variables that carry over into subsequent states. In `Task`, `Map`, or `Parallel`, you can read `$states.result` here.
+A string is treated as an expression **only** if it's trimmed form starts with
+`{%` and ends with `%}`. Everything else is a literal. Inside an expression, the
+**input** to the current state is the JSONata root (`$`), so `$states.input.x`
+and `$.x` refer to the same thing.
 
-```json
-"Assign": {
-  "customerData": "{% $states.result %}",
-  "totalProcessed": "{% $states.input.currentTotal + $states.result.count %}"
-}
-```
-
-Variables assigned this way become accessible as `$customerData` and `$totalProcessed` in the next state.
-
-### 3. `Output` (Replaces `OutputPath` & `ResultSelector`)
-Allowed on all states except `Fail`. Determines the exact JSON that is passed as input to the `Next` state. If omitted, the state passes its `input` along (or its `result` if it is a Task/Parallel/Map).
-
-```json
-"Output": {
-  "status": "COMPLETED",
-  "data": "{% $states.result.items %}"
-}
-```
+Evaluation is bounded by a timeout (`mapping-timeout-ms`, default 100ms) and max
+depth (`mapping-max-depth`, default 100) so a pathological expression can't freeze
+a thread.
 
 ---
 
-## Example: A Full JSONata Task State
+## 2. What's different from standard ASL
+
+| Standard ASL | Here |
+|---|---|
+| JSONPath (`$.foo`) | **JSONata** in `{% … %}` |
+| `InputPath`, `Parameters` | `Arguments` |
+| `ResultSelector`, `ResultPath` | `Assign` (variables) |
+| `OutputPath` | `Output` |
+| Intrinsics (`States.Format`, `States.Array`, …) | native JSONata (`&`, `[...]`, functions) |
+| `$$` context object | the `$states.context` field |
+
+`InputPath`, `Parameters`, `ResultSelector`, `ResultPath`, `OutputPath` are **not
+supported** — use `Arguments` / `Assign` / `Output`.
+
+---
+
+## 3. Reserved variable: `$states`
+
+Every expression gets a `$states` object with four fields:
+
+| Field | Meaning | Available in |
+|---|---|---|
+| `$states.input` | input to the current state | **everywhere** |
+| `$states.result` | result of a Task / Parallel / Map | `Assign`, `Output` of Task/Parallel/Map |
+| `$states.errorOutput` | `{ Error, Cause }` of a caught failure | `Assign`, `Output` inside a `Catch` |
+| `$states.context` | execution metadata (see below) | everywhere |
+
+Variables you declare via `Assign` are exposed as top-level `$name` (not under
+`$states`). E.g. `Assign: { "tier": ... }` → readable as `$tier` in later states.
+
+### `$states.context` fields
+
+These come from `contextObject(...)` in the interpreter — the real, available
+keys:
+
+| Key | Value |
+|---|---|
+| `WorkflowExecutionId` | the execution's UUID |
+| `ExecutionScopeId` | this branch/iteration's scope UUID |
+| `StateExecutionId` | this state-entry UUID |
+| `StateName` | current state name |
+| `StateSequence` | monotonic step number within the scope |
+| `Map.Item.Index` | *(Map iterations only)* the item index |
+| `Map.Item.Value` | *(Map iterations only)* the raw item |
+
+---
+
+## 4. Data flow: `Arguments` → worker → `Assign` / `Output`
+
+The whole standard pipeline (`Parameters → ResultSelector → ResultPath →
+OutputPath`) collapses into three fields:
+
+```mermaid
+flowchart LR
+    IN["$states.input<br/>(input to state)"] --> ARGS["Arguments<br/>shape worker payload"]
+    ARGS --> WORK["Task resource runs"]
+    WORK --> RES["$states.result<br/>(worker output)"]
+    RES --> ASSIGN["Assign<br/>set $variables"]
+    RES --> OUTPUT["Output<br/>shape next input"]
+    ASSIGN -.->|carry to later states| NEXT
+    OUTPUT --> NEXT["input of Next state"]
+```
+
+| Field | Replaces | Allowed on | Can read | Purpose |
+|---|---|---|---|---|
+| `Arguments` | `Parameters` | Task, Parallel | `$states.input`, `$states.context` | build the payload sent to the worker/branch |
+| `Assign` | `ResultPath` | all except Succeed/Fail | `+ $states.result` | declare `$variables` for later states |
+| `Output` | `OutputPath`, `ResultSelector` | all except Fail | `+ $states.result` | the exact JSON passed to the `Next` state |
+
+If `Output` is omitted, the state passes its `input` through — or its `result`
+for Task/Parallel/Map. `Assign` and `Output` are independent: you can carry data
+forward as a variable *and* shape the next input.
+
+---
+
+## 5. Worked example: a Task state
 
 ```json
 "FetchCustomer": {
   "Type": "Task",
   "Resource": "mcp://crm/get_customer",
-  "Comment": "Fetch customer details and save them to a variable",
-  
-  // 1. Prepare data for the worker
   "Arguments": {
     "id": "{% $states.input.userId %}"
   },
-  
-  // 2. Worker executes and returns $states.result
-  
-  // 3. Save specific pieces to variables for later
   "Assign": {
     "customerEmail": "{% $states.result.email %}",
-    "customerTier": "{% $states.result.tier %}"
+    "customerTier":  "{% $states.result.tier %}"
   },
-  
-  // 4. Shape the input for the next state
   "Output": {
     "userId": "{% $states.input.userId %}",
     "readyForProcessing": true
@@ -100,11 +132,19 @@ Allowed on all states except `Fail`. Determines the exact JSON that is passed as
 }
 ```
 
+1. `Arguments` builds `{ "id": <userId> }` from the input and sends it to the
+   resource.
+2. The worker runs; its return value becomes `$states.result`.
+3. `Assign` saves `$customerEmail` / `$customerTier` for later states.
+4. `Output` shapes the JSON handed to `ProcessCustomer`.
+
 ---
 
-## Choice State
+## 6. Choice
 
-The `Choice` state uses JSONata for its `Condition` fields. The condition must evaluate to a boolean. 
+Each rule has a `Condition` that must evaluate to a **boolean**. Rules are tried
+in order; the first true one wins. A rule (and the `Default`) may also carry
+`Assign` / `Output`.
 
 ```json
 "CheckTier": {
@@ -118,13 +158,16 @@ The `Choice` state uses JSONata for its `Condition` fields. The condition must e
   "Default": "StandardProcessing"
 }
 ```
-*Note: `$customerTier` was defined in a previous state's `Assign` block.*
+
+If no rule matches **and** there is no `Default`, the state fails with
+`States.NoChoiceMatched`. (`$customerTier` here came from an earlier `Assign`.)
 
 ---
 
-## Wait State
+## 7. Wait
 
-The `Wait` state natively accepts JSONata to dynamically compute timestamps or wait durations.
+`Seconds` or `Timestamp` may be literals or expressions. `Seconds` must evaluate
+to a non-negative integer; `Timestamp` to an RFC 3339 string.
 
 ```json
 "WaitUntilReady": {
@@ -136,9 +179,10 @@ The `Wait` state natively accepts JSONata to dynamically compute timestamps or w
 
 ---
 
-## Error Handling (`Retry` and `Catch`)
+## 8. Error handling: `Retry` and `Catch`
 
-The `Retry` and `Catch` blocks behave exactly as they do in the ASL specification, but `Catch` blocks can also use `Assign` and `Output` to shape the fallback payload using `$states.errorOutput`.
+`Retry` and `Catch` follow the ASL spec, but a `Catch` block can additionally use
+`Assign` / `Output` (reading `$states.errorOutput`) to shape the fallback payload.
 
 ```json
 "Catch": [
@@ -155,3 +199,86 @@ The `Retry` and `Catch` blocks behave exactly as they do in the ASL specificatio
   }
 ]
 ```
+
+`$states.errorOutput` is `{ "Error": <name>, "Cause": <detail> }` and is only in
+scope inside a `Catch` block's `Assign` / `Output`.
+
+---
+
+## 9. Quick reference: where JSONata fields apply
+
+| State | `Arguments` | `Assign` | `Output` | Other expression fields |
+|---|:---:|:---:|:---:|---|
+| Task | ✅ | ✅ | ✅ | `TimeoutSeconds`, `HeartbeatSeconds` |
+| Choice | — | ✅ (per rule / default) | ✅ (per rule / default) | `Condition` (→ boolean) |
+| Wait | — | ✅ | ✅ | `Seconds` / `Timestamp` |
+| Pass | — | ✅ | ✅ | — |
+| Parallel | ✅ | ✅ | ✅ | — |
+| Map | — | ✅ | ✅ | `Items`, `ItemSelector`, `MaxConcurrency`, `ItemBatcher`, `ItemReader`/`ResultWriter` `Arguments`, tolerated-failure thresholds |
+| Succeed | — | — | ✅ | — |
+| Fail | — | — | — | `Error`, `Cause` |
+
+`$states.result` is gated by the validator, not just convention. It is allowed
+**only** in `Assign` / `Output` of **Task, Parallel, Map** (for Parallel/Map it's
+the ordered array of branch/iteration outputs). It is **rejected** in `Arguments`,
+`ItemSelector`, and `ItemReader`/`ResultWriter` `Arguments`. Likewise
+`$states.errorOutput` is allowed only inside a `Catch` block's `Assign`/`Output`.
+
+---
+
+## 10. What the validator enforces (at activation)
+
+`AslStateDefinitionValidator` checks a definition when it's registered, so the
+runtime never sees a malformed machine. Beyond per-state field whitelists, it
+enforces:
+
+**Dialect (no JSONPath leaking in):**
+
+- JSONPath-only fields are rejected: `InputPath`, `OutputPath`, `Parameters`,
+  `Result`, `ResultPath`, `ResultSelector`, `ItemsPath`, and every `*Path`
+  variant (`SecondsPath`, `MaxConcurrencyPath`, `ErrorPath`, …).
+- Any object key ending in `.$` is rejected (the JSONPath "value-from-path" form).
+- Per-state `QueryLanguage` overrides are rejected.
+- JSONPath `Choice` operators (`Variable`, `And`/`Or`/`Not`, `StringEquals`,
+  `NumericLessThan`, `IsPresent`, …) are rejected — use a `Condition` expression.
+
+**Structure:**
+
+- A transitioning state must have **exactly one** of `Next` / `End`; `End` must be
+  literally `true`; `Next` must name a state in the same `States` object.
+- `Wait` must have **exactly one** of `Seconds` / `Timestamp`. `Seconds` is a
+  non-negative integer (or expression); `Timestamp` is RFC 3339 with uppercase
+  `T`/`Z`.
+- `Choice` needs a non-empty `Choices`; each rule's `Condition` must be an
+  expression; missing match + no `Default` → `States.NoChoiceMatched` at runtime.
+- `Parallel` needs a non-empty `Branches`; `Map` needs an `ItemProcessor`
+  (deprecated `Iterator` is rejected).
+
+**Variables:**
+
+- The name `states` is reserved. Variable names must be Unicode identifiers of
+  ≤ 80 code points.
+
+**Errors, Retry, Catch:**
+
+- `ErrorEquals` must be a non-empty array. Unknown names using the reserved
+  `States.` prefix are rejected — only these are allowed: `States.ALL`,
+  `States.Timeout`, `States.TaskFailed`, `States.Permissions`,
+  `States.BranchFailed`, `States.NoChoiceMatched`, `States.QueryEvaluationError`,
+  `States.ExceedToleratedFailureThreshold`, `States.ItemReaderFailed`,
+  `States.ResultWriterFailed`.
+- `States.ALL` must appear **alone** in an `ErrorEquals` and the retrier/catcher
+  containing it must be **last**.
+- `Retry`: `IntervalSeconds`/`MaxDelaySeconds` positive ints, `MaxAttempts`
+  non-negative, `BackoffRate ≥ 1.0`. `JitterStrategy` only `FULL` is supported.
+
+**Resource & Map limits:**
+
+- A `Task`/reader/writer `Resource` must be a valid URI with a scheme
+  (e.g. `mcp://…`, `https://…`).
+- `Map` `ProcessorConfig.Mode`: only `INLINE` is implemented. `ReaderConfig`
+  supports only `MaxItems`; other keys are flagged as needing a runtime extension.
+- `ItemBatcher` requires `MaxItemsPerBatch` or `MaxInputBytesPerBatch`.
+
+Issues are categorized as `DIALECT` (JSONPath leakage), `ASL` (spec/structure),
+or `RUNTIME_SUPPORT` (valid ASL the runtime doesn't implement yet).
