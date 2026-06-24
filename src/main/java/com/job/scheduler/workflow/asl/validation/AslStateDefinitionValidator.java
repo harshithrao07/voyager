@@ -96,20 +96,6 @@ public class AslStateDefinitionValidator {
             "Next",
             "End"
     );
-    private static final Set<String> ITEM_READER_FIELDS = Set.of(
-            "Resource",
-            "Arguments",
-            "ReaderConfig"
-    );
-    private static final Set<String> ITEM_BATCHER_FIELDS = Set.of(
-            "BatchInput",
-            "MaxItemsPerBatch",
-            "MaxInputBytesPerBatch"
-    );
-    private static final Set<String> RESULT_WRITER_FIELDS = Set.of(
-            "Resource",
-            "Arguments"
-    );
     private static final Set<String> CHOICE_RULE_FIELDS = Set.of(
             "Condition",
             "Next",
@@ -167,10 +153,7 @@ public class AslStateDefinitionValidator {
             "States.Permissions",
             "States.BranchFailed",
             "States.NoChoiceMatched",
-            "States.QueryEvaluationError",
-            "States.ExceedToleratedFailureThreshold",
-            "States.ItemReaderFailed",
-            "States.ResultWriterFailed"
+            "States.QueryEvaluationError"
     );
     private static final Set<String> JSONPATH_CHOICE_FIELDS = Set.of(
             "Variable",
@@ -396,7 +379,6 @@ public class AslStateDefinitionValidator {
                 nestedMachineValidator,
                 issues
         );
-        validateItemReader(state.get("ItemReader"), location + ".ItemReader", issues);
         validateItems(state.get("Items"), location + ".Items", issues);
         validateJsonataValues(
                 state.get("ItemSelector"),
@@ -405,23 +387,10 @@ public class AslStateDefinitionValidator {
                 false,
                 issues
         );
-        validateItemBatcher(state.get("ItemBatcher"), location + ".ItemBatcher", issues);
-        validateResultWriter(state.get("ResultWriter"), location + ".ResultWriter", issues);
         validateNonNegativeIntegerOrExpression(
                 state.get("MaxConcurrency"),
                 location + ".MaxConcurrency",
                 "MaxConcurrency",
-                issues
-        );
-        validatePercentageOrExpression(
-                state.get("ToleratedFailurePercentage"),
-                location + ".ToleratedFailurePercentage",
-                issues
-        );
-        validateNonNegativeIntegerOrExpression(
-                state.get("ToleratedFailureCount"),
-                location + ".ToleratedFailureCount",
-                "ToleratedFailureCount",
                 issues
         );
 
@@ -438,18 +407,36 @@ public class AslStateDefinitionValidator {
     }
 
     /**
-     * The full Map feature set is now executable (Items/ItemReader,
-     * ItemSelector, ItemBatcher, MaxConcurrency, tolerated-failure thresholds,
-     * ResultWriter, Assign, Output, Retry, Catch, Next, End). The only remaining
-     * runtime-support gate is ProcessorConfig Mode: only INLINE (the default) is
-     * supported. (Unknown ReaderConfig keys beyond MaxItems are still flagged
-     * separately as a runtime extension.)
+     * The supported inline Map feature set is Items, ItemSelector,
+     * MaxConcurrency, ItemProcessor (Assign, Output, Retry, Catch, Next, End).
+     * Advanced features (ItemReader, ItemBatcher, ResultWriter, and the
+     * tolerated-failure thresholds) are not implemented and are rejected here, as
+     * is any ProcessorConfig Mode other than INLINE (the default).
      */
+    private static final Set<String> UNSUPPORTED_MAP_FEATURES = Set.of(
+            "ItemReader",
+            "ItemBatcher",
+            "ResultWriter",
+            "ToleratedFailureCount",
+            "ToleratedFailurePercentage"
+    );
+
     private void reportUnsupportedMapFeatures(
             JsonNode state,
             String location,
             List<AslValidationIssue> issues
     ) {
+        for (String feature : UNSUPPORTED_MAP_FEATURES) {
+            if (state.has(feature)) {
+                issues.add(issue(
+                        location + "." + feature,
+                        AslValidationCategory.RUNTIME_SUPPORT,
+                        "MAP_FEATURE_RUNTIME_UNSUPPORTED",
+                        "Map " + feature + " is not supported"
+                ));
+            }
+        }
+
         JsonNode mode = state
                 .path("ItemProcessor")
                 .path("ProcessorConfig")
@@ -494,69 +481,6 @@ public class AslStateDefinitionValidator {
         nestedMachineValidator.validate(itemProcessor, location, true, issues);
     }
 
-    private void validateItemReader(
-            JsonNode itemReader,
-            String location,
-            List<AslValidationIssue> issues
-    ) {
-        if (itemReader == null) {
-            return;
-        }
-        if (!itemReader.isObject()) {
-            issues.add(issue(
-                    location,
-                    AslValidationCategory.ASL,
-                    "ITEM_READER_NOT_OBJECT",
-                    "ItemReader must be a JSON object"
-            ));
-            return;
-        }
-
-        validateObjectFields(
-                itemReader,
-                ITEM_READER_FIELDS,
-                location,
-                "ITEM_READER_FIELD_NOT_ALLOWED",
-                issues
-        );
-        validateResource(itemReader.get("Resource"), location + ".Resource", issues);
-        validateJsonataValues(
-                itemReader.get("Arguments"),
-                location + ".Arguments",
-                false,
-                false,
-                issues
-        );
-
-        JsonNode readerConfig = itemReader.get("ReaderConfig");
-        if (readerConfig != null) {
-            if (!readerConfig.isObject()) {
-                issues.add(issue(
-                        location + ".ReaderConfig",
-                        AslValidationCategory.ASL,
-                        "READER_CONFIG_NOT_OBJECT",
-                        "ReaderConfig must be a JSON object"
-                ));
-            } else {
-                validatePositiveIntegerOrExpression(
-                        readerConfig.get("MaxItems"),
-                        location + ".ReaderConfig.MaxItems",
-                        issues
-                );
-                for (Map.Entry<String, JsonNode> property : readerConfig.properties()) {
-                    if (!"MaxItems".equals(property.getKey())) {
-                        issues.add(issue(
-                                location + ".ReaderConfig." + property.getKey(),
-                                AslValidationCategory.RUNTIME_SUPPORT,
-                                "READER_CONFIG_RUNTIME_EXTENSION",
-                                "ReaderConfig field requires an explicitly supported runtime extension"
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
     private void validateItems(
             JsonNode items,
             String location,
@@ -575,93 +499,6 @@ public class AslStateDefinitionValidator {
                 "ITEMS_ARRAY_OR_EXPRESSION_REQUIRED",
                 "Items must be an array or JSONata expression producing an array"
         ));
-    }
-
-    private void validateItemBatcher(
-            JsonNode itemBatcher,
-            String location,
-            List<AslValidationIssue> issues
-    ) {
-        if (itemBatcher == null) {
-            return;
-        }
-        if (!itemBatcher.isObject()) {
-            issues.add(issue(
-                    location,
-                    AslValidationCategory.ASL,
-                    "ITEM_BATCHER_NOT_OBJECT",
-                    "ItemBatcher must be a JSON object"
-            ));
-            return;
-        }
-        validateObjectFields(
-                itemBatcher,
-                ITEM_BATCHER_FIELDS,
-                location,
-                "ITEM_BATCHER_FIELD_NOT_ALLOWED",
-                issues
-        );
-        validateJsonataValues(
-                itemBatcher.get("BatchInput"),
-                location + ".BatchInput",
-                false,
-                false,
-                issues
-        );
-        boolean hasMaxItems = itemBatcher.has("MaxItemsPerBatch");
-        boolean hasMaxBytes = itemBatcher.has("MaxInputBytesPerBatch");
-        if (!hasMaxItems && !hasMaxBytes) {
-            issues.add(issue(
-                    location,
-                    AslValidationCategory.ASL,
-                    "ITEM_BATCH_LIMIT_REQUIRED",
-                    "ItemBatcher requires MaxItemsPerBatch or MaxInputBytesPerBatch"
-            ));
-        }
-        validatePositiveIntegerOrExpression(
-                itemBatcher.get("MaxItemsPerBatch"),
-                location + ".MaxItemsPerBatch",
-                issues
-        );
-        validatePositiveIntegerOrExpression(
-                itemBatcher.get("MaxInputBytesPerBatch"),
-                location + ".MaxInputBytesPerBatch",
-                issues
-        );
-    }
-
-    private void validateResultWriter(
-            JsonNode resultWriter,
-            String location,
-            List<AslValidationIssue> issues
-    ) {
-        if (resultWriter == null) {
-            return;
-        }
-        if (!resultWriter.isObject()) {
-            issues.add(issue(
-                    location,
-                    AslValidationCategory.ASL,
-                    "RESULT_WRITER_NOT_OBJECT",
-                    "ResultWriter must be a JSON object"
-            ));
-            return;
-        }
-        validateObjectFields(
-                resultWriter,
-                RESULT_WRITER_FIELDS,
-                location,
-                "RESULT_WRITER_FIELD_NOT_ALLOWED",
-                issues
-        );
-        validateResource(resultWriter.get("Resource"), location + ".Resource", issues);
-        validateJsonataValues(
-                resultWriter.get("Arguments"),
-                location + ".Arguments",
-                false,
-                false,
-                issues
-        );
     }
 
     private void validateTask(
@@ -1111,32 +948,6 @@ public class AslStateDefinitionValidator {
                 AslValidationCategory.ASL,
                 "NON_NEGATIVE_INTEGER_OR_EXPRESSION_REQUIRED",
                 label + " must be a non-negative integer or JSONata expression producing one"
-        ));
-    }
-
-    private void validatePercentageOrExpression(
-            JsonNode value,
-            String location,
-            List<AslValidationIssue> issues
-    ) {
-        if (value == null) {
-            return;
-        }
-        if (value.isNumber()) {
-            double percentage = value.doubleValue();
-            if (Double.isFinite(percentage) && percentage >= 0 && percentage <= 100) {
-                return;
-            }
-        }
-        if (value.isString()) {
-            validateRequiredExpression(value, location, false, false, issues);
-            return;
-        }
-        issues.add(issue(
-                location,
-                AslValidationCategory.ASL,
-                "PERCENTAGE_OR_EXPRESSION_REQUIRED",
-                "ToleratedFailurePercentage must be between 0 and 100 or a JSONata expression"
         ));
     }
 

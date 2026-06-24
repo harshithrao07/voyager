@@ -1,6 +1,5 @@
 package com.job.scheduler.dto;
 
-import com.job.scheduler.enums.StateExecutionAttemptKind;
 import com.job.scheduler.enums.StateExecutionAttemptStatus;
 import tools.jackson.databind.JsonNode;
 
@@ -10,8 +9,6 @@ import java.util.UUID;
 public record WorkflowStateExecutionAttemptDTO(
         UUID id,
         int attemptNumber,
-        StateExecutionAttemptKind kind,
-        String resource,
         StateExecutionAttemptStatus status,
         JsonNode arguments,
         JsonNode result,

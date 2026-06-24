@@ -195,8 +195,9 @@ flowchart TD
 two children settling at once can't both advance the parent. A failed
 `PARALLEL_BRANCH` cancels its live siblings and fails the join (Retry → Catch →
 fail), mirroring single-Task failure at the compound level. `Map` adds the same
-shape plus `ItemReader`, `MaxConcurrency` windowing (wave-by-wave forking),
-`ItemBatcher`, failure tolerance, and `ResultWriter`.
+shape plus `MaxConcurrency` windowing (wave-by-wave forking). `ItemReader`,
+`ItemBatcher`, `ResultWriter`, and the tolerated-failure thresholds are not
+supported and are rejected at activation.
 
 ---
 

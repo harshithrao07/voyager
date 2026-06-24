@@ -72,8 +72,5 @@ After retries are exhausted, select the first matching catcher. Without catcher 
 - `States.BranchFailed`: Parallel branch failure.
 - `States.NoChoiceMatched`: Choice had no match or Default.
 - `States.QueryEvaluationError`: JSONata evaluation failed.
-- `States.ExceedToleratedFailureThreshold`: Map exceeded failure tolerance.
-- `States.ItemReaderFailed`: Map ItemReader failed.
-- `States.ResultWriterFailed`: Map ResultWriter failed.
 
 JSONPath-specific errors such as `States.ResultPathMatchFailure`, `States.ParameterPathFailure`, and `States.IntrinsicFailure` must not originate from this dialect.

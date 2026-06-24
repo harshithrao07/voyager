@@ -8,7 +8,6 @@ import com.job.scheduler.enums.AslStateType;
 import com.job.scheduler.enums.ExecutionScopeStatus;
 import com.job.scheduler.enums.ExecutionScopeType;
 import com.job.scheduler.enums.StateExecutionStatus;
-import com.job.scheduler.enums.StateExecutionAttemptKind;
 import com.job.scheduler.enums.StateExecutionAttemptStatus;
 import com.job.scheduler.enums.WorkflowExecutionStatus;
 import com.job.scheduler.repository.ExecutionScopeRepository;
@@ -381,9 +380,6 @@ public class WorkflowInterpreter {
                     "Only RUNNING task attempts can succeed"
             );
         }
-        if (attempt.getKind() != StateExecutionAttemptKind.TASK) {
-            return completeMapResourceSuccess(attempt, result);
-        }
 
         String resultJson;
         JsonNode variables;
@@ -538,10 +534,6 @@ public class WorkflowInterpreter {
             );
         } catch (WorkflowPayloadLimitExceededException exception) {
             return failPayloadLimit(attempt, exception);
-        }
-        if (attempt.getKind() != StateExecutionAttemptKind.TASK) {
-            return completeMapResourceFailure(
-                    attempt, terminalStatus, error, cause);
         }
         Instant completedAt = Instant.now();
         attempt.setStatus(terminalStatus);
@@ -1294,38 +1286,11 @@ public class WorkflowInterpreter {
     ) {
         long generation = forkExecution.getSequenceNumber();
         Instant now = Instant.now();
-        boolean batched = stateDefinition.has("ItemBatcher");
-
-        // READ phase: fetch items from the ItemReader resource before forking.
-        if (stateDefinition.has("ItemReader")) {
-            StateExecutionAttempt readerAttempt = attemptRepository
-                    .findFirstByStateExecutionAndKindOrderByAttemptNumberDesc(
-                            forkExecution, StateExecutionAttemptKind.READER)
-                    .orElse(null);
-            if (readerAttempt == null) {
-                return dispatchMapResource(
-                        scope, workflowExecution, forkExecution,
-                        stateDefinition.get("ItemReader"),
-                        StateExecutionAttemptKind.READER, null);
-            }
-            if (readerAttempt.getStatus()
-                    != StateExecutionAttemptStatus.SUCCEEDED) {
-                // Reader still in flight; failures are turned into
-                // States.ItemReaderFailed by completeTaskFailure.
-                return new InterpreterOutcome.Dispatched(readerAttempt.getId());
-            }
-            // Reader finished: resolveMapItems reads its result below.
-        }
 
         List<JsonNode> rawItems;
-        List<JsonNode> batchedInputs;
         try {
             rawItems = resolveMapItems(
                     scope, workflowExecution, forkExecution, stateDefinition);
-            batchedInputs = batched
-                    ? buildBatches(scope, workflowExecution, forkExecution,
-                            stateDefinition, rawItems)
-                    : null;
         } catch (RuntimeException exception) {
             return failState(
                     scope,
@@ -1335,7 +1300,7 @@ public class WorkflowInterpreter {
                     exception.getMessage()
             );
         }
-        int iterationCount = batched ? batchedInputs.size() : rawItems.size();
+        int iterationCount = rawItems.size();
 
         List<ExecutionScope> existing = scopeCoordinator.generationChildren(
                 scope,
@@ -1344,30 +1309,8 @@ public class WorkflowInterpreter {
         );
         ExecutionScopeCoordinator.ChildSettlement settlement =
                 scopeCoordinator.settle(existing);
-        int failed = countByStatus(existing, ExecutionScopeStatus.FAILED)
-                + countByStatus(existing, ExecutionScopeStatus.TIMED_OUT);
 
-        boolean toleranceConfigured =
-                stateDefinition.has("ToleratedFailureCount")
-                        || stateDefinition.has("ToleratedFailurePercentage");
-        if (toleranceConfigured) {
-            if (mapFailuresExceedThreshold(scope, workflowExecution,
-                    forkExecution, stateDefinition, failed, iterationCount)) {
-                scopeCoordinator.cancelGeneration(scope, stateName, generation);
-                return resolveCompoundFailure(
-                        scope,
-                        workflowExecution,
-                        stateName,
-                        stateDefinition,
-                        forkExecution,
-                        "States.ExceedToleratedFailureThreshold",
-                        "Map exceeded the tolerated failure threshold: "
-                                + failed + " of " + iterationCount
-                                + " iterations failed",
-                        now
-                );
-            }
-        } else if (settlement.anyFailed()) {
+        if (settlement.anyFailed()) {
             scopeCoordinator.cancelGeneration(scope, stateName, generation);
             return resolveCompoundFailure(
                     scope,
@@ -1410,26 +1353,23 @@ public class WorkflowInterpreter {
             for (int index = nextIndex;
                     index < Math.min(iterationCount, nextIndex + slots);
                     index++) {
-                JsonNode iterationInput = batched
-                        ? batchedInputs.get(index)
-                        : applyItemSelector(
-                                scope,
-                                workflowExecution,
-                                forkExecution,
-                                stateDefinition,
-                                rawItems.get(index),
-                                index
-                        );
+                JsonNode iterationInput = applyItemSelector(
+                        scope,
+                        workflowExecution,
+                        forkExecution,
+                        stateDefinition,
+                        rawItems.get(index),
+                        index
+                );
                 // The raw array element backs $$.Map.Item.Value inside the
-                // iteration. Batched iterations process a synthesized batch, so
-                // a single per-iteration item value is not defined (null).
+                // iteration.
                 ExecutionScope iteration = scopeCoordinator.forkIteration(
                         scope,
                         stateName,
                         generation,
                         index,
                         iterationInput,
-                        batched ? null : rawItems.get(index)
+                        rawItems.get(index)
                 );
                 newChildScopeIds.add(iteration.getId());
             }
@@ -1462,10 +1402,8 @@ public class WorkflowInterpreter {
     }
 
     /**
-     * All iterations settled. Collects their outputs in item order, then either
-     * runs the WRITE phase (dispatch ResultWriter with {@code $states.result},
-     * use its return value as the persisted result description) or finalizes
-     * directly with the collected array.
+     * All iterations settled. Collects their outputs in item order and
+     * finalizes with the collected array as {@code $states.result}.
      */
     private InterpreterOutcome finishMap(
             ExecutionScope scope,
@@ -1481,27 +1419,6 @@ public class WorkflowInterpreter {
             result.add(itemOutput == null
                     ? objectMapper.nullNode()
                     : itemOutput);
-        }
-
-        if (stateDefinition.has("ResultWriter")) {
-            StateExecutionAttempt writerAttempt = attemptRepository
-                    .findFirstByStateExecutionAndKindOrderByAttemptNumberDesc(
-                            forkExecution, StateExecutionAttemptKind.WRITER)
-                    .orElse(null);
-            if (writerAttempt == null) {
-                return dispatchMapResource(
-                        scope, workflowExecution, forkExecution,
-                        stateDefinition.get("ResultWriter"),
-                        StateExecutionAttemptKind.WRITER, result);
-            }
-            if (writerAttempt.getStatus()
-                    != StateExecutionAttemptStatus.SUCCEEDED) {
-                return new InterpreterOutcome.Dispatched(writerAttempt.getId());
-            }
-            JsonNode description = readJson(writerAttempt.getResult());
-            return finalizeMap(
-                    scope, workflowExecution, stateDefinition,
-                    forkExecution, description, now);
         }
 
         return finalizeMap(
@@ -1653,130 +1570,6 @@ public class WorkflowInterpreter {
         return failState(scope, workflowExecution, forkExecution, error, cause);
     }
 
-    /**
-     * Dispatches a Map ItemReader or ResultWriter resource as an attempt on the
-     * fork StateExecution. It rides the normal dispatch/worker/TaskResourceRouter
-     * path; its kind tells the completion methods to re-drive the Map rather than
-     * run Task transition logic. For a writer, the collected result array is made
-     * available to its Arguments via {@code $states.result}.
-     */
-    private InterpreterOutcome dispatchMapResource(
-            ExecutionScope scope,
-            WorkflowExecution workflowExecution,
-            StateExecution forkExecution,
-            JsonNode resourceConfig,
-            StateExecutionAttemptKind kind,
-            JsonNode resultForContext
-    ) {
-        JsonNode resourceNode = resourceConfig == null
-                ? null : resourceConfig.get("Resource");
-        if (resourceNode == null || !resourceNode.isString()) {
-            String error = kind == StateExecutionAttemptKind.READER
-                    ? "States.ItemReaderFailed"
-                    : "States.ResultWriterFailed";
-            return failState(scope, workflowExecution, forkExecution, error,
-                    "Map resource configuration has no Resource");
-        }
-        JsonNode arguments;
-        try {
-            StateExecutionContext context = new StateExecutionContext(
-                    readJson(forkExecution.getInput()),
-                    readJson(scope.getVariables()),
-                    contextObject(workflowExecution, scope, forkExecution),
-                    resultForContext,
-                    null
-            );
-            arguments = resourceConfig.has("Arguments")
-                    ? jsonataEvaluator.evaluate(
-                            resourceConfig.get("Arguments"), context)
-                    : objectMapper.createObjectNode();
-        } catch (RuntimeException exception) {
-            return failState(scope, workflowExecution, forkExecution,
-                    errorFor(exception), exception.getMessage());
-        }
-
-        int attemptNumber = attemptRepository
-                .findFirstByStateExecutionOrderByAttemptNumberDesc(forkExecution)
-                .map(attempt -> attempt.getAttemptNumber() + 1)
-                .orElse(1);
-        StateExecutionAttempt attempt = new StateExecutionAttempt();
-        attempt.setStateExecution(forkExecution);
-        attempt.setAttemptNumber(attemptNumber);
-        attempt.setKind(kind);
-        attempt.setResource(resourceNode.stringValue());
-        attempt.setStatus(StateExecutionAttemptStatus.PENDING);
-        attempt.setArguments(writeTaskArguments(arguments));
-        attempt.setAvailableAt(Instant.now());
-        attempt = attemptRepository.save(attempt);
-
-        scope.setStatus(ExecutionScopeStatus.WAITING);
-        scope.setWakeAt(null);
-        setWorkflowStatusIfRoot(
-                scope, workflowExecution, WorkflowExecutionStatus.QUEUED);
-        executionScopeRepository.save(scope);
-        workflowExecutionRepository.save(workflowExecution);
-        return new InterpreterOutcome.Dispatched(attempt.getId());
-    }
-
-    private InterpreterOutcome completeMapResourceSuccess(
-            StateExecutionAttempt attempt,
-            JsonNode result
-    ) {
-        Instant completedAt = Instant.now();
-        attempt.setStatus(StateExecutionAttemptStatus.SUCCEEDED);
-        try {
-            attempt.setResult(writeTaskResult(result));
-        } catch (WorkflowPayloadLimitExceededException exception) {
-            return failPayloadLimit(attempt, exception);
-        }
-        attempt.setCompletedAt(completedAt);
-        attempt.setHeartbeatAt(null);
-        if (attempt.getStartedAt() != null) {
-            attempt.setDurationMs(Duration.between(
-                    attempt.getStartedAt(), completedAt).toMillis());
-        }
-        attemptRepository.save(attempt);
-        // Re-drive the Map; its scope still points at the Map state, so the
-        // worker's resume re-enters advanceMap with the reader/writer result
-        // now available.
-        ExecutionScope scope = attempt.getStateExecution().getExecutionScope();
-        return new InterpreterOutcome.Continued(
-                scope.getCurrentStateName(),
-                result == null ? objectMapper.nullNode() : result);
-    }
-
-    private InterpreterOutcome completeMapResourceFailure(
-            StateExecutionAttempt attempt,
-            StateExecutionAttemptStatus terminalStatus,
-            String error,
-            String cause
-    ) {
-        Instant completedAt = Instant.now();
-        String mappedError = attempt.getKind() == StateExecutionAttemptKind.READER
-                ? "States.ItemReaderFailed"
-                : "States.ResultWriterFailed";
-        String mappedCause = cause != null ? cause : error;
-        attempt.setStatus(terminalStatus);
-        attempt.setError(mappedError);
-        attempt.setCause(mappedCause);
-        attempt.setCompletedAt(completedAt);
-        attempt.setHeartbeatAt(null);
-        if (attempt.getStartedAt() != null) {
-            attempt.setDurationMs(Duration.between(
-                    attempt.getStartedAt(), completedAt).toMillis());
-        }
-        attemptRepository.save(attempt);
-
-        StateExecution forkExecution = attempt.getStateExecution();
-        ExecutionScope scope = forkExecution.getExecutionScope();
-        WorkflowExecution workflowExecution = scope.getWorkflowExecution();
-        JsonNode stateDefinition = definitionNavigator.state(
-                scope, forkExecution.getStateName());
-        return resolveCompoundFailure(scope, workflowExecution,
-                forkExecution.getStateName(), stateDefinition, forkExecution,
-                mappedError, mappedCause, completedAt);
-    }
-
     private List<JsonNode> resolveMapItems(
             ExecutionScope scope,
             WorkflowExecution workflowExecution,
@@ -1785,10 +1578,7 @@ public class WorkflowInterpreter {
     ) {
         JsonNode input = readJson(forkExecution.getInput());
         JsonNode itemsNode;
-        if (stateDefinition.has("ItemReader")) {
-            itemsNode = readerItems(scope, workflowExecution, forkExecution,
-                    stateDefinition.get("ItemReader"));
-        } else if (stateDefinition.has("Items")) {
+        if (stateDefinition.has("Items")) {
             StateExecutionContext context = new StateExecutionContext(
                     input,
                     readJson(scope.getVariables()),
@@ -1809,40 +1599,6 @@ public class WorkflowInterpreter {
         List<JsonNode> items = new ArrayList<>();
         itemsNode.forEach(items::add);
         return items;
-    }
-
-    /**
-     * Items produced by the (already completed) ItemReader attempt, capped by
-     * {@code ReaderConfig.MaxItems} when present.
-     */
-    private JsonNode readerItems(
-            ExecutionScope scope,
-            WorkflowExecution workflowExecution,
-            StateExecution forkExecution,
-            JsonNode itemReader
-    ) {
-        StateExecutionAttempt readerAttempt = attemptRepository
-                .findFirstByStateExecutionAndKindOrderByAttemptNumberDesc(
-                        forkExecution, StateExecutionAttemptKind.READER)
-                .filter(attempt -> attempt.getStatus()
-                        == StateExecutionAttemptStatus.SUCCEEDED)
-                .orElseThrow(() -> new IllegalStateException(
-                        "Map ItemReader has not produced items"));
-        JsonNode itemsNode = readJson(readerAttempt.getResult());
-        JsonNode readerConfig = itemReader.get("ReaderConfig");
-        if (itemsNode != null && itemsNode.isArray()
-                && readerConfig != null && readerConfig.has("MaxItems")) {
-            int maxItems = (int) mapNumber(scope, workflowExecution,
-                    forkExecution, readerConfig.get("MaxItems"));
-            if (maxItems > 0 && itemsNode.size() > maxItems) {
-                ArrayNode capped = objectMapper.createArrayNode();
-                for (int index = 0; index < maxItems; index++) {
-                    capped.add(itemsNode.get(index));
-                }
-                itemsNode = capped;
-            }
-        }
-        return itemsNode;
     }
 
     private JsonNode applyItemSelector(
@@ -1895,101 +1651,6 @@ public class WorkflowInterpreter {
     }
 
     /**
-     * Groups Map items into batches per ItemBatcher: each item runs through
-     * ItemSelector first, batches close at MaxItemsPerBatch or
-     * MaxInputBytesPerBatch, and every batch payload merges BatchInput with the
-     * batched items under an {@code Items} array. A single oversized item still
-     * forms its own batch.
-     */
-    private List<JsonNode> buildBatches(
-            ExecutionScope scope,
-            WorkflowExecution workflowExecution,
-            StateExecution forkExecution,
-            JsonNode stateDefinition,
-            List<JsonNode> rawItems
-    ) {
-        JsonNode batcher = stateDefinition.get("ItemBatcher");
-        int maxItemsPerBatch = (int) mapNumber(
-                scope, workflowExecution, forkExecution,
-                batcher.get("MaxItemsPerBatch"));
-        long maxBytesPerBatch = (long) mapNumber(
-                scope, workflowExecution, forkExecution,
-                batcher.get("MaxInputBytesPerBatch"));
-        JsonNode batchInput = null;
-        if (batcher.has("BatchInput")) {
-            StateExecutionContext context = new StateExecutionContext(
-                    readJson(forkExecution.getInput()),
-                    readJson(scope.getVariables()),
-                    contextObject(workflowExecution, scope, forkExecution)
-            );
-            batchInput = jsonataEvaluator.evaluate(
-                    batcher.get("BatchInput"), context);
-        }
-
-        List<JsonNode> batches = new ArrayList<>();
-        List<JsonNode> current = new ArrayList<>();
-        long currentBytes = 0;
-        for (int index = 0; index < rawItems.size(); index++) {
-            JsonNode item = applyItemSelector(
-                    scope, workflowExecution, forkExecution,
-                    stateDefinition, rawItems.get(index), index);
-            long itemBytes = serializedBytes(item);
-            boolean full = !current.isEmpty() && (
-                    (maxItemsPerBatch > 0 && current.size() >= maxItemsPerBatch)
-                    || (maxBytesPerBatch > 0
-                            && currentBytes + itemBytes > maxBytesPerBatch));
-            if (full) {
-                batches.add(makeBatch(batchInput, current));
-                current = new ArrayList<>();
-                currentBytes = 0;
-            }
-            current.add(item);
-            currentBytes += itemBytes;
-        }
-        if (!current.isEmpty()) {
-            batches.add(makeBatch(batchInput, current));
-        }
-        return batches;
-    }
-
-    private JsonNode makeBatch(JsonNode batchInput, List<JsonNode> items) {
-        ObjectNode payload = batchInput != null && batchInput.isObject()
-                ? (ObjectNode) batchInput.deepCopy()
-                : objectMapper.createObjectNode();
-        ArrayNode itemsArray = objectMapper.createArrayNode();
-        items.forEach(itemsArray::add);
-        payload.set("Items", itemsArray);
-        return payload;
-    }
-
-    private boolean mapFailuresExceedThreshold(
-            ExecutionScope scope,
-            WorkflowExecution workflowExecution,
-            StateExecution forkExecution,
-            JsonNode stateDefinition,
-            int failed,
-            int total
-    ) {
-        if (stateDefinition.has("ToleratedFailureCount")) {
-            int countThreshold = (int) mapNumber(
-                    scope, workflowExecution, forkExecution,
-                    stateDefinition.get("ToleratedFailureCount"));
-            if (failed > countThreshold) {
-                return true;
-            }
-        }
-        if (stateDefinition.has("ToleratedFailurePercentage")) {
-            double percentage = mapNumber(
-                    scope, workflowExecution, forkExecution,
-                    stateDefinition.get("ToleratedFailurePercentage"));
-            if (failed > total * percentage / 100.0) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
      * Evaluates an ASL number that may be a literal or a JSONata expression.
      * Returns 0 when absent or not numeric.
      */
@@ -2028,18 +1689,6 @@ public class WorkflowInterpreter {
         return active;
     }
 
-    private int countByStatus(
-            List<ExecutionScope> scopes,
-            ExecutionScopeStatus status
-    ) {
-        int count = 0;
-        for (ExecutionScope scope : scopes) {
-            if (scope.getStatus() == status) {
-                count++;
-            }
-        }
-        return count;
-    }
 
     /**
      * Core Map is executable; these advanced features are not implemented yet,
@@ -2123,7 +1772,7 @@ public class WorkflowInterpreter {
             ObjectNode mapItem = objectMapper.createObjectNode();
             mapItem.put("Index", scope.getItemIndex());
             // Value is reconstructed from the durable raw item, so it survives
-            // a restart. Absent for batched iterations (no single item value).
+            // a restart.
             if (scope.getItemValue() != null) {
                 mapItem.set("Value", readJson(scope.getItemValue()));
             }
@@ -2194,15 +1843,6 @@ public class WorkflowInterpreter {
                 value,
                 WorkflowPayloadLimits.Kind.TASK_RESULT
         );
-    }
-
-    private long serializedBytes(JsonNode value) {
-        String serialized = payloadLimits.serialize(
-                value,
-                WorkflowPayloadLimits.Kind.OUTPUT
-        );
-        return serialized.getBytes(java.nio.charset.StandardCharsets.UTF_8)
-                .length;
     }
 
     private String errorFor(RuntimeException exception) {

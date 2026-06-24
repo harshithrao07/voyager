@@ -1,6 +1,5 @@
 package com.job.scheduler.entity;
 
-import com.job.scheduler.enums.StateExecutionAttemptKind;
 import com.job.scheduler.enums.StateExecutionAttemptStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -75,18 +74,6 @@ public class StateExecutionAttempt {
 
     @Column(name = "attempt_number", nullable = false, updatable = false)
     private int attemptNumber;
-
-    @Enumerated(EnumType.STRING)
-    @Column(name = "kind", nullable = false, updatable = false)
-    private StateExecutionAttemptKind kind = StateExecutionAttemptKind.TASK;
-
-    /**
-     * Resource to execute for this attempt. Null for normal Task attempts (the
-     * worker falls back to the owning StateExecution's resource); set for Map
-     * READER/WRITER attempts, whose fork StateExecution has no resource.
-     */
-    @Column(name = "resource", updatable = false, length = 2048)
-    private String resource;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)

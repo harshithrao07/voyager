@@ -214,14 +214,14 @@ scope inside a `Catch` block's `Assign` / `Output`.
 | Wait | — | ✅ | ✅ | `Seconds` / `Timestamp` |
 | Pass | — | ✅ | ✅ | — |
 | Parallel | ✅ | ✅ | ✅ | — |
-| Map | — | ✅ | ✅ | `Items`, `ItemSelector`, `MaxConcurrency`, `ItemBatcher`, `ItemReader`/`ResultWriter` `Arguments`, tolerated-failure thresholds |
+| Map | — | ✅ | ✅ | `Items`, `ItemSelector`, `MaxConcurrency` |
 | Succeed | — | — | ✅ | — |
 | Fail | — | — | — | `Error`, `Cause` |
 
 `$states.result` is gated by the validator, not just convention. It is allowed
 **only** in `Assign` / `Output` of **Task, Parallel, Map** (for Parallel/Map it's
-the ordered array of branch/iteration outputs). It is **rejected** in `Arguments`,
-`ItemSelector`, and `ItemReader`/`ResultWriter` `Arguments`. Likewise
+the ordered array of branch/iteration outputs). It is **rejected** in `Arguments`
+and `ItemSelector`. Likewise
 `$states.errorOutput` is allowed only inside a `Catch` block's `Assign`/`Output`.
 
 ---
@@ -264,9 +264,7 @@ enforces:
 - `ErrorEquals` must be a non-empty array. Unknown names using the reserved
   `States.` prefix are rejected — only these are allowed: `States.ALL`,
   `States.Timeout`, `States.TaskFailed`, `States.Permissions`,
-  `States.BranchFailed`, `States.NoChoiceMatched`, `States.QueryEvaluationError`,
-  `States.ExceedToleratedFailureThreshold`, `States.ItemReaderFailed`,
-  `States.ResultWriterFailed`.
+  `States.BranchFailed`, `States.NoChoiceMatched`, `States.QueryEvaluationError`.
 - `States.ALL` must appear **alone** in an `ErrorEquals` and the retrier/catcher
   containing it must be **last**.
 - `Retry`: `IntervalSeconds`/`MaxDelaySeconds` positive ints, `MaxAttempts`
@@ -274,11 +272,13 @@ enforces:
 
 **Resource & Map limits:**
 
-- A `Task`/reader/writer `Resource` must be a valid URI with a scheme
+- A `Task` `Resource` must be a valid URI with a scheme
   (e.g. `mcp://…`, `https://…`).
-- `Map` `ProcessorConfig.Mode`: only `INLINE` is implemented. `ReaderConfig`
-  supports only `MaxItems`; other keys are flagged as needing a runtime extension.
-- `ItemBatcher` requires `MaxItemsPerBatch` or `MaxInputBytesPerBatch`.
+- `Map` `ProcessorConfig.Mode`: only `INLINE` is implemented.
+- `Map` `ItemReader`, `ItemBatcher`, `ResultWriter`, `ToleratedFailureCount`, and
+  `ToleratedFailurePercentage` are not supported and are rejected as
+  `RUNTIME_SUPPORT` issues. A supported Map uses `Items` (or the array state
+  input), `ItemSelector`, `MaxConcurrency`, and an inline `ItemProcessor`.
 
 Issues are categorized as `DIALECT` (JSONPath leakage), `ASL` (spec/structure),
 or `RUNTIME_SUPPORT` (valid ASL the runtime doesn't implement yet).

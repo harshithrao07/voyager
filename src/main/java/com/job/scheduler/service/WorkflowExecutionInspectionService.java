@@ -156,8 +156,6 @@ public class WorkflowExecutionInspectionService {
         return new WorkflowStateExecutionAttemptDTO(
                 attempt.getId(),
                 attempt.getAttemptNumber(),
-                attempt.getKind(),
-                attempt.getResource(),
                 attempt.getStatus(),
                 readJson(attempt.getArguments()),
                 readJson(attempt.getResult()),

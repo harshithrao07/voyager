@@ -47,13 +47,8 @@ public class WorkflowTaskWorkerService {
                              workerId,
                              attempt.getHeartbeatSeconds()
                      )) {
-            // READER/WRITER attempts carry their own resource; the fork
-            // StateExecution they hang on has none.
-            String resource = attempt.getResource() != null
-                    ? attempt.getResource()
-                    : attempt.getStateExecution().getResource();
             result = resourceRouter.execute(
-                    resource,
+                    attempt.getStateExecution().getResource(),
                     readJson(attempt.getArguments())
             );
         } catch (TaskResourceException exception) {

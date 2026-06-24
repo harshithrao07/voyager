@@ -9,7 +9,6 @@ import com.job.scheduler.entity.WorkflowExecution;
 import com.job.scheduler.enums.ExecutionScopeStatus;
 import com.job.scheduler.enums.ExecutionScopeType;
 import com.job.scheduler.enums.AslStateType;
-import com.job.scheduler.enums.StateExecutionAttemptKind;
 import com.job.scheduler.enums.StateExecutionStatus;
 import com.job.scheduler.enums.WorkflowExecutionStatus;
 import com.job.scheduler.enums.StateExecutionAttemptStatus;
@@ -534,41 +533,6 @@ class WorkflowInterpreterTest {
         ));
         assertThat(attempt.getError()).isEqualTo("Execution.Canceled");
         assertThat(root.getStatus()).isEqualTo(ExecutionScopeStatus.CANCELED);
-    }
-
-    @Test
-    void duplicateMapReaderSuccessRedrivesPersistedMapCursor() {
-        root.setStatus(ExecutionScopeStatus.WAITING);
-        root.setCurrentStateName("ProcessItems");
-        root.setCurrentStateInput("{\"source\":\"orders\"}");
-        StateExecution mapExecution = new StateExecution();
-        mapExecution.setId(UUID.randomUUID());
-        mapExecution.setExecutionScope(root);
-        mapExecution.setSequenceNumber(1);
-        mapExecution.setStateName("ProcessItems");
-        mapExecution.setStateType(AslStateType.MAP);
-        mapExecution.setStatus(StateExecutionStatus.RUNNING);
-        mapExecution.setInput(root.getCurrentStateInput());
-        StateExecutionAttempt readerAttempt = new StateExecutionAttempt();
-        readerAttempt.setId(UUID.randomUUID());
-        readerAttempt.setStateExecution(mapExecution);
-        readerAttempt.setAttemptNumber(1);
-        readerAttempt.setKind(StateExecutionAttemptKind.READER);
-        readerAttempt.setStatus(StateExecutionAttemptStatus.SUCCEEDED);
-        readerAttempt.setResult("[{\"id\":1}]");
-        when(attemptRepository.findByIdForUpdate(readerAttempt.getId()))
-                .thenReturn(Optional.of(readerAttempt));
-
-        InterpreterOutcome outcome = interpreter.completeTaskSuccess(
-                readerAttempt.getId(),
-                objectMapper.createArrayNode()
-        );
-
-        assertThat(outcome).isEqualTo(new InterpreterOutcome.Continued(
-                "ProcessItems",
-                objectMapper.readTree(root.getCurrentStateInput())
-        ));
-        assertThat(readerAttempt.getResult()).isEqualTo("[{\"id\":1}]");
     }
 
     @Test

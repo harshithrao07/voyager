@@ -226,29 +226,14 @@ class AslCompoundStateDefinitionValidatorTest {
     }
 
     @Test
-    void acceptsMapPipelineAndRecursivelyValidatesItemProcessor() {
+    void acceptsMapWithSupportedInlineFeatures() {
         AslValidationResult result = validate(machineWithState("""
                 {
                   "Type": "Map",
-                  "ItemReader": {
-                    "Resource": "scheduler://read-orders",
-                    "Arguments": {
-                      "customerId": "{% $states.input.customerId %}"
-                    },
-                    "ReaderConfig": {
-                      "MaxItems": "{% 100 %}"
-                    }
-                  },
                   "Items": "{% $states.input.orders %}",
                   "ItemSelector": {
                     "order": "{% $states.context.Map.Item.Value %}",
                     "index": "{% $states.context.Map.Item.Index %}"
-                  },
-                  "ItemBatcher": {
-                    "BatchInput": {
-                      "source": "orders"
-                    },
-                    "MaxItemsPerBatch": 10
                   },
                   "ItemProcessor": {
                     "ProcessorConfig": {
@@ -263,15 +248,7 @@ class AslCompoundStateDefinitionValidatorTest {
                       }
                     }
                   },
-                  "ResultWriter": {
-                    "Resource": "scheduler://write-results",
-                    "Arguments": {
-                      "executionId": "{% $states.context.Execution.Id %}"
-                    }
-                  },
                   "MaxConcurrency": "{% 5 %}",
-                  "ToleratedFailurePercentage": 10.5,
-                  "ToleratedFailureCount": 2,
                   "Assign": {
                     "mapResult": "{% $states.result %}"
                   },
@@ -282,6 +259,47 @@ class AslCompoundStateDefinitionValidatorTest {
 
         assertThat(result.isValid()).isTrue();
         assertThat(result.isRuntimeSupported()).isTrue();
+    }
+
+    @Test
+    void rejectsUnsupportedMapFeaturesAsRuntimeUnsupported() {
+        AslValidationResult result = validate(machineWithState("""
+                {
+                  "Type": "Map",
+                  "ItemReader": {
+                    "Resource": "scheduler://read-orders"
+                  },
+                  "Items": "{% $states.input.orders %}",
+                  "ItemBatcher": {
+                    "MaxItemsPerBatch": 10
+                  },
+                  "ResultWriter": {
+                    "Resource": "scheduler://write-results"
+                  },
+                  "ToleratedFailurePercentage": 10.5,
+                  "ToleratedFailureCount": 2,
+                  "ItemProcessor": {
+                    "StartAt": "Done",
+                    "States": {
+                      "Done": {"Type": "Succeed"}
+                    }
+                  },
+                  "End": true
+                }
+                """));
+
+        assertThat(result.isRuntimeSupported()).isFalse();
+        assertThat(result.issues())
+                .filteredOn(issue ->
+                        "MAP_FEATURE_RUNTIME_UNSUPPORTED".equals(issue.code()))
+                .extracting(AslValidationIssue::location)
+                .contains(
+                        "$.States.State.ItemReader",
+                        "$.States.State.ItemBatcher",
+                        "$.States.State.ResultWriter",
+                        "$.States.State.ToleratedFailurePercentage",
+                        "$.States.State.ToleratedFailureCount"
+                );
     }
 
     @Test
@@ -352,69 +370,14 @@ class AslCompoundStateDefinitionValidatorTest {
     }
 
     @Test
-    void rejectsInvalidMapConcurrencyAndTolerances() {
+    void rejectsInvalidMapConcurrency() {
         AslValidationResult result = validate(mapWith("""
                 "MaxConcurrency": -1,
-                "ToleratedFailurePercentage": 101,
-                "ToleratedFailureCount": -1,
                 """));
 
         assertThat(result.issues())
                 .extracting(AslValidationIssue::code)
-                .contains(
-                        "NON_NEGATIVE_INTEGER_OR_EXPRESSION_REQUIRED",
-                        "PERCENTAGE_OR_EXPRESSION_REQUIRED"
-                );
-    }
-
-    @Test
-    void rejectsItemBatcherWithoutMaximum() {
-        assertIssue(
-                validate(mapWith("""
-                        "ItemBatcher": {
-                          "BatchInput": {"source": "orders"}
-                        },
-                        """)),
-                "$.States.State.ItemBatcher",
-                "ITEM_BATCH_LIMIT_REQUIRED",
-                AslValidationCategory.ASL
-        );
-    }
-
-    @Test
-    void rejectsInvalidReaderAndWriterResources() {
-        AslValidationResult result = validate(mapWith("""
-                "ItemReader": {
-                  "Resource": "read-orders"
-                },
-                "ResultWriter": {
-                  "Resource": "write-results"
-                },
-                """));
-
-        assertThat(result.issues())
-                .filteredOn(issue -> "INVALID_RESOURCE".equals(issue.code()))
-                .hasSize(2);
-    }
-
-    @Test
-    void reportsUnknownReaderConfigAsRuntimeExtension() {
-        AslValidationResult result = validate(mapWith("""
-                "ItemReader": {
-                  "Resource": "scheduler://read-orders",
-                  "ReaderConfig": {
-                    "CustomFormat": "CSV"
-                  }
-                },
-                """));
-
-        assertThat(result.isValid()).isTrue();
-        assertIssue(
-                result,
-                "$.States.State.ItemReader.ReaderConfig.CustomFormat",
-                "READER_CONFIG_RUNTIME_EXTENSION",
-                AslValidationCategory.RUNTIME_SUPPORT
-        );
+                .contains("NON_NEGATIVE_INTEGER_OR_EXPRESSION_REQUIRED");
     }
 
     @Test

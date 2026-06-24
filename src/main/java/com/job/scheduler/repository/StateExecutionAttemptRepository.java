@@ -2,7 +2,6 @@ package com.job.scheduler.repository;
 
 import com.job.scheduler.entity.StateExecution;
 import com.job.scheduler.entity.StateExecutionAttempt;
-import com.job.scheduler.enums.StateExecutionAttemptKind;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -25,12 +24,6 @@ public interface StateExecutionAttemptRepository
     Optional<StateExecutionAttempt>
     findFirstByStateExecutionOrderByAttemptNumberDesc(
             StateExecution stateExecution
-    );
-
-    Optional<StateExecutionAttempt>
-    findFirstByStateExecutionAndKindOrderByAttemptNumberDesc(
-            StateExecution stateExecution,
-            StateExecutionAttemptKind kind
     );
 
     List<StateExecutionAttempt> findByStateExecutionOrderByAttemptNumberAsc(

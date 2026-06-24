@@ -57,8 +57,7 @@ history remains in the phase sections below.
 - [x] Persist/reconstruct `$states.context.Map.Item.Value` inside an iteration.
   The raw array element is now stored on a durable `execution_scopes.item_value`
   jsonb column at fork and reconstructed in `WorkflowInterpreter.contextObject`,
-  so `.Value` (and `.Index`) survive a restart. Null for batched iterations,
-  where a single per-iteration item value is not defined.
+  so `.Value` (and `.Index`) survive a restart.
 - [x] Task cancellation is cooperative only (decided). Cancellation marks
   execution/scopes/states/attempts CANCELED and absorbs late results
   idempotently, but does not interrupt an in-flight handler or roll back its
@@ -131,8 +130,10 @@ Implemented:
 - Nested execution-scope foundation (Phase 1), `Parallel` runtime (Phase 2),
   and core `Map` runtime (Phase 3).
 
-The supported inline `Map` feature set is implemented, including `ItemReader`,
-`ItemBatcher`, `ResultWriter`, and tolerated-failure thresholds.
+The supported inline `Map` feature set is `Items`, `ItemSelector`,
+`MaxConcurrency`, and an inline `ItemProcessor`. `ItemReader`, `ItemBatcher`,
+`ResultWriter`, and the tolerated-failure thresholds were intentionally removed
+and are now rejected at activation as `RUNTIME_SUPPORT` issues.
 `ProcessorConfig.Mode: DISTRIBUTED` remains intentionally unsupported pending
 the product decision above.
 
@@ -244,41 +245,30 @@ bounded by MaxConcurrency, within one fork generation per attempt.
 
 ## Phase 4: Advanced Map features
 
-Status: COMPLETE. A Map runs as a READ -> PROCESS -> WRITE pipeline. The reader
-and writer ride the existing dispatch/worker/TaskResourceRouter path as
-`StateExecutionAttempt`s on the fork `StateExecution`, distinguished by a new
-`StateExecutionAttempt.kind` (TASK/READER/WRITER) and carrying their own
-`resource`; `completeTaskSuccess`/`completeTaskFailure` branch on `kind` to
-re-drive the Map instead of running Task transition logic.
+Status: REMOVED (intentionally not supported). `ItemReader`, `ItemBatcher`,
+`ResultWriter`, `ToleratedFailureCount`, and `ToleratedFailurePercentage` were
+implemented and then removed to keep the Map runtime to a single
+PROCESS pipeline. They are now rejected at activation as `RUNTIME_SUPPORT`
+issues (`MAP_FEATURE_RUNTIME_UNSUPPORTED`), the `StateExecutionAttempt.kind`
+TASK/READER/WRITER discriminator (and the attempt-level `resource` column) were
+dropped, and `completeTaskSuccess`/`completeTaskFailure` no longer branch on
+attempt kind.
 
-- [x] `ItemReader` resource execution and `ReaderConfig.MaxItems`. The reader is
-  dispatched before forking; its result array becomes the items, capped by
-  `MaxItems`.
-- [x] `ItemBatcher` (`BatchInput`, `MaxItemsPerBatch`, `MaxInputBytesPerBatch`):
-  each item runs through `ItemSelector` first, batches close at the item or byte
-  limit, and each batch payload merges `BatchInput` with the items under
-  `Items`. (`WorkflowInterpreter.buildBatches`.)
-- [x] `ResultWriter` resource execution and persisted result description. After
-  the join, the writer is dispatched with the collected array as
-  `$states.result`; its return value becomes the Map output (the result
-  description). The writer resource performs the external write; this does not
-  wire object storage (MinIO) itself.
-- [x] `ToleratedFailureCount`.
-- [x] `ToleratedFailurePercentage`. Both evaluated each join; a Map within
-  threshold succeeds with `null` outputs for the failed iterations, and exceeds
-  the threshold by failing through
-  `WorkflowInterpreter.mapFailuresExceedThreshold`.
-- Correct Map errors:
-  - [x] `States.ItemReaderFailed`.
-  - [x] `States.ResultWriterFailed`.
-  - [x] `States.ExceedToleratedFailureThreshold`.
+- [removed] `ItemReader` / `ReaderConfig.MaxItems`.
+- [removed] `ItemBatcher` (`BatchInput`, `MaxItemsPerBatch`,
+  `MaxInputBytesPerBatch`).
+- [removed] `ResultWriter` and its persisted result description.
+- [removed] `ToleratedFailureCount` / `ToleratedFailurePercentage`. Any unhandled
+  iteration failure now fails the Map (subject to its own `Retry`/`Catch`).
+- [removed] Map errors `States.ItemReaderFailed`, `States.ResultWriterFailed`,
+  `States.ExceedToleratedFailureThreshold` (no longer producible or accepted in
+  `ErrorEquals`).
 - [x] Supported `ProcessorConfig`: only `Mode: INLINE` (the default). Any other
   mode is rejected at activation and at runtime (`States.Runtime`).
 
-Notes / scope: `ItemReader` is bounded *inline* reading — the reader returns an
-array that is loaded into the database and capped by `MaxItems`; it is not
-distributed-scale streaming (that would be Distributed Map, which we do not
-support). Covered end to end by `MapWorkflowIntegrationTest`.
+The supported inline Map is `Items` (or an array state input), `ItemSelector`,
+`MaxConcurrency`, and an inline `ItemProcessor`. Covered end to end by
+`MapWorkflowIntegrationTest`.
 
 ## Phase 5: Workflow scheduling
 
