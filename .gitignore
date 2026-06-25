@@ -34,3 +34,6 @@ build/
 
 ### Benchmark outputs ###
 bench/results/
+
+### Env ###
+.env

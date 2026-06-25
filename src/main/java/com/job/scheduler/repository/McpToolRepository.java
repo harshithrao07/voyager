@@ -15,5 +15,7 @@ public interface McpToolRepository extends JpaRepository<McpTool, UUID> {
 
     List<McpTool> findByMcpServerAndEnabledTrueOrderByToolNameAsc(McpServer mcpServer);
 
+    List<McpTool> findByEnabledTrue();
+
     Optional<McpTool> findByMcpServerAndToolName(McpServer mcpServer, String toolName);
 }
