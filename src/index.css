@@ -1,0 +1,43 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+@layer base {
+  body {
+    @apply bg-surface-base text-on-surface font-body-sm overflow-hidden;
+  }
+}
+
+@layer utilities {
+  .grid-background {
+    background-size: 40px 40px;
+    background-image: 
+      linear-gradient(to right, #1f1f1f 1px, transparent 1px),
+      linear-gradient(to bottom, #1f1f1f 1px, transparent 1px);
+  }
+
+  .node-path {
+    stroke: #333333;
+    stroke-width: 2;
+    fill: none;
+  }
+
+  .node-connector {
+    width: 1px;
+    background-color: #333333;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  .pill-tab-bg {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
+/* React Flow Overrides */
+.react-flow__handle {
+  width: 6px;
+  height: 6px;
+  background: theme('colors.border-muted');
+  border: none;
+}
