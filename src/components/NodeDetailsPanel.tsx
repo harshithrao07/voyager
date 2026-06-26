@@ -1,30 +1,10 @@
 import { X } from 'lucide-react';
+import { getStateVisual } from '../utils/stateVisuals';
 
 type Props = {
   definition: any;
   selectedStateName?: string;
-};
-
-const stateIconMap: Record<string, string> = {
-  Task: 'database',
-  Choice: 'call_split',
-  Pass: 'swap_horiz',
-  Wait: 'schedule',
-  Succeed: 'check_circle',
-  Fail: 'cancel',
-  Map: 'layers',
-  Parallel: 'splitscreen',
-};
-
-const stateAccentMap: Record<string, string> = {
-  Task: 'bg-status-info text-status-info',
-  Choice: 'bg-status-warning text-status-warning',
-  Pass: 'bg-on-surface-variant text-on-surface-variant',
-  Wait: 'bg-status-accent text-status-accent',
-  Succeed: 'bg-status-success text-status-success',
-  Fail: 'bg-status-error text-status-error',
-  Map: 'bg-status-info text-status-info',
-  Parallel: 'bg-status-accent text-status-accent',
+  onClose: () => void;
 };
 
 function getSelectedState(definition: any, selectedStateName?: string) {
@@ -37,12 +17,10 @@ function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
-export function NodeDetailsPanel({ definition, selectedStateName }: Props) {
+export function NodeDetailsPanel({ definition, selectedStateName, onClose }: Props) {
   const { name, state } = getSelectedState(definition, selectedStateName);
   const type = state?.Type || 'State';
-  const accent = stateAccentMap[type] || 'bg-status-info text-status-info';
-  const [barClass, textClass] = accent.split(' ');
-  const icon = stateIconMap[type] || 'settings';
+  const visual = getStateVisual(type);
   const resource = state?.Resource || state?.Next || state?.Default || type;
   const timeout = state?.TimeoutSeconds ? `${state.TimeoutSeconds} seconds` : '300 seconds';
   const retry = state?.Retry?.[0] || {};
@@ -55,22 +33,28 @@ export function NodeDetailsPanel({ definition, selectedStateName }: Props) {
 
   return (
     <>
-      <div className="px-5 py-4 border-b border-border-subtle flex items-center justify-between bg-surface-elevated/50 backdrop-blur-md">
+      <div className="glass-shell px-5 py-4 border-b border-border-subtle flex items-center justify-between bg-surface-elevated/50 backdrop-blur-md">
         <h2 className="text-headline-md font-headline-md font-medium text-primary">Node Details</h2>
-        <button className="text-on-surface-variant hover:text-primary transition-colors" aria-label="Close node details">
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-on-surface-variant hover:text-primary transition-colors"
+          aria-label="Close node details"
+          title="Close node details"
+        >
           <X size={20} />
         </button>
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-5">
-        <div className="bg-surface-elevated border border-border-subtle rounded-lg p-4 relative overflow-hidden">
-          <div className={`absolute top-0 left-0 w-1 h-full ${barClass}`}></div>
+        <div className="glass-card bg-surface-elevated border border-border-subtle rounded-lg p-4 relative overflow-hidden">
+          <div className={`absolute top-0 left-0 w-1 h-full ${visual.barClass}`}></div>
           <div className="flex items-start justify-between mb-2 pl-2">
             <div>
-              <div className={`text-label-caps font-label-caps ${textClass} mb-1`}>{type.toUpperCase()} STATE</div>
+              <div className={`text-label-caps font-label-caps ${visual.textClass} mb-1`}>{visual.label} STATE</div>
               <div className="text-headline-md font-headline-md font-medium text-primary">{name || 'No node selected'}</div>
             </div>
-            <span className="material-symbols-outlined text-on-surface-variant">{icon}</span>
+            <span className={`material-symbols-outlined ${visual.textClass}`}>{visual.iconName}</span>
           </div>
           <div className="pl-2 mt-4">
             <p className="text-body-sm font-body-sm text-on-surface-variant leading-relaxed">
@@ -82,13 +66,13 @@ export function NodeDetailsPanel({ definition, selectedStateName }: Props) {
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <div className="bg-surface-container-low border border-border-subtle rounded-lg p-3">
+          <div className="glass-card bg-surface-container-low border border-border-subtle rounded-lg p-3">
             <div className="text-label-caps font-label-caps text-on-surface-variant mb-1">RESOURCE</div>
             <div className="text-mono-sm font-mono-sm text-primary truncate" title={resource}>
               {resource}
             </div>
           </div>
-          <div className="bg-surface-container-low border border-border-subtle rounded-lg p-3">
+          <div className="glass-card bg-surface-container-low border border-border-subtle rounded-lg p-3">
             <div className="text-label-caps font-label-caps text-on-surface-variant mb-1">TIMEOUT</div>
             <div className="text-mono-sm font-mono-sm text-primary">{timeout}</div>
           </div>
@@ -108,7 +92,7 @@ export function NodeDetailsPanel({ definition, selectedStateName }: Props) {
 
         <div className="space-y-3">
           <h3 className="text-label-caps font-label-caps text-on-surface-variant">RETRY CONFIGURATION</h3>
-          <div className="bg-surface-container-low border border-border-subtle rounded-lg divide-y divide-border-subtle">
+          <div className="glass-card bg-surface-container-low border border-border-subtle rounded-lg divide-y divide-border-subtle">
             <div className="flex justify-between items-center p-3">
               <span className="text-body-sm font-body-sm text-on-surface-variant">Max Attempts</span>
               <span className="text-mono-sm font-mono-sm text-primary bg-surface-container px-2 py-0.5 rounded">{retry.MaxAttempts ?? 3}</span>

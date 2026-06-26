@@ -1,4 +1,5 @@
 import type { Edge, Node } from '@xyflow/react';
+import { getStateVisual } from './stateVisuals';
 
 type AslToReactFlowOptions = {
   selectedStateName?: string;
@@ -26,49 +27,12 @@ export function aslToReactFlow(asl: any, options: AslToReactFlowOptions = {}): {
   const stateEntries = Object.entries<any>(asl.States);
 
   for (const [index, [stateName, state]] of stateEntries.entries()) {
-    let borderColorClass = 'border-status-info'; // default Task (Indigo)
-    let iconColorClass = 'text-status-info';
-    let iconName = 'database';
+    const visual = getStateVisual(state.Type);
     let subtitle = state.Resource || state.Type;
-    let nodeStatus: 'active' | 'idle' | 'error' = 'active';
+    const nodeStatus: 'active' | 'error' = state.Type === 'Fail' ? 'error' : 'active';
 
     if (state.Resource?.includes('ECS') || stateName.toLowerCase().includes('embedding')) {
-      iconName = 'memory';
-    } else if (state.Resource?.includes('SNS') || stateName.toLowerCase().includes('failure')) {
-      iconName = 'report';
-      borderColorClass = 'border-status-error';
-      iconColorClass = 'text-status-error';
-      nodeStatus = 'error';
-    }
-
-    if (state.Type === 'Choice') {
-      borderColorClass = 'border-status-warning';
-      iconColorClass = 'text-status-warning';
-      iconName = 'call_split';
-    } else if (state.Type === 'Pass') {
-      borderColorClass = 'border-border-muted';
-      iconColorClass = 'text-on-surface-variant';
-      iconName = 'swap_horiz';
-    } else if (state.Type === 'Wait') {
-      borderColorClass = 'border-status-accent';
-      iconColorClass = 'text-status-accent';
-      iconName = 'schedule';
-    } else if (state.Type === 'Succeed') {
-      borderColorClass = 'border-status-success';
-      iconColorClass = 'text-status-success';
-      iconName = 'check_circle';
-    } else if (state.Type === 'Fail') {
-      borderColorClass = 'border-status-error';
-      iconColorClass = 'text-status-error';
-      iconName = 'cancel';
-    } else if (state.Type === 'Map') {
-      borderColorClass = 'border-status-info'; 
-      iconColorClass = 'text-status-info';
-      iconName = 'layers';
-    } else if (state.Type === 'Parallel') {
-      borderColorClass = 'border-status-accent';
-      iconColorClass = 'text-status-accent';
-      iconName = 'splitscreen';
+      subtitle = state.Resource || 'ECS task';
     }
 
     const isSelected = options.selectedStateName === stateName;
@@ -86,23 +50,27 @@ export function aslToReactFlow(asl: any, options: AslToReactFlowOptions = {}): {
           <button
             type="button"
             onClick={() => options.onStateSelect?.(stateName)}
-            className={`${nodeStatus === 'error' ? 'bg-[#1a0f12]' : 'bg-surface-elevated'} border ${isSelected ? 'border-status-info ring-1 ring-status-info/50 shadow-[0_4px_24px_rgba(99,102,241,0.12)]' : borderColorClass} w-[200px] rounded p-2 shadow-[0_4px_24px_rgba(0,0,0,0.5)] z-10 flex flex-col relative group cursor-pointer hover:border-status-info transition-colors text-left overflow-hidden`}
+            className={`${nodeStatus === 'error' ? 'bg-[#1a0f12]' : 'bg-surface-elevated'} border ${visual.softBgClass} ${isSelected ? `${visual.borderClass} ring-1 ${visual.selectedRingClass} shadow-[0_4px_24px_rgba(99,102,241,0.12)]` : visual.borderClass} w-[200px] rounded p-2 shadow-[0_4px_24px_rgba(0,0,0,0.5)] z-10 flex flex-col relative group cursor-pointer transition-[filter,box-shadow] hover:brightness-110 text-left overflow-hidden`}
           >
             <div className="absolute inset-0 bg-gradient-to-b from-white/[0.03] to-transparent rounded-DEFAULT pointer-events-none"></div>
+            <div className={`absolute left-0 top-0 h-full w-1 ${visual.barClass}`}></div>
             
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between gap-2 pl-1">
               <div className="flex min-w-0 items-center gap-1.5">
-                <span className={`material-symbols-outlined ${iconColorClass} text-[14px]`}>{iconName}</span>
+                <span className={`material-symbols-outlined ${visual.textClass} text-[14px]`}>{visual.iconName}</span>
                 <span className={`font-mono-sm text-mono-sm font-medium truncate ${nodeStatus === 'error' ? 'text-status-error' : 'text-primary'}`}>{stateName}</span>
               </div>
-              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${nodeStatus === 'error' ? 'bg-status-error' : 'bg-status-success animate-pulse'}`}></span>
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${visual.dotClass} animate-pulse`}></span>
             </div>
             
-            <div className="mt-2 flex items-end justify-between gap-2">
+            <div className="mt-2 flex items-end justify-between gap-2 pl-1">
               <span className={`font-mono-sm text-[10px] truncate ${nodeStatus === 'error' ? 'text-status-error/70' : 'text-on-surface-variant'}`}>
                 ID: {stateId}
               </span>
               <div className="flex shrink-0 gap-1">
+                <span className={`rounded border px-1 py-0.5 font-mono-sm text-[9px] ${visual.chipClass}`}>
+                  {visual.label}
+                </span>
                 <span className={`${nodeStatus === 'error' ? 'bg-error-container/20 text-status-error' : 'bg-surface-container text-on-surface-variant'} rounded px-1 py-0.5 font-mono-sm text-[9px]`} title={subtitle}>
                   {latency}
                 </span>

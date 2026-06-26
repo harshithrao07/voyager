@@ -3,7 +3,7 @@ import { Filter } from 'lucide-react';
 export type WorkflowSummary = {
   id: string;
   name: string;
-  status: 'Active' | 'Paused' | 'Failed';
+  status: 'Active' | 'Paused' | 'Draft' | 'Archived' | 'Failed';
   schedule: string;
   nextRun: string;
   description: string;
@@ -17,6 +17,8 @@ type Props = {
 function statusClass(status: WorkflowSummary['status']) {
   if (status === 'Failed') return 'bg-status-error/10 text-status-error border-status-error/20';
   if (status === 'Paused') return 'bg-surface-bright text-on-surface-variant border-border-muted';
+  if (status === 'Draft') return 'bg-status-info/10 text-status-info border-status-info/20';
+  if (status === 'Archived') return 'bg-surface-container text-on-surface-variant border-border-muted';
   return 'bg-status-success/10 text-status-success border-status-success/20';
 }
 
@@ -32,7 +34,11 @@ export function WorkflowListView({ workflows, onSelect }: Props) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
-          {workflows.map((workflow) => (
+          {workflows.length === 0 ? (
+            <div className="glass-card flex min-h-40 items-center justify-center rounded-DEFAULT border border-border-subtle bg-surface-lowest/40 p-6 text-center text-body-sm text-on-surface-variant">
+              No workflows found.
+            </div>
+          ) : workflows.map((workflow) => (
             <button
               key={workflow.id}
               onClick={() => onSelect(workflow)}
