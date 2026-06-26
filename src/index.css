@@ -32,12 +32,57 @@
   .pill-tab-bg {
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
+
+  .workflow-dot-grid {
+    background-image: radial-gradient(#1f1f1f 1px, transparent 1px);
+    background-size: 24px 24px;
+    opacity: 0.58;
+  }
+
+  .workflow-data-packet {
+    filter: drop-shadow(0 0 8px rgba(99, 102, 241, 0.7));
+  }
+
+  .workflow-data-packet-secondary {
+    filter: drop-shadow(0 0 8px rgba(16, 185, 129, 0.65));
+  }
+
+  .tree-line::before {
+    content: "";
+    position: absolute;
+    left: -13px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-color: #333333;
+  }
+
+  .tree-item-marker {
+    position: absolute;
+    left: -17px;
+    top: 10px;
+    width: 8px;
+    height: 1px;
+    background-color: #333333;
+  }
 }
 
 /* React Flow Overrides */
+.react-flow,
+.react-flow__pane,
+.react-flow__renderer {
+  background: transparent;
+}
+
 .react-flow__handle {
   width: 6px;
   height: 6px;
   background: theme('colors.border-muted');
   border: none;
+}
+
+@keyframes workflow-edge-dash {
+  to {
+    stroke-dashoffset: -1000;
+  }
 }
