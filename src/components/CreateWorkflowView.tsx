@@ -81,6 +81,7 @@ export function CreateWorkflowView({ onWorkflowCreated }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const modelPickerRef = useRef<HTMLDivElement | null>(null);
+  const instructionTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const canGenerate = instruction.trim().length > 0 && !generating && !saving;
   const canSave = name.trim().length > 0 && idempotencyKey.trim().length > 0 && !saving && !generating;
@@ -190,7 +191,7 @@ export function CreateWorkflowView({ onWorkflowCreated }: Props) {
     setAddModelOpen(false);
   };
 
-  const fieldClass = 'mt-1 h-9 w-full rounded-DEFAULT border border-border-subtle/80 bg-surface-lowest px-3 text-body-sm text-primary outline-none transition-colors focus:border-status-info';
+  const fieldClass = 'mt-2 h-10 w-full rounded-DEFAULT border border-border-subtle bg-surface-base px-3 text-body-md text-on-surface outline-none transition-colors placeholder:text-on-surface-variant/45 focus:border-secondary';
   const monoFieldClass = `${fieldClass} font-mono-sm text-[11px]`;
   const selectedModel = models.find((model) => model.id === modelId) || null;
   const filteredModels = models.filter((model) => {
@@ -198,6 +199,26 @@ export function CreateWorkflowView({ onWorkflowCreated }: Props) {
     if (!query) return true;
     return `${model.label} ${model.endpoint}`.toLowerCase().includes(query);
   });
+  const modeSwitch = (
+    <div className="mode-switch grid w-[280px] grid-cols-2 rounded-lg p-1" data-mode={mode}>
+      <button
+        type="button"
+        onClick={() => setMode('ai')}
+        className={`relative z-10 flex h-9 items-center justify-center gap-2 rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${mode === 'ai' ? 'text-on-surface' : 'text-on-surface-variant hover:text-on-surface'}`}
+      >
+        <Sparkles size={15} />
+        AI Generator
+      </button>
+      <button
+        type="button"
+        onClick={() => setMode('manual')}
+        className={`relative z-10 flex h-9 items-center justify-center gap-2 rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${mode === 'manual' ? 'text-primary' : 'text-on-surface-variant hover:text-on-surface'}`}
+      >
+        <Braces size={15} />
+        Manual ASL
+      </button>
+    </div>
+  );
 
   useEffect(() => {
     if (!modelPickerOpen) return;
@@ -214,120 +235,125 @@ export function CreateWorkflowView({ onWorkflowCreated }: Props) {
     };
   }, [modelPickerOpen]);
 
+  useEffect(() => {
+    const textarea = instructionTextareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = 'auto';
+    const maxHeight = 220;
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, [instruction]);
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface-lowest text-primary">
-      <div className="grid h-14 shrink-0 grid-cols-[1fr_auto_1fr] items-center bg-surface-base/80 px-4 shadow-[inset_0_-1px_rgba(255,255,255,0.045)]">
-        <div className="font-mono-sm text-[11px] text-on-surface-variant">
-          {mode === 'ai' ? 'Generate draft' : 'Review definition'}
+    <div className="voyager-main-bg flex h-full min-h-0 flex-col text-on-surface">
+      <header className="grid h-16 shrink-0 grid-cols-[1fr_auto] items-center px-8">
+        <div>
+          <div className="font-mono-sm text-label-mono uppercase text-on-surface-variant">Create workflow</div>
         </div>
-        <div className="mode-switch grid w-52 grid-cols-2 rounded-DEFAULT p-1" data-mode={mode}>
-            <button
-              type="button"
-              onClick={() => setMode('ai')}
-              className={`relative z-10 flex h-9 items-center justify-center gap-1.5 rounded-DEFAULT text-body-sm font-medium transition-colors ${mode === 'ai' ? 'text-primary' : 'text-on-surface-variant hover:text-primary'}`}
-            >
-              <Sparkles size={14} />
-              AI
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('manual')}
-              className={`relative z-10 flex h-9 items-center justify-center gap-1.5 rounded-DEFAULT text-body-sm font-medium transition-colors ${mode === 'manual' ? 'text-primary' : 'text-on-surface-variant hover:text-primary'}`}
-            >
-              <Braces size={14} />
-              ASL
-            </button>
-          </div>
-        <div className="flex justify-end">
-          {mode === 'manual' ? (
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={!canSave}
-              className="flex h-9 w-28 items-center justify-center gap-2 rounded-DEFAULT border border-primary bg-primary px-3 font-body-sm text-body-sm font-medium text-surface-lowest transition-colors hover:bg-primary-fixed disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
-              Save draft
-            </button>
-          ) : (
-            <div className="h-9 w-28" aria-hidden="true" />
-          )}
+        <div className="justify-self-end">
+          {modeSwitch}
         </div>
-      </div>
-
+      </header>
       {mode === 'ai' ? (
-        <div className="flex flex-1 min-h-0 items-center justify-center overflow-y-auto bg-[linear-gradient(180deg,#050505_0%,#111111_100%)] p-6">
-          <section className="w-full max-w-3xl">
-            <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
-              <div>
-                <div className="text-label-caps font-label-caps text-status-info">Composer</div>
-                <h3 className="mt-1 font-display text-[28px] font-semibold leading-8 text-primary">Describe the runbook.</h3>
+        <div className="flex flex-1 min-h-0 flex-col bg-transparent">
+          <div className="flex flex-1 min-h-0 items-center justify-center overflow-y-auto p-8">
+          <section className="flex min-h-[640px] w-full max-w-[900px] flex-col items-center justify-center">
+            <div className="mb-20 flex flex-col items-center text-center">
+              <div className="inline-flex items-center justify-center gap-1.5">
+                <img src="/voyager-logo.svg" alt="" className="h-24 w-24 shrink-0 md:h-28 md:w-28" />
+                <div className="font-mono-sm text-[46px] font-semibold leading-none tracking-normal text-primary md:text-[58px]">Voyager</div>
               </div>
-              <div ref={modelPickerRef} className="relative min-w-56">
-                <div className="text-label-caps font-label-caps text-on-surface-variant">Model</div>
-                <button
-                  type="button"
-                  onClick={() => setModelPickerOpen((open) => !open)}
+              <p className="mt-2 w-full max-w-[430px] font-mono-sm text-label-mono uppercase text-secondary/70">Smooth sailing for complex workflows</p>
+            </div>
+
+            <div className="w-full">
+              <div className="relative rounded-lg border border-border-subtle bg-surface-container-low p-4 pb-16 transition-colors focus-within:border-secondary">
+                <textarea
+                  ref={instructionTextareaRef}
+                  value={instruction}
+                  onChange={(event) => setInstruction(event.target.value)}
+                  rows={1}
+                  className="max-h-[220px] min-h-[112px] w-full resize-none overflow-hidden border-0 bg-transparent pb-8 font-mono-sm text-body-lg text-secondary shadow-none outline-none placeholder:text-secondary/45 focus:border-0 focus:outline-none focus:ring-0 focus-visible:outline-none"
+                  placeholder="Message Voyager..."
                   disabled={generating}
-                  className="mt-1 flex h-9 w-full items-center justify-between rounded-DEFAULT border border-primary/30 bg-surface-container-lowest px-3 text-left text-body-sm text-primary transition-colors hover:border-primary/60 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <Bot size={14} className="shrink-0 text-primary" />
-                    <span className={`truncate font-mono-sm text-[12px] ${selectedModel ? 'text-primary' : 'text-on-surface-variant'}`}>
-                      {selectedModel?.label || 'Select model'}
+                />
+
+                <div ref={modelPickerRef} className="absolute bottom-4 left-4 w-48">
+                  <button
+                    type="button"
+                    onClick={() => setModelPickerOpen((open) => !open)}
+                    disabled={generating}
+                    className="flex h-9 w-full items-center justify-start gap-2 rounded-DEFAULT px-2 text-left text-body-md text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <Bot size={14} className="shrink-0 text-primary" />
+                      <span className={`truncate font-mono-sm text-label-mono ${selectedModel ? 'text-on-surface' : 'text-on-surface-variant'}`}>
+                        {selectedModel?.label || 'Select model'}
+                      </span>
                     </span>
-                  </span>
-                  <ChevronDown size={14} className={`shrink-0 text-on-surface-variant transition-transform ${modelPickerOpen ? 'rotate-180' : ''}`} />
-                </button>
+                    <ChevronDown size={14} className="shrink-0 text-on-surface-variant transition-transform" />
+                  </button>
 
-                {modelPickerOpen && (
-                  <div className="absolute right-0 top-[58px] z-50 w-[448px] rounded-DEFAULT border border-primary/20 bg-surface-lowest p-2 shadow-[0_18px_60px_rgba(0,0,0,0.55)]">
-                    <div className="flex gap-2">
-                      <input
-                        value={modelSearch}
-                        onChange={(event) => setModelSearch(event.target.value)}
-                        className="h-10 min-w-0 flex-1 rounded-DEFAULT border border-primary/25 bg-surface-container px-3 font-mono-sm text-[12px] text-primary outline-none placeholder:text-on-surface-variant/55 focus:border-primary/60"
-                        placeholder="Search models..."
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setModelPickerOpen(false);
-                          setAddModelOpen(true);
-                        }}
-                        className="flex h-10 w-10 items-center justify-center rounded-DEFAULT border border-primary/25 bg-surface-container text-primary transition-colors hover:border-primary/60 hover:bg-surface-container-high"
-                        title="Add model"
-                      >
-                        <Plus size={16} />
-                      </button>
-                    </div>
-
-                    <div className="mt-2 space-y-1">
-                      {filteredModels.length === 0 ? (
-                        <div className="px-2 py-5 text-center text-body-sm text-on-surface-variant">
-                          No models added.
-                        </div>
-                      ) : filteredModels.map((model) => (
+                  {modelPickerOpen && (
+                    <div className="absolute left-0 top-[48px] z-50 w-[448px] rounded-DEFAULT border border-border-subtle bg-surface-container-lowest p-2 shadow-[0_18px_60px_rgba(0,0,0,0.55)]">
+                      <div className="flex gap-2">
+                        <input
+                          value={modelSearch}
+                          onChange={(event) => setModelSearch(event.target.value)}
+                          className="h-10 min-w-0 flex-1 rounded-DEFAULT border border-primary/25 bg-surface-container px-3 font-mono-sm text-label-mono text-primary outline-none placeholder:text-on-surface-variant/55 focus:border-primary/60"
+                          placeholder="Search models..."
+                        />
                         <button
-                          key={model.id}
                           type="button"
                           onClick={() => {
-                            setModelId(model.id);
                             setModelPickerOpen(false);
+                            setAddModelOpen(true);
                           }}
-                          className="grid h-8 w-full grid-cols-[minmax(0,1fr)_minmax(140px,1fr)_16px] items-center gap-3 rounded-DEFAULT px-2 text-left transition-colors hover:bg-surface-container"
+                          className="flex h-10 w-10 items-center justify-center rounded-DEFAULT border border-primary/25 bg-surface-container text-primary transition-colors hover:border-primary/60 hover:bg-surface-container-high"
+                          title="Add model"
                         >
-                          <span className="flex min-w-0 items-center gap-2">
-                            <Bot size={14} className="shrink-0 text-primary" />
-                            <span className="truncate font-mono-sm text-[12px] font-semibold text-primary">{model.label}</span>
-                          </span>
-                          <span className="truncate font-mono-sm text-[11px] text-on-surface-variant">{model.endpoint}</span>
-                          <span className={`h-2 w-2 rounded-full ${model.id === modelId ? 'bg-primary' : 'bg-border-muted'}`} />
+                          <Plus size={16} />
                         </button>
-                      ))}
+                      </div>
+
+                      <div className="mt-2 space-y-1">
+                        {filteredModels.length === 0 ? (
+                          <div className="px-2 py-5 text-center text-body-sm text-on-surface-variant">
+                            No models added.
+                          </div>
+                        ) : filteredModels.map((model) => (
+                          <button
+                            key={model.id}
+                            type="button"
+                            onClick={() => {
+                              setModelId(model.id);
+                              setModelPickerOpen(false);
+                            }}
+                            className="grid h-8 w-full grid-cols-[minmax(0,1fr)_minmax(140px,1fr)_16px] items-center gap-3 rounded-DEFAULT px-2 text-left transition-colors hover:bg-surface-container"
+                          >
+                            <span className="flex min-w-0 items-center gap-2">
+                              <Bot size={14} className="shrink-0 text-primary" />
+                              <span className="truncate font-mono-sm text-[12px] font-semibold text-primary">{model.label}</span>
+                            </span>
+                            <span className="truncate font-mono-sm text-[11px] text-on-surface-variant">{model.endpoint}</span>
+                            <span className={`h-2 w-2 rounded-full ${model.id === modelId ? 'bg-primary' : 'bg-border-muted'}`} />
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleGenerate}
+                  disabled={!canGenerate}
+                  className="absolute bottom-4 right-4 flex h-11 w-11 items-center justify-center rounded-DEFAULT border border-primary/25 bg-primary/35 text-on-surface transition-colors hover:bg-primary hover:text-on-primary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {generating ? <Loader2 className="animate-spin" size={18} /> : <span className="material-symbols-outlined text-[20px]">arrow_upward</span>}
+                </button>
               </div>
             </div>
 
@@ -472,28 +498,6 @@ export function CreateWorkflowView({ onWorkflowCreated }: Props) {
               </div>
             )}
 
-            <div className="overflow-hidden rounded-DEFAULT bg-surface-container-lowest shadow-[0_24px_80px_rgba(0,0,0,0.36)]">
-              <textarea
-                value={instruction}
-                onChange={(event) => setInstruction(event.target.value)}
-                className="h-72 w-full resize-none bg-transparent p-5 font-body-sm text-[15px] leading-6 text-primary outline-none placeholder:text-on-surface-variant/45"
-                placeholder="Fetch customer data, validate the amount, call scheduler://webhook when approved, otherwise end cleanly."
-                disabled={generating}
-              />
-            </div>
-            <div className="mt-3 flex items-center justify-between">
-              <div className="font-mono-sm text-[11px] text-on-surface-variant">{instruction.trim().length} chars</div>
-              <button
-                type="button"
-                onClick={handleGenerate}
-                disabled={!canGenerate}
-                className="flex h-9 items-center gap-2 rounded-DEFAULT border border-primary bg-primary px-3 text-body-sm font-medium text-surface-lowest transition-colors hover:bg-primary-fixed disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {generating ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
-                Generate ASL
-              </button>
-            </div>
-
             {error && (
               <div className="mt-4 rounded-DEFAULT border border-status-error/25 bg-status-error/10 p-3 text-body-sm text-status-error">
                 <div className="flex items-start gap-2">
@@ -503,10 +507,12 @@ export function CreateWorkflowView({ onWorkflowCreated }: Props) {
               </div>
             )}
           </section>
+          </div>
         </div>
       ) : (
-        <div className="grid flex-1 min-h-0 grid-cols-1 overflow-hidden xl:grid-cols-[320px_minmax(0,1fr)_280px]">
-          <aside className="flex min-h-0 flex-col bg-surface-container-lowest shadow-[inset_-1px_0_rgba(255,255,255,0.045)]">
+        <div className="flex flex-1 min-h-0 flex-col bg-transparent">
+        <div className="grid flex-1 min-h-0 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1fr)_360px]">
+          <aside className="hidden">
             <div className="px-4 py-3">
               <div className="text-label-caps font-label-caps text-on-surface-variant">Workflow settings</div>
             </div>
@@ -579,10 +585,13 @@ export function CreateWorkflowView({ onWorkflowCreated }: Props) {
             </div>
           </aside>
 
-          <main className="flex min-h-0 flex-col bg-surface-lowest">
-            <div className="flex h-10 shrink-0 items-center justify-between bg-surface-elevated px-4 shadow-[inset_0_-1px_rgba(255,255,255,0.045)]">
-              <div className="font-mono-sm text-[11px] text-on-surface-variant">definition.json</div>
-              <div className={`font-mono-sm text-[11px] ${definitionStatus.valid ? 'text-status-success' : 'text-status-error'}`}>
+          <main className="flex min-h-0 flex-col bg-surface-base">
+            <div className="flex h-14 shrink-0 items-center justify-between border-b border-border-subtle bg-surface-base px-6">
+              <div className="flex items-center gap-2 font-mono-sm text-[13px] text-on-surface">
+                <span className="material-symbols-outlined text-[18px]">description</span>
+                definition.json
+              </div>
+              <div className={`font-mono-sm text-[12px] ${definitionStatus.valid ? 'text-secondary' : 'text-status-error'}`}>
                 {definitionStatus.message}
               </div>
             </div>
@@ -607,29 +616,36 @@ export function CreateWorkflowView({ onWorkflowCreated }: Props) {
             </div>
           </main>
 
-          <aside className="hidden min-h-0 flex-col bg-surface-container-lowest shadow-[inset_1px_0_rgba(255,255,255,0.045)] xl:flex">
-            <div className="px-4 py-3">
-              <div className="text-label-caps font-label-caps text-on-surface-variant">Definition health</div>
-            </div>
-            <div className="flex-1 space-y-4 overflow-y-auto p-4">
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-DEFAULT bg-surface-lowest p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.045)]">
-                  <div className="text-label-caps font-label-caps text-on-surface-variant">States</div>
-                  <div className="mt-1 font-mono-sm text-[22px] font-semibold text-primary">{definitionStats.stateCount}</div>
+          <aside className="hidden min-h-0 flex-col overflow-y-auto border-l border-border-subtle bg-surface-base xl:flex">
+            <div className="border-b border-border-subtle p-8">
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={!canSave}
+                className="mb-8 flex h-12 w-full items-center justify-center gap-2 rounded-DEFAULT bg-primary px-5 font-body-sm text-[16px] font-medium text-on-primary shadow-[0_12px_30px_rgba(240,140,140,0.18)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+                Save draft
+              </button>
+              <h2 className="font-headline-lg text-headline-lg text-on-surface">Definition health</h2>
+              <div className="mt-6 grid grid-cols-2 gap-4">
+                <div className="rounded-DEFAULT border border-border-subtle bg-surface-base p-4">
+                  <div className="font-mono-sm text-[12px] text-on-surface-variant">States</div>
+                  <div className="mt-3 font-display text-[28px] font-medium text-on-surface">{definitionStats.stateCount}</div>
                 </div>
-                <div className="rounded-DEFAULT bg-surface-lowest p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.045)]">
-                  <div className="text-label-caps font-label-caps text-on-surface-variant">Ends</div>
-                  <div className="mt-1 font-mono-sm text-[22px] font-semibold text-primary">{definitionStats.terminalCount}</div>
+                <div className="rounded-DEFAULT border border-border-subtle bg-surface-base p-4">
+                  <div className="font-mono-sm text-[12px] text-on-surface-variant">Ends</div>
+                  <div className="mt-3 font-display text-[28px] font-medium text-on-surface">{definitionStats.terminalCount}</div>
                 </div>
               </div>
 
-              <div className="rounded-DEFAULT bg-surface-lowest p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.045)]">
-                <div className="text-label-caps font-label-caps text-on-surface-variant">Start state</div>
-                <div className="mt-2 truncate font-mono-sm text-[12px] text-primary">{definitionStats.startAt}</div>
+              <div className="mt-5 rounded-DEFAULT border border-border-subtle bg-surface-base p-4">
+                <div className="font-mono-sm text-[12px] text-on-surface-variant">Start state</div>
+                <div className="mt-3 truncate font-headline-md text-headline-md text-on-surface">{definitionStats.startAt}</div>
               </div>
 
               {(error || validationIssues.length > 0 || !definitionStatus.valid) ? (
-                <div className="rounded-DEFAULT border border-status-error/25 bg-status-error/10 p-3 text-body-sm text-status-error">
+                <div className="mt-5 rounded-DEFAULT border border-status-error/25 bg-status-error/10 p-4 text-body-sm text-status-error">
                   <div className="flex items-start gap-2">
                     <AlertCircle className="mt-0.5 shrink-0" size={16} />
                     <div>
@@ -645,12 +661,52 @@ export function CreateWorkflowView({ onWorkflowCreated }: Props) {
                   </div>
                 </div>
               ) : (
-                <div className="rounded-DEFAULT border border-status-success/20 bg-status-success/10 p-3 text-body-sm text-status-success">
+                <div className="mt-5 rounded-DEFAULT border border-secondary/35 bg-secondary-container/45 p-4 text-body-sm text-secondary-fixed">
                   Ready to save as a draft workflow.
                 </div>
               )}
             </div>
+            <div className="space-y-6 p-8">
+              <h2 className="font-headline-lg text-headline-lg text-on-surface">Workflow settings</h2>
+              <section className="space-y-4">
+                <label className="block">
+                  <span className="text-body-sm text-on-surface">Name</span>
+                  <input value={name} onChange={(event) => setName(event.target.value)} className={fieldClass} placeholder="Invoice approval" />
+                </label>
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="block">
+                    <span className="text-body-sm text-on-surface">Priority</span>
+                    <select value={priority} onChange={(event) => setPriority(event.target.value as WorkflowPriorityDTO)} className={fieldClass}>
+                      <option value="HIGH">High</option>
+                      <option value="MEDIUM">Medium</option>
+                      <option value="LOW">Low</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-body-sm text-on-surface">Attempts</span>
+                    <input type="number" min={0} value={maxAttempts} onChange={(event) => setMaxAttempts(Number(event.target.value))} className={fieldClass} />
+                  </label>
+                </div>
+                <label className="block">
+                  <span className="text-body-sm text-on-surface">Idempotency key</span>
+                  <input value={idempotencyKey} onChange={(event) => setIdempotencyKey(event.target.value)} className={monoFieldClass} />
+                </label>
+              </section>
+              <div className="h-px bg-border-subtle" />
+              <section className="space-y-4">
+                <h3 className="font-headline-md text-headline-md text-on-surface">Schedule</h3>
+                <label className="block">
+                  <span className="text-body-sm text-on-surface">Cron expression</span>
+                  <input value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} className={monoFieldClass} placeholder="Manual trigger" />
+                </label>
+                <label className="block">
+                  <span className="text-body-sm text-on-surface">Timezone</span>
+                  <input value={timezone} onChange={(event) => setTimezone(event.target.value)} className={fieldClass} placeholder="UTC" />
+                </label>
+              </section>
+            </div>
           </aside>
+        </div>
         </div>
       )}
     </div>

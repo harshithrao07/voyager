@@ -1,13 +1,11 @@
 import { useEffect, useState } from 'react';
-import { PanelLeftClose, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
-import { WorkflowGeneratorPanel } from './components/WorkflowGeneratorPanel';
-import { AslCodeViewer } from './components/AslCodeViewer';
-import { AslGraphViewer } from './components/AslGraphViewer';
-import { NodeDetailsPanel } from './components/NodeDetailsPanel';
-import { RevisionHistoryPanel } from './components/RevisionHistoryPanel';
-import { ExecutionStatusView, type ExecutionRun } from './components/ExecutionStatusView';
-import { WorkflowListView, type WorkflowSummary } from './components/WorkflowListView';
-import { CreateWorkflowView } from './components/CreateWorkflowView';
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import type { WorkflowSummary } from './components/WorkflowListView';
+import { WorkspaceState } from './components/WorkspaceState';
+import { DashboardPage } from './pages/DashboardPage';
+import { WorkflowsPage } from './pages/WorkflowsPage';
+import { CreateWorkflowPage } from './pages/CreateWorkflowPage';
+import { WorkflowDetailPage, type WorkflowRevision } from './pages/WorkflowDetailPage';
 import {
   getWorkflow,
   getWorkflowRevisions,
@@ -44,16 +42,6 @@ const activeDefinition = {
       "End": true
     }
   }
-};
-
-type WorkflowRevision = {
-  id: string;
-  label: string;
-  timestamp: string;
-  active?: boolean;
-  note: string;
-  definition: any;
-  runs: ExecutionRun[];
 };
 
 const emptyWorkflowPage: WorkflowPageDTO = {
@@ -138,122 +126,36 @@ function buildGeneratedRevision(definition: any): WorkflowRevision {
   };
 }
 
-function workflowStatusBadgeClass(status: WorkflowSummary['status']) {
-  if (status === 'Failed') return 'border-status-error/20 bg-status-error/10 text-status-error';
-  if (status === 'Paused') return 'border-border-muted bg-surface-container text-on-surface-variant';
-  if (status === 'Draft') return 'border-status-info/20 bg-status-info/10 text-status-info';
-  if (status === 'Archived') return 'border-border-muted bg-surface-container-low text-on-surface-variant';
-  return 'border-status-success/20 bg-status-success/10 text-status-success';
+type AppRoute =
+  | { page: 'dashboard' }
+  | { page: 'workflows' }
+  | { page: 'create' }
+  | { page: 'workflow'; workflowId: string };
+
+function parseRoute(pathname: string): AppRoute {
+  const normalized = pathname.replace(/\/+$/, '') || '/';
+  if (normalized === '/') return { page: 'create' };
+  if (normalized === '/dashboard') return { page: 'dashboard' };
+  if (normalized === '/workflows/new') return { page: 'create' };
+  if (normalized === '/workflows') return { page: 'workflows' };
+
+  const workflowMatch = normalized.match(/^\/workflows\/([^/]+)$/);
+  if (workflowMatch?.[1]) {
+    return { page: 'workflow', workflowId: decodeURIComponent(workflowMatch[1]) };
+  }
+
+  return { page: 'workflows' };
 }
 
-function WorkspaceState({
-  title,
-  message,
-  action,
-}: {
-  title: string;
-  message: string;
-  action?: { label: string; onClick: () => void };
-}) {
-  return (
-    <div className="flex h-full items-center justify-center bg-surface-lowest p-6">
-      <div className="glass-card max-w-md rounded-DEFAULT border border-border-subtle bg-surface-container-lowest p-5 text-center">
-        <div className="font-headline-md text-headline-md font-medium text-primary">{title}</div>
-        <p className="mt-2 text-body-sm text-on-surface-variant">{message}</p>
-        {action && (
-          <button
-            type="button"
-            onClick={action.onClick}
-            className="mt-4 rounded-DEFAULT border border-border-subtle bg-surface-elevated px-3 py-1.5 text-body-sm text-primary transition-colors hover:bg-surface-container"
-          >
-            {action.label}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function WorkflowDashboard({
-  workflows,
-  totalWorkflows,
-  onSelect,
-}: {
-  workflows: WorkflowSummary[];
-  totalWorkflows?: number;
-  onSelect: (workflow: WorkflowSummary) => void;
-}) {
-  const activeCount = workflows.filter((workflow) => workflow.status === 'Active').length;
-  const pausedCount = workflows.filter((workflow) => workflow.status === 'Paused').length;
-  const archivedCount = workflows.filter((workflow) => workflow.status === 'Archived').length;
-
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-surface-lowest">
-      <div className="glass-shell grid shrink-0 grid-cols-1 border-b border-border-subtle bg-surface-base md:grid-cols-4">
-        <DashboardMetric label="Total workflows" value={totalWorkflows ?? workflows.length} tone="text-primary" />
-        <DashboardMetric label="Active workflows" value={activeCount} tone="text-status-success" />
-        <DashboardMetric label="Paused workflows" value={pausedCount} tone="text-on-surface-variant" />
-        <DashboardMetric label="Archived workflows" value={archivedCount} tone="text-status-info" />
-      </div>
-
-      <div className="flex-1 overflow-hidden p-4">
-        <section className="glass-panel flex h-full min-h-0 flex-col overflow-hidden border border-border-subtle bg-surface">
-          <div className="glass-shell flex h-11 shrink-0 items-center justify-between border-b border-border-subtle bg-surface-elevated px-4">
-            <div>
-              <h2 className="font-display text-[18px] font-semibold leading-6 text-primary">Workflow Executions</h2>
-            </div>
-            <button className="rounded-DEFAULT border border-border-subtle bg-surface-lowest px-3 py-1.5 font-body-sm text-body-sm text-on-surface-variant transition-colors hover:text-primary">
-              Saved view: Open
-            </button>
-          </div>
-          <div className="grid grid-cols-[1fr_120px_150px_130px] border-b border-border-subtle bg-surface-container-lowest px-4 py-2 text-label-caps font-label-caps text-on-surface-variant">
-            <div>Workflow</div>
-            <div>Status</div>
-            <div>Schedule</div>
-            <div className="text-right">Next run</div>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {workflows.map((workflow) => (
-              <button
-                key={workflow.id}
-                type="button"
-                onClick={() => onSelect(workflow)}
-                className="grid w-full grid-cols-[1fr_120px_150px_130px] items-center border-b border-border-subtle px-4 py-3 text-left transition-colors hover:bg-surface-container-low"
-              >
-                <div className="min-w-0">
-                  <div className="truncate font-body-sm text-body-sm font-medium text-primary">{workflow.name}</div>
-                  <div className="truncate font-mono-sm text-[11px] text-on-surface-variant">{workflow.id}</div>
-                </div>
-                <div>
-                  <span className={`rounded border px-2 py-0.5 font-body-sm text-[11px] ${workflowStatusBadgeClass(workflow.status)}`}>
-                    {workflow.status}
-                  </span>
-                </div>
-                <div className="font-mono-sm text-[11px] text-on-surface-variant">{workflow.schedule}</div>
-                <div className="text-right font-mono-sm text-[11px] text-on-surface-variant">{workflow.nextRun}</div>
-              </button>
-            ))}
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
-function DashboardMetric({ label, value, tone }: { label: string; value: string | number; tone: string }) {
-  return (
-    <div className="border-b border-border-subtle px-4 py-3 md:border-b-0 md:border-r">
-      <div className="text-label-caps font-label-caps text-on-surface-variant">{label}</div>
-      <div className={`mt-1 font-mono-sm text-[20px] font-semibold ${tone}`}>{value}</div>
-    </div>
-  );
+function workflowPath(workflowId: string) {
+  return `/workflows/${encodeURIComponent(workflowId)}`;
 }
 
 function App() {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [revisionPanelOpen, setRevisionPanelOpen] = useState(false);
-  const [activeShellView, setActiveShellView] = useState<'dashboard' | 'workflows' | 'create'>('workflows');
+  const [route, setRoute] = useState<AppRoute>(() => parseRoute(window.location.pathname));
   const [workflowPage, setWorkflowPage] = useState<WorkflowPageDTO | null>(null);
   const [workflowSummaries, setWorkflowSummaries] = useState<WorkflowSummary[]>([]);
   const [workflowListLoading, setWorkflowListLoading] = useState(true);
@@ -273,6 +175,18 @@ function App() {
     workflowRevisions[0] ||
     null;
   const currentDefinition = selectedRevision?.definition || workflowDetail?.activeDefinition?.definition || workflowDef;
+  const navigate = (path: string) => {
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, '', path);
+    }
+    setRoute(parseRoute(path));
+  };
+
+  useEffect(() => {
+    const handlePopState = () => setRoute(parseRoute(window.location.pathname));
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const loadWorkflows = () => {
     setWorkflowListLoading(true);
@@ -295,6 +209,41 @@ function App() {
   useEffect(() => {
     loadWorkflows();
   }, []);
+
+  useEffect(() => {
+    if (route.page !== 'workflow') {
+      setSelectedWorkflow(null);
+      setSelectedRevisionId('');
+      setDetailsPanelOpen(false);
+      setRevisionPanelOpen(false);
+      return;
+    }
+
+    const workflowFromList = workflowSummaries.find((workflow) => workflow.id === route.workflowId);
+    const fallbackWorkflow: WorkflowSummary = {
+      id: route.workflowId,
+      name: workflowDetail?.id === route.workflowId ? workflowDetail.name : 'Workflow',
+      status: workflowDetail?.id === route.workflowId ? formatWorkflowStatus(workflowDetail.status) : 'Draft',
+      schedule: workflowDetail?.id === route.workflowId ? formatSchedule(workflowDetail.cronExpression, workflowDetail.timezone) : '-',
+      nextRun: workflowDetail?.id === route.workflowId && workflowDetail.nextRunAt ? `Next: ${formatDateTime(workflowDetail.nextRunAt)}` : '-',
+      description: workflowDetail?.id === route.workflowId ? workflowDescription(workflowDetail) : 'Loading workflow detail.',
+    };
+
+    setSelectedWorkflow((current) => {
+      const next = workflowFromList || fallbackWorkflow;
+      if (
+        current?.id === next.id &&
+        current.name === next.name &&
+        current.status === next.status &&
+        current.schedule === next.schedule &&
+        current.nextRun === next.nextRun &&
+        current.description === next.description
+      ) {
+        return current;
+      }
+      return next;
+    });
+  }, [route, workflowSummaries, workflowDetail]);
 
   useEffect(() => {
     if (!selectedWorkflow) {
@@ -359,18 +308,18 @@ function App() {
 
   const handleWorkflowSelected = (workflow: WorkflowSummary) => {
     setSelectedWorkflow(workflow);
-    setActiveShellView('workflows');
     setSelectedRevisionId('');
     setDetailsPanelOpen(false);
     setRevisionPanelOpen(false);
     setActiveTab('visualizer');
+    navigate(workflowPath(workflow.id));
   };
 
   const handleCreateWorkflow = () => {
     setSelectedWorkflow(null);
     setRevisionPanelOpen(false);
     setDetailsPanelOpen(false);
-    setActiveShellView('create');
+    navigate('/workflows/new');
   };
 
   const handleWorkflowCreated = (workflow: WorkflowResponseDTO) => {
@@ -387,7 +336,12 @@ function App() {
       last: true,
     });
     setWorkflowSummaries((current) => [summary, ...current.filter((item) => item.id !== summary.id)]);
-    handleWorkflowSelected(summary);
+    setSelectedWorkflow(summary);
+    setSelectedRevisionId('');
+    setDetailsPanelOpen(false);
+    setRevisionPanelOpen(false);
+    setActiveTab('visualizer');
+    navigate(workflowPath(summary.id));
   };
 
   const handleRevisionSelected = (revision: WorkflowRevision) => {
@@ -409,111 +363,131 @@ function App() {
     setRevisionPanelOpen(false);
   };
 
-  return (
-    <div className="font-body-sm text-body-sm overflow-hidden selection:bg-status-accent/30 selection:text-primary">
-      {/* TopNavBar */}
-      <nav className="glass-shell bg-surface-base dark:bg-surface-base border-b border-border-subtle dark:border-border-subtle fixed top-0 left-0 w-full z-50 flex h-11 items-center justify-between px-4">
-        <div className="flex items-center gap-element-gap-md">
-          <div className="font-display text-[16px] font-extrabold leading-none text-primary dark:text-primary">
-            Agentic Workflow
-          </div>
-          <div className="ml-4 hidden h-full items-center gap-element-gap-sm xl:flex">
-            <div className="relative group">
-              <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]">search</span>
-              <input className="h-8 w-80 rounded-DEFAULT border border-border-subtle bg-surface-elevated pl-8 pr-3 font-body-sm text-body-sm text-primary placeholder-on-surface-variant/50 transition-colors focus:border-status-info focus:outline-none focus:ring-1 focus:ring-status-info" placeholder="Search workflows, run IDs, task queues..." type="text" />
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-element-gap-md">
-          <div className="flex items-center gap-element-gap-sm text-on-surface-variant">
-            <button className="flex h-8 w-8 items-center justify-center rounded-DEFAULT transition-colors duration-200 hover:bg-surface-container hover:text-primary">
-              <span className="material-symbols-outlined text-[18px]">notifications</span>
-            </button>
-          </div>
-        </div>
-      </nav>
+  const createViewActive = route.page === 'create';
 
-      <div className="flex h-screen pt-11">
+  return (
+    <div className="font-body-sm text-body-sm overflow-hidden bg-surface-base selection:bg-primary/30 selection:text-primary">
+      <div className="flex h-screen">
         <aside
           id="app-sidebar"
-          className={`glass-shell fixed left-0 top-11 z-40 hidden h-[calc(100vh-2.75rem)] flex-col border-r border-border-subtle bg-surface-container-lowest py-3 transition-[width] duration-200 ease-out md:flex ${sidebarOpen ? 'w-sidebar-width' : 'w-16'}`}
+          className={`fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border-subtle bg-surface-container-lowest transition-[width] duration-200 ease-out md:flex ${sidebarOpen ? 'w-sidebar-width' : 'w-16'}`}
           aria-label={sidebarOpen ? 'Expanded navigation' : 'Collapsed navigation'}
         >
-          <div className={`mb-4 px-3 ${sidebarOpen ? '' : 'px-2'}`}>
+          <div className={`flex border-b border-border-subtle px-3 ${sidebarOpen ? 'h-24 flex-col justify-center' : 'h-16 items-center justify-center px-2'}`}>
+            {sidebarOpen ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedWorkflow(null);
+                    setRevisionPanelOpen(false);
+                    navigate('/');
+                  }}
+                  className="flex items-center gap-1.5 text-left"
+                  title="Voyager"
+                >
+                  <img src="/voyager-logo.svg" alt="" className="h-12 w-12 shrink-0" />
+                  <span className="font-mono-sm text-[24px] font-semibold leading-none tracking-normal text-primary">Voyager</span>
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(true)}
+                className="flex h-9 w-9 items-center justify-center rounded-DEFAULT border border-border-subtle bg-surface-container-lowest"
+                title="Expand sidebar"
+              >
+                <img src="/voyager-logo.svg" alt="" className="h-9 w-9" />
+              </button>
+            )}
+          </div>
+          <div className="flex-1 space-y-1 overflow-y-auto px-1 py-4">
             <button
               onClick={handleCreateWorkflow}
-              className={`flex h-10 w-full items-center rounded-DEFAULT border border-border-subtle bg-surface-elevated font-body-sm text-body-sm text-primary transition-colors hover:bg-surface-container ${sidebarOpen ? 'justify-center gap-2 px-3' : 'justify-center px-0'}`}
+              className={`relative flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} ${route.page === 'create' ? 'bg-surface-container-low text-on-surface' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface'}`}
               aria-label="New Workflow"
               title="New Workflow"
               type="button"
             >
-              <span className="material-symbols-outlined text-[18px]">add</span>
-              <span className={sidebarOpen ? 'inline whitespace-nowrap' : 'hidden'}>New Workflow</span>
+              <span className="material-symbols-outlined shrink-0 text-[20px]">add</span>
+              {route.page === 'create' && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />}
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>New Workflow</span>
             </button>
-          </div>
-          <div className="flex-1 overflow-y-auto px-2 space-y-1">
             <button
-              onClick={() => { setSelectedWorkflow(null); setRevisionPanelOpen(false); setActiveShellView('dashboard'); }}
-              className={`flex h-10 w-full items-center rounded-DEFAULT transition-colors ${sidebarOpen ? 'gap-3 px-3' : 'justify-center px-0'} ${!selectedWorkflow && activeShellView === 'dashboard' ? 'border-l-2 border-status-info bg-surface-container-high text-primary' : 'text-on-surface-variant hover:bg-surface-container hover:text-primary'}`}
+              onClick={() => navigate('/dashboard')}
+              className={`relative flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} ${route.page === 'dashboard' ? 'bg-surface-container-low text-on-surface' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface'}`}
               aria-label="Dashboard"
               title="Dashboard"
             >
               <span className="material-symbols-outlined shrink-0 text-[20px]">dashboard</span>
-              <span className={sidebarOpen ? 'inline truncate font-body-sm text-body-sm' : 'hidden'}>Dashboard</span>
+              {route.page === 'dashboard' && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />}
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Dashboard</span>
             </button>
             <button
-              onClick={() => { setSelectedWorkflow(null); setRevisionPanelOpen(false); setActiveShellView('workflows'); }}
-              className={`flex h-10 w-full items-center rounded-DEFAULT transition-colors ${sidebarOpen ? 'gap-3 px-3' : 'justify-center px-0'} ${!selectedWorkflow && activeShellView === 'workflows' ? 'border-l-2 border-status-accent bg-surface-container-high text-primary' : 'text-on-surface-variant hover:bg-surface-container hover:text-primary'}`}
+              onClick={() => navigate('/workflows')}
+              className={`relative flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} ${route.page === 'workflows' || route.page === 'workflow' ? 'bg-surface-container-low text-on-surface' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface'}`}
               aria-label="Workflows"
               title="Workflows"
             >
-              <span className="material-symbols-outlined shrink-0 text-[20px]">schema</span>
-              <span className={sidebarOpen ? 'inline truncate font-body-sm text-body-sm font-medium' : 'hidden'}>Workflows</span>
+              <span className="material-symbols-outlined shrink-0 text-[20px]">account_tree</span>
+              {(route.page === 'workflows' || route.page === 'workflow') && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />}
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Workflows</span>
             </button>
             <button
               onClick={() => selectedWorkflow && setActiveTab('executions')}
-              className={`flex h-10 w-full items-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-surface-container hover:text-primary ${sidebarOpen ? 'gap-3 px-3' : 'justify-center px-0'}`}
+              className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`}
               aria-label="Executions"
               title="Executions"
             >
-              <span className="material-symbols-outlined shrink-0 text-[20px]">history</span>
-              <span className={sidebarOpen ? 'inline truncate font-body-sm text-body-sm' : 'hidden'}>Executions</span>
+              <span className="material-symbols-outlined shrink-0 text-[20px]">play_circle</span>
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Executions</span>
             </button>
-            <button className={`flex h-10 w-full items-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-surface-container hover:text-primary ${sidebarOpen ? 'gap-3 px-3' : 'justify-center px-0'}`} aria-label="Workers" title="Workers">
-              <span className="material-symbols-outlined shrink-0 text-[20px]">dns</span>
-              <span className={sidebarOpen ? 'inline truncate font-body-sm text-body-sm' : 'hidden'}>Workers</span>
+            <button className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} aria-label="Workers" title="Workers">
+              <span className="material-symbols-outlined shrink-0 text-[20px]">groups</span>
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Workers</span>
             </button>
-            <button className={`flex h-10 w-full items-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-surface-container hover:text-primary ${sidebarOpen ? 'gap-3 px-3' : 'justify-center px-0'}`} aria-label="Schedules" title="Schedules">
-              <span className="material-symbols-outlined shrink-0 text-[20px]">calendar_clock</span>
-              <span className={sidebarOpen ? 'inline truncate font-body-sm text-body-sm' : 'hidden'}>Schedules</span>
+            <button className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} aria-label="Schedules" title="Schedules">
+              <span className="material-symbols-outlined shrink-0 text-[20px]">event_repeat</span>
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Schedules</span>
             </button>
-            <button className={`flex h-10 w-full items-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-surface-container hover:text-primary ${sidebarOpen ? 'gap-3 px-3' : 'justify-center px-0'}`} aria-label="Docs" title="Docs">
+            <div className="mx-2 my-3 h-px bg-border-subtle" />
+            <button className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} aria-label="Docs" title="Docs">
               <span className="material-symbols-outlined shrink-0 text-[20px]">description</span>
-              <span className={sidebarOpen ? 'inline truncate font-body-sm text-body-sm' : 'hidden'}>Docs</span>
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Docs</span>
             </button>
-            <button className={`flex h-10 w-full items-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-surface-container hover:text-primary ${sidebarOpen ? 'gap-3 px-3' : 'justify-center px-0'}`} aria-label="Settings" title="Settings">
-              <span className="material-symbols-outlined shrink-0 text-[20px]">settings_suggest</span>
-              <span className={sidebarOpen ? 'inline truncate font-body-sm text-body-sm' : 'hidden'}>Settings</span>
+            <button className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} aria-label="Settings" title="Settings">
+              <span className="material-symbols-outlined shrink-0 text-[20px]">settings</span>
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Settings</span>
             </button>
           </div>
-          <div className="mt-auto px-2 pt-4 border-t border-border-subtle">
+          <div className="mt-auto space-y-1 border-t border-border-subtle px-1 py-4">
+            <button className={`flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-[13px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} type="button">
+              <span className="material-symbols-outlined shrink-0 text-[19px]">help</span>
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Help</span>
+            </button>
+            <button className={`flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-[13px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} type="button">
+              <span className="material-symbols-outlined shrink-0 text-[19px]">monitoring</span>
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Status</span>
+              {sidebarOpen && <span className="ml-auto h-2 w-2 rounded-full bg-secondary" />}
+            </button>
             <button
               type="button"
               onClick={() => setSidebarOpen((open) => !open)}
-              className={`flex h-10 w-full items-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-surface-container hover:text-primary ${sidebarOpen ? 'gap-3 px-3' : 'justify-center px-0'}`}
+              className={`flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-[13px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`}
               aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
               aria-controls="app-sidebar"
               aria-expanded={sidebarOpen}
               title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
             >
               {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-              <span className={sidebarOpen ? 'inline truncate font-body-sm text-body-sm' : 'hidden'}>Collapse</span>
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>admin</span>
             </button>
           </div>
         </aside>
         {/* Main Content Area */}
-        <main className={`relative flex h-full w-full flex-1 flex-col bg-surface-lowest transition-[margin] duration-200 ease-out ${sidebarOpen ? 'md:ml-[240px]' : 'md:ml-16'}`}>
-          <header className="glass-shell z-10 flex min-h-14 flex-shrink-0 items-center border-b border-border-subtle bg-surface-base/95 px-4 py-2">
+        <main className={`voyager-main-bg relative flex h-full w-full flex-1 flex-col transition-[margin] duration-200 ease-out ${sidebarOpen ? 'md:ml-[260px]' : 'md:ml-16'}`}>
+          {!createViewActive && (
+          <header className="glass-shell z-10 flex min-h-14 flex-shrink-0 items-center px-4 py-2">
             <div className="flex w-full min-w-0 items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3">
                 {selectedWorkflow ? (
@@ -525,7 +499,7 @@ function App() {
                   </div>
                 ) : (
                   <span className="font-display text-[20px] font-semibold leading-7 text-primary">
-                {activeShellView === 'dashboard' ? 'Dashboard' : activeShellView === 'create' ? 'Create Workflow' : 'Workflow Executions'}
+                {route.page === 'dashboard' ? 'Dashboard' : 'Workflow Executions'}
                   </span>
                 )}
               </div>
@@ -568,10 +542,13 @@ function App() {
               )}
             </div>
           </header>
+          )}
 
-          {!selectedWorkflow ? (
+          {route.page !== 'workflow' ? (
             <div className="flex-1 min-h-0 overflow-hidden">
-              {workflowListLoading ? (
+              {route.page === 'create' ? (
+                <CreateWorkflowPage onWorkflowCreated={handleWorkflowCreated} />
+              ) : workflowListLoading ? (
                 <WorkspaceState title="Loading workflows" message="Fetching workflow list from /app/v1/workflows." />
               ) : workflowListError ? (
                 <WorkspaceState
@@ -579,85 +556,37 @@ function App() {
                   message={workflowListError}
                   action={{ label: 'Retry', onClick: loadWorkflows }}
                 />
-              ) : activeShellView === 'create' ? (
-                <CreateWorkflowView onWorkflowCreated={handleWorkflowCreated} />
-              ) : activeShellView === 'dashboard' ? (
-                <WorkflowDashboard
+              ) : route.page === 'dashboard' ? (
+                <DashboardPage
                   workflows={workflowSummaries}
                   totalWorkflows={workflowPage?.totalElements}
                   onSelect={handleWorkflowSelected}
                 />
               ) : (
-                <WorkflowListView workflows={workflowSummaries} onSelect={handleWorkflowSelected} />
+                <WorkflowsPage workflows={workflowSummaries} onSelect={handleWorkflowSelected} />
               )}
             </div>
           ) : (
-          <div className="flex-1 flex overflow-hidden">
-            {/* Left Pane: Primary workspace */}
-            <div className="flex-1 relative bg-surface-lowest overflow-hidden">
-               {workflowDetailLoading ? (
-                 <WorkspaceState title="Loading workflow" message="Fetching workflow detail and revision history." />
-               ) : workflowDetailError ? (
-                 <WorkspaceState
-                   title="Could not load workflow"
-                   message={workflowDetailError}
-                   action={{ label: 'Retry', onClick: () => setSelectedWorkflow({ ...selectedWorkflow }) }}
-                 />
-               ) : activeTab === 'executions' ? (
-                 <ExecutionStatusView workflowName={selectedWorkflow.name} revisionLabel={selectedRevision?.label || 'No revision'} runs={selectedRevision?.runs || []} />
-               ) : activeTab === 'visualizer' ? (
-                 <AslGraphViewer
-                   definition={currentDefinition}
-                   selectedStateName={selectedStateName}
-                   onStateSelect={handleStateSelect}
-                 />
-               ) : (
-                 <AslCodeViewer definition={currentDefinition} />
-               )}
-               {activeTab === 'visualizer' && !detailsPanelOpen && !revisionPanelOpen && (
-                 <button
-                   type="button"
-                   onClick={() => setDetailsPanelOpen(true)}
-                   className="absolute right-4 top-1/2 z-40 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-DEFAULT border border-border-subtle bg-surface-container-highest/90 text-on-surface-variant shadow-lg backdrop-blur-xl transition-colors hover:border-border-muted hover:bg-surface-container hover:text-primary lg:flex"
-                   aria-label="Open node details"
-                   title="Open node details"
-                 >
-                   <PanelRightOpen size={18} />
-                 </button>
-               )}
-            </div>
-
-            {/* Right Pane */}
-            {(revisionPanelOpen || activeTab === 'definition' || (activeTab === 'visualizer' && detailsPanelOpen)) && (
-            <div
-              id={revisionPanelOpen ? 'revision-history-panel' : undefined}
-              className="glass-panel z-20 hidden w-[360px] flex-col border-l border-border-subtle bg-surface-base shadow-[-8px_0_24px_rgba(0,0,0,0.2)] lg:flex"
-            >
-               {revisionPanelOpen ? (
-                 workflowDetailLoading ? (
-                   <WorkspaceState title="Loading revisions" message="Fetching /revisions for this workflow." />
-                 ) : workflowRevisions.length === 0 ? (
-                   <WorkspaceState title="No revisions" message="This workflow does not have revision records yet." />
-                 ) : (
-                   <RevisionHistoryPanel
-                     revisions={workflowRevisions}
-                     selectedRevisionId={selectedRevision?.id || ''}
-                     onRevisionSelected={handleRevisionIdSelected}
-                     onClose={() => setRevisionPanelOpen(false)}
-                   />
-                 )
-               ) : activeTab === 'visualizer' ? (
-                 <NodeDetailsPanel
-                   definition={currentDefinition}
-                   selectedStateName={selectedStateName}
-                   onClose={() => setDetailsPanelOpen(false)}
-                 />
-               ) : (
-                 <WorkflowGeneratorPanel onWorkflowGenerated={handleWorkflowGenerated} />
-               )}
-            </div>
-            )}
-          </div>
+          <WorkflowDetailPage
+            workflowName={workflowDetail?.name || selectedWorkflow?.name || 'Workflow'}
+            workflowDetail={workflowDetail}
+            workflowRevisions={workflowRevisions}
+            workflowDetailLoading={workflowDetailLoading}
+            workflowDetailError={workflowDetailError}
+            activeTab={activeTab}
+            selectedRevision={selectedRevision}
+            currentDefinition={currentDefinition}
+            selectedStateName={selectedStateName}
+            detailsPanelOpen={detailsPanelOpen}
+            revisionPanelOpen={revisionPanelOpen}
+            onRetry={() => selectedWorkflow && setSelectedWorkflow({ ...selectedWorkflow })}
+            onStateSelect={handleStateSelect}
+            onOpenDetails={() => setDetailsPanelOpen(true)}
+            onCloseDetails={() => setDetailsPanelOpen(false)}
+            onRevisionSelected={handleRevisionIdSelected}
+            onCloseRevisionPanel={() => setRevisionPanelOpen(false)}
+            onWorkflowGenerated={handleWorkflowGenerated}
+          />
           )}
         </main>
       </div>
