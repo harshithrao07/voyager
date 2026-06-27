@@ -1,5 +1,6 @@
 export interface WorkflowGenerationRequest {
   instruction: string;
+  modelId?: string;
 }
 
 export interface WorkflowGenerationResponse {
@@ -10,6 +11,16 @@ export interface WorkflowGenerationResponse {
 
 export type WorkflowStatusDTO = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
 export type WorkflowPriorityDTO = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface CreateWorkflowRequest {
+  name: string;
+  priority: WorkflowPriorityDTO;
+  cronExpression?: string | null;
+  timezone?: string | null;
+  maxAttempts: number;
+  idempotencyKey: string;
+  definition: any;
+}
 
 export interface ListWorkflowsRequest {
   page?: number;
@@ -108,6 +119,22 @@ export function getWorkflowRevisions(
   request: GetWorkflowRevisionsRequest,
 ): Promise<WorkflowDefinitionResponseDTO[]> {
   return getJson<WorkflowDefinitionResponseDTO[]>(`/app/v1/workflows/${request.workflowId}/revisions`);
+}
+
+export async function createWorkflow(request: CreateWorkflowRequest): Promise<WorkflowResponseDTO> {
+  const response = await fetch('/app/v1/workflows', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to create workflow: ${await readError(response)}`);
+  }
+
+  return response.json();
 }
 
 export async function generateWorkflow(request: WorkflowGenerationRequest): Promise<WorkflowGenerationResponse> {

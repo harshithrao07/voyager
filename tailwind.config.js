@@ -8,6 +8,10 @@ export default {
   theme: {
     extend: {
       colors: {
+        "brand-primary": "#ffffff",
+        "brand-secondary": "#c8c6c5",
+        "brand-primary-muted": "#353534",
+        "brand-secondary-muted": "#201f1f",
         "surface-container": "#201f1f",
         "on-primary": "#2f3131",
         "surface-container-highest": "#353534",

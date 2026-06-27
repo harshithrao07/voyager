@@ -7,6 +7,7 @@ import { NodeDetailsPanel } from './components/NodeDetailsPanel';
 import { RevisionHistoryPanel } from './components/RevisionHistoryPanel';
 import { ExecutionStatusView, type ExecutionRun } from './components/ExecutionStatusView';
 import { WorkflowListView, type WorkflowSummary } from './components/WorkflowListView';
+import { CreateWorkflowView } from './components/CreateWorkflowView';
 import {
   getWorkflow,
   getWorkflowRevisions,
@@ -53,6 +54,16 @@ type WorkflowRevision = {
   note: string;
   definition: any;
   runs: ExecutionRun[];
+};
+
+const emptyWorkflowPage: WorkflowPageDTO = {
+  content: [],
+  page: 0,
+  size: 50,
+  totalElements: 0,
+  totalPages: 0,
+  first: true,
+  last: true,
 };
 
 function formatWorkflowStatus(status: WorkflowStatusDTO): WorkflowSummary['status'] {
@@ -189,7 +200,7 @@ function WorkflowDashboard({
         <section className="glass-panel flex h-full min-h-0 flex-col overflow-hidden border border-border-subtle bg-surface">
           <div className="glass-shell flex h-11 shrink-0 items-center justify-between border-b border-border-subtle bg-surface-elevated px-4">
             <div>
-              <h2 className="font-headline-md text-headline-md font-medium text-primary">Workflow Executions</h2>
+              <h2 className="font-display text-[18px] font-semibold leading-6 text-primary">Workflow Executions</h2>
             </div>
             <button className="rounded-DEFAULT border border-border-subtle bg-surface-lowest px-3 py-1.5 font-body-sm text-body-sm text-on-surface-variant transition-colors hover:text-primary">
               Saved view: Open
@@ -242,7 +253,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [revisionPanelOpen, setRevisionPanelOpen] = useState(false);
-  const [activeShellView, setActiveShellView] = useState<'dashboard' | 'workflows'>('workflows');
+  const [activeShellView, setActiveShellView] = useState<'dashboard' | 'workflows' | 'create'>('workflows');
   const [workflowPage, setWorkflowPage] = useState<WorkflowPageDTO | null>(null);
   const [workflowSummaries, setWorkflowSummaries] = useState<WorkflowSummary[]>([]);
   const [workflowListLoading, setWorkflowListLoading] = useState(true);
@@ -273,9 +284,10 @@ function App() {
         setWorkflowSummaries(page.content.map(mapWorkflowSummary));
       })
       .catch((error: Error) => {
-        setWorkflowPage(null);
+        console.warn('Workflow API unavailable, showing empty workflow list.', error);
+        setWorkflowPage(emptyWorkflowPage);
         setWorkflowSummaries([]);
-        setWorkflowListError(error.message);
+        setWorkflowListError(null);
       })
       .finally(() => setWorkflowListLoading(false));
   };
@@ -354,6 +366,30 @@ function App() {
     setActiveTab('visualizer');
   };
 
+  const handleCreateWorkflow = () => {
+    setSelectedWorkflow(null);
+    setRevisionPanelOpen(false);
+    setDetailsPanelOpen(false);
+    setActiveShellView('create');
+  };
+
+  const handleWorkflowCreated = (workflow: WorkflowResponseDTO) => {
+    const summary = mapWorkflowSummary(workflow);
+    setWorkflowPage((current) => current ? {
+      ...current,
+      content: [workflow, ...current.content.filter((item) => item.id !== workflow.id)],
+      totalElements: current.totalElements + (current.content.some((item) => item.id === workflow.id) ? 0 : 1),
+    } : {
+      ...emptyWorkflowPage,
+      content: [workflow],
+      totalElements: 1,
+      totalPages: 1,
+      last: true,
+    });
+    setWorkflowSummaries((current) => [summary, ...current.filter((item) => item.id !== summary.id)]);
+    handleWorkflowSelected(summary);
+  };
+
   const handleRevisionSelected = (revision: WorkflowRevision) => {
     setSelectedRevisionId(revision.id);
     setSelectedStateName(getStartState(revision.definition));
@@ -378,14 +414,9 @@ function App() {
       {/* TopNavBar */}
       <nav className="glass-shell bg-surface-base dark:bg-surface-base border-b border-border-subtle dark:border-border-subtle fixed top-0 left-0 w-full z-50 flex h-11 items-center justify-between px-4">
         <div className="flex items-center gap-element-gap-md">
-          <div className="font-headline-md text-[15px] font-extrabold leading-none text-primary dark:text-primary">
+          <div className="font-display text-[16px] font-extrabold leading-none text-primary dark:text-primary">
             Agentic Workflow
           </div>
-          <button className="hidden h-7 items-center gap-2 rounded-DEFAULT border border-border-subtle bg-surface-elevated px-2.5 font-mono-sm text-[11px] text-on-surface-variant transition-colors hover:border-border-muted hover:text-primary md:flex">
-            <span className="h-1.5 w-1.5 rounded-full bg-status-success"></span>
-            default namespace
-            <span className="material-symbols-outlined text-[14px]">expand_more</span>
-          </button>
           <div className="ml-4 hidden h-full items-center gap-element-gap-sm xl:flex">
             <div className="relative group">
               <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]">search</span>
@@ -410,9 +441,11 @@ function App() {
         >
           <div className={`mb-4 px-3 ${sidebarOpen ? '' : 'px-2'}`}>
             <button
+              onClick={handleCreateWorkflow}
               className={`flex h-10 w-full items-center rounded-DEFAULT border border-border-subtle bg-surface-elevated font-body-sm text-body-sm text-primary transition-colors hover:bg-surface-container ${sidebarOpen ? 'justify-center gap-2 px-3' : 'justify-center px-0'}`}
               aria-label="New Workflow"
               title="New Workflow"
+              type="button"
             >
               <span className="material-symbols-outlined text-[18px]">add</span>
               <span className={sidebarOpen ? 'inline whitespace-nowrap' : 'hidden'}>New Workflow</span>
@@ -486,13 +519,13 @@ function App() {
                 {selectedWorkflow ? (
                   <div className="flex min-w-0 items-center gap-2">
                     <span className={`h-2 w-2 shrink-0 rounded-full ${selectedWorkflow.status === 'Failed' ? 'bg-status-error' : selectedWorkflow.status === 'Paused' || selectedWorkflow.status === 'Archived' ? 'bg-on-surface-variant' : selectedWorkflow.status === 'Draft' ? 'bg-status-info' : 'bg-status-success'}`}></span>
-                    <h1 className="truncate text-headline-md font-headline-md font-semibold text-primary">
+                    <h1 className="truncate font-display text-[20px] font-semibold leading-7 text-primary">
                       {selectedWorkflow.name}
                     </h1>
                   </div>
                 ) : (
-                  <span className="font-headline-md text-headline-md font-semibold text-primary">
-                    {activeShellView === 'dashboard' ? 'Dashboard' : 'Workflow Executions'}
+                  <span className="font-display text-[20px] font-semibold leading-7 text-primary">
+                {activeShellView === 'dashboard' ? 'Dashboard' : activeShellView === 'create' ? 'Create Workflow' : 'Workflow Executions'}
                   </span>
                 )}
               </div>
@@ -546,6 +579,8 @@ function App() {
                   message={workflowListError}
                   action={{ label: 'Retry', onClick: loadWorkflows }}
                 />
+              ) : activeShellView === 'create' ? (
+                <CreateWorkflowView onWorkflowCreated={handleWorkflowCreated} />
               ) : activeShellView === 'dashboard' ? (
                 <WorkflowDashboard
                   workflows={workflowSummaries}
