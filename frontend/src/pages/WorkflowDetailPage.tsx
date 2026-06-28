@@ -1,0 +1,127 @@
+import { PanelRightOpen } from 'lucide-react';
+import { WorkflowGeneratorPanel } from '../components/WorkflowGeneratorPanel';
+import { AslCodeViewer } from '../components/AslCodeViewer';
+import { AslGraphViewer } from '../components/AslGraphViewer';
+import { NodeDetailsPanel } from '../components/NodeDetailsPanel';
+import { RevisionHistoryPanel } from '../components/RevisionHistoryPanel';
+import { ExecutionStatusView, type ExecutionRun } from '../components/ExecutionStatusView';
+import { WorkspaceState } from '../components/WorkspaceState';
+import type { WorkflowResponseDTO } from '../api';
+
+export type WorkflowRevision = {
+  id: string;
+  label: string;
+  timestamp: string;
+  active?: boolean;
+  note: string;
+  definition: any;
+  runs: ExecutionRun[];
+};
+
+type Props = {
+  workflowName: string;
+  workflowDetail: WorkflowResponseDTO | null;
+  workflowRevisions: WorkflowRevision[];
+  workflowDetailLoading: boolean;
+  workflowDetailError: string | null;
+  activeTab: 'visualizer' | 'definition' | 'executions';
+  selectedRevision: WorkflowRevision | null;
+  currentDefinition: any;
+  selectedStateName: string;
+  detailsPanelOpen: boolean;
+  revisionPanelOpen: boolean;
+  onRetry: () => void;
+  onStateSelect: (stateName: string) => void;
+  onOpenDetails: () => void;
+  onCloseDetails: () => void;
+  onRevisionSelected: (revisionId: string) => void;
+  onCloseRevisionPanel: () => void;
+  onWorkflowGenerated: (definition: any) => void;
+};
+
+export function WorkflowDetailPage({
+  workflowName,
+  workflowRevisions,
+  workflowDetailLoading,
+  workflowDetailError,
+  activeTab,
+  selectedRevision,
+  currentDefinition,
+  selectedStateName,
+  detailsPanelOpen,
+  revisionPanelOpen,
+  onRetry,
+  onStateSelect,
+  onOpenDetails,
+  onCloseDetails,
+  onRevisionSelected,
+  onCloseRevisionPanel,
+  onWorkflowGenerated,
+}: Props) {
+  return (
+    <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 relative bg-surface-lowest overflow-hidden">
+        {workflowDetailLoading ? (
+          <WorkspaceState title="Loading workflow" message="Fetching workflow detail and revision history." />
+        ) : workflowDetailError ? (
+          <WorkspaceState
+            title="Could not load workflow"
+            message={workflowDetailError}
+            action={{ label: 'Retry', onClick: onRetry }}
+          />
+        ) : activeTab === 'executions' ? (
+          <ExecutionStatusView workflowName={workflowName} revisionLabel={selectedRevision?.label || 'No revision'} runs={selectedRevision?.runs || []} />
+        ) : activeTab === 'visualizer' ? (
+          <AslGraphViewer
+            definition={currentDefinition}
+            selectedStateName={selectedStateName}
+            onStateSelect={onStateSelect}
+          />
+        ) : (
+          <AslCodeViewer definition={currentDefinition} />
+        )}
+        {activeTab === 'visualizer' && !detailsPanelOpen && !revisionPanelOpen && (
+          <button
+            type="button"
+            onClick={onOpenDetails}
+            className="absolute right-4 top-1/2 z-40 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-DEFAULT border border-border-subtle bg-surface-container-highest/90 text-on-surface-variant shadow-lg backdrop-blur-xl transition-colors hover:border-border-muted hover:bg-surface-container hover:text-primary lg:flex"
+            aria-label="Open node details"
+            title="Open node details"
+          >
+            <PanelRightOpen size={18} />
+          </button>
+        )}
+      </div>
+
+      {(revisionPanelOpen || activeTab === 'definition' || (activeTab === 'visualizer' && detailsPanelOpen)) && (
+        <div
+          id={revisionPanelOpen ? 'revision-history-panel' : undefined}
+          className="glass-panel z-20 hidden w-[360px] flex-col border-l border-border-subtle bg-surface-base shadow-[-8px_0_24px_rgba(0,0,0,0.2)] lg:flex"
+        >
+          {revisionPanelOpen ? (
+            workflowDetailLoading ? (
+              <WorkspaceState title="Loading revisions" message="Fetching /revisions for this workflow." />
+            ) : workflowRevisions.length === 0 ? (
+              <WorkspaceState title="No revisions" message="This workflow does not have revision records yet." />
+            ) : (
+              <RevisionHistoryPanel
+                revisions={workflowRevisions}
+                selectedRevisionId={selectedRevision?.id || ''}
+                onRevisionSelected={onRevisionSelected}
+                onClose={onCloseRevisionPanel}
+              />
+            )
+          ) : activeTab === 'visualizer' ? (
+            <NodeDetailsPanel
+              definition={currentDefinition}
+              selectedStateName={selectedStateName}
+              onClose={onCloseDetails}
+            />
+          ) : (
+            <WorkflowGeneratorPanel onWorkflowGenerated={onWorkflowGenerated} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

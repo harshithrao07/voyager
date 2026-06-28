@@ -1,0 +1,177 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+@layer base {
+  * {
+    scrollbar-color: rgba(51, 53, 57, 0.8) transparent;
+    scrollbar-width: thin;
+  }
+
+  *::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: #333539;
+    border-radius: 4px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: #544242;
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  body {
+    @apply bg-surface-base text-on-surface font-body-sm overflow-hidden;
+  }
+}
+
+@layer utilities {
+  .voyager-main-bg {
+    background: #111317;
+  }
+
+  .grid-background {
+    background-size: 40px 40px;
+    background-image: 
+      linear-gradient(to right, #252b33 1px, transparent 1px),
+      linear-gradient(to bottom, #252b33 1px, transparent 1px);
+  }
+
+  .node-path {
+    stroke: #333539;
+    stroke-width: 2;
+    fill: none;
+  }
+
+  .node-connector {
+    width: 1px;
+    background-color: #333539;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  .pill-tab-bg {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .glass-shell {
+    background: #111317;
+    border-color: #252b33;
+    box-shadow: none;
+  }
+
+  .glass-panel {
+    background: #111317;
+    border-color: #252b33;
+    box-shadow: none;
+  }
+
+  .glass-control {
+    background: #1a1c20;
+    border-color: #252b33;
+    box-shadow: none;
+  }
+
+  .glass-card {
+    background: #1a1c20;
+    border-color: #252b33;
+    box-shadow: none;
+  }
+
+  .mode-switch {
+    position: relative;
+    isolation: isolate;
+    background: #1a1c20;
+    border: 1px solid #252b33;
+    box-shadow: none;
+  }
+
+  .mode-switch::before {
+    content: "";
+    position: absolute;
+    inset-block: 4px;
+    left: 4px;
+    width: calc(50% - 4px);
+    border-radius: 0.125rem;
+    background: #282a2e;
+    border: 1px solid #333539;
+    box-shadow: none;
+    transition: transform 0.18s ease;
+    z-index: -1;
+  }
+
+  .mode-switch[data-mode="manual"]::before {
+    transform: translateX(100%);
+  }
+
+  .workflow-dot-grid {
+    background-image: radial-gradient(#252b33 1px, transparent 1px);
+    background-size: 24px 24px;
+    opacity: 0.58;
+  }
+
+  .workflow-data-packet {
+    filter: drop-shadow(0 0 8px rgba(132, 213, 205, 0.55));
+  }
+
+  .workflow-data-packet-secondary {
+    filter: drop-shadow(0 0 8px rgba(255, 179, 178, 0.5));
+  }
+
+  .workflow-data-packet-error {
+    filter: drop-shadow(0 0 9px rgba(244, 63, 94, 0.85));
+  }
+
+  .workflow-data-packet-error-secondary {
+    filter: drop-shadow(0 0 7px rgba(251, 113, 133, 0.7));
+  }
+
+  .tree-line::before {
+    content: "";
+    position: absolute;
+    left: -13px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-color: #333539;
+  }
+
+  .tree-item-marker {
+    position: absolute;
+    left: -17px;
+    top: 10px;
+    width: 8px;
+    height: 1px;
+    background-color: #333539;
+  }
+}
+
+/* React Flow Overrides */
+.react-flow,
+.react-flow__pane,
+.react-flow__renderer {
+  background: transparent;
+}
+
+.react-flow__handle {
+  width: 6px;
+  height: 6px;
+  background: theme('colors.border-muted');
+  border: none;
+}
+
+@keyframes workflow-edge-dash {
+  to {
+    stroke-dashoffset: -1000;
+  }
+}
