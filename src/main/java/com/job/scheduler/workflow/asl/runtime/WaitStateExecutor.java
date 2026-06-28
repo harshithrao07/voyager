@@ -1,6 +1,7 @@
 package com.job.scheduler.workflow.asl.runtime;
 
 import com.job.scheduler.enums.AslStateType;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 
@@ -14,6 +15,7 @@ public class WaitStateExecutor implements StateExecutor {
     private final AslVariableAssignmentEvaluator assignmentEvaluator;
     private final Clock clock;
 
+    @Autowired
     public WaitStateExecutor(
             AslJsonataEvaluator jsonataEvaluator,
             AslVariableAssignmentEvaluator assignmentEvaluator

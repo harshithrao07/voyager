@@ -2,10 +2,8 @@ services:
   app:
     build:
       context: .
-    # No container_name and no host port mapping so the service can be replicated.
-    # Reach it from the host via the lb service on port 8080.
-    deploy:
-      replicas: 3
+    ports:
+      - "8081:8080"
     environment:
       SPRING_PROFILES_ACTIVE: local
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/jobscheduler
@@ -21,8 +19,6 @@ services:
       OLLAMA_OPENAI_BASE_URL: ${OLLAMA_OPENAI_BASE_URL:-http://host.docker.internal:11434/v1}
       OLLAMA_OPENAI_API_KEY: ${OLLAMA_OPENAI_API_KEY:-ollama}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
-      # Worker id picks up the per-replica container hostname so logs and Redis
-      # lock tokens (workerId:randomUUID) are debuggable across instances.
       SCHEDULER_WORKER_ID: worker-${HOSTNAME:-host}
     depends_on:
       postgres:
@@ -34,21 +30,17 @@ services:
       minio:
         condition: service_healthy
 
-  lb:
-    image: nginx:1.27-alpine
-    container_name: scheduler-lb
+  frontend:
+    build:
+      context: ./frontend
     ports:
-      - "8080:8080"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - "3000:80"
     depends_on:
       - app
 
   postgres:
     image: postgres:16-alpine
-    container_name: scheduler-postgres
-    # Default max_connections=100 is not enough for 3 app replicas
-    # × 30 Hikari pool + admin headroom. Bumped to 300.
+    # Keep enough headroom for the app pool plus local admin connections.
     command: ["postgres", "-c", "max_connections=300"]
     environment:
       POSTGRES_DB: jobscheduler
@@ -66,7 +58,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: scheduler-redis
     ports:
       - "6379:6379"
     volumes:
@@ -79,7 +70,6 @@ services:
 
   kafka:
     image: apache/kafka:4.1.2
-    container_name: scheduler-kafka
     hostname: kafka
     ports:
       - "9092:9092"
@@ -107,7 +97,6 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: scheduler-minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin

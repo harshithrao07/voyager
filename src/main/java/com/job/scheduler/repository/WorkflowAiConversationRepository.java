@@ -9,6 +9,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
 import java.util.UUID;
+import java.util.List;
 
 public interface WorkflowAiConversationRepository
         extends JpaRepository<WorkflowAiConversation, UUID> {
@@ -17,4 +18,6 @@ public interface WorkflowAiConversationRepository
     Optional<WorkflowAiConversation> findByIdForUpdate(
             @Param("conversationId") UUID conversationId
     );
+
+    List<WorkflowAiConversation> findTop50ByOrderByUpdatedAtDesc();
 }

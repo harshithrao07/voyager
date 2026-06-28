@@ -1,6 +1,9 @@
 package com.job.scheduler.service;
 
 import com.job.scheduler.dto.CreateWorkflowRequestDTO;
+import com.job.scheduler.dto.WorkflowAiConversationDetailDTO;
+import com.job.scheduler.dto.WorkflowAiConversationSummaryDTO;
+import com.job.scheduler.dto.WorkflowAiMessageDTO;
 import com.job.scheduler.dto.WorkflowAiResponseDTO;
 import com.job.scheduler.dto.WorkflowResponseDTO;
 import com.job.scheduler.entity.AiModelConfig;
@@ -20,6 +23,8 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.output.Response;
+import dev.langchain4j.model.output.TokenUsage;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
@@ -28,15 +33,23 @@ import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class WorkflowAiConversationService {
+    private static final Pattern THINKING_PATTERN = Pattern.compile(
+            "(?is)<think(?:ing)?>(.*?)</think(?:ing)?>"
+    );
+
     private static final String SYSTEM_PROMPT = """
             You are Voyager's workflow builder for this scheduler.
             Return strict JSON only with these fields:
@@ -52,6 +65,8 @@ public class WorkflowAiConversationService {
             Ask clarifying questions until the workflow is clear. When ASL is ready, include aslDefinition.
             After ASL is approved, collect workflow name, cron expression if scheduled, timezone, priority, and max attempts.
             When everything is ready, return PLAN_READY with finalPlan and draftWorkflowPayload.
+            If the selected local model supports visible reasoning, put that reasoning before the JSON as <think>...</think>.
+            The content after </think> must still be strict JSON only.
             """;
 
     private final AiModelConfigService aiModelConfigService;
@@ -62,6 +77,22 @@ public class WorkflowAiConversationService {
     private final AslRuntimeCapabilityValidator runtimeCapabilityValidator;
     private final WorkflowService workflowService;
     private final ObjectMapper objectMapper;
+
+    public List<WorkflowAiConversationSummaryDTO> listConversations() {
+        return conversationRepository.findTop50ByOrderByUpdatedAtDesc()
+                .stream()
+                .map(this::summary)
+                .toList();
+    }
+
+    public WorkflowAiConversationDetailDTO getConversation(UUID conversationId) {
+        WorkflowAiConversation conversation = conversationRepository.findById(conversationId)
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "Workflow AI conversation does not exist"
+                ));
+
+        return detail(conversation);
+    }
 
     @Transactional
     public WorkflowAiResponseDTO startConversation(
@@ -84,7 +115,8 @@ public class WorkflowAiConversationService {
                 conversation,
                 WorkflowAiMessageRole.USER,
                 withDateContext(normalizedInstruction, userDateTime),
-                null
+                null,
+                modelConfig
         );
 
         return callAssistant(conversation, "Start from the user's first instruction.");
@@ -93,16 +125,52 @@ public class WorkflowAiConversationService {
     @Transactional
     public WorkflowAiResponseDTO continueConversation(
             UUID conversationId,
-            String message
+            String message,
+            UUID modelConfigId
     ) {
         WorkflowAiConversation conversation = findForUpdate(conversationId);
+        AiModelConfig selectedModel = aiModelConfigService.resolveModel(
+                modelConfigId == null ? conversation.getModelConfig().getId() : modelConfigId
+        );
+        conversation.setModelConfig(selectedModel);
         appendMessage(
                 conversation,
                 WorkflowAiMessageRole.USER,
                 requireText(message, "Message"),
-                null
+                null,
+                selectedModel
         );
         return callAssistant(conversation, "Continue the workflow design conversation.");
+    }
+
+    @Transactional
+    public WorkflowAiResponseDTO regenerateMessage(
+            UUID messageId,
+            UUID modelConfigId
+    ) {
+        WorkflowAiMessage targetMessage = messageRepository.findById(messageId)
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "Workflow AI message does not exist"
+                ));
+        if (targetMessage.getRole() != WorkflowAiMessageRole.ASSISTANT) {
+            throw new IllegalArgumentException("Only assistant messages can be regenerated");
+        }
+        WorkflowAiConversation conversation = findForUpdate(
+                targetMessage.getConversation().getId()
+        );
+        AiModelConfig selectedModel = aiModelConfigService.resolveModel(
+                modelConfigId == null ? conversation.getModelConfig().getId() : modelConfigId
+        );
+        conversation.setModelConfig(selectedModel);
+
+        List<WorkflowAiMessage> history = historyBeforeMessage(conversation, targetMessage);
+        return callAssistant(
+                conversation,
+                "Regenerate the previous assistant response. Keep the workflow state consistent.",
+                selectedModel,
+                targetMessage,
+                history
+        );
     }
 
     @Transactional
@@ -125,7 +193,8 @@ public class WorkflowAiConversationService {
                 conversation,
                 WorkflowAiMessageRole.USER,
                 reviewInstruction,
-                serialize(definition)
+                serialize(definition),
+                conversation.getModelConfig()
         );
 
         WorkflowAiResponseDTO assistantResponse =
@@ -140,7 +209,8 @@ public class WorkflowAiConversationService {
                     validationIssues,
                     readJson(conversation.getFinalPlan()),
                     readDraftPayload(conversation),
-                    null
+                    null,
+                    assistantResponse.assistantMessage()
             );
         }
 
@@ -158,7 +228,8 @@ public class WorkflowAiConversationService {
                 List.of(),
                 readJson(conversation.getFinalPlan()),
                 readDraftPayload(conversation),
-                null
+                null,
+                assistantResponse.assistantMessage()
         );
     }
 
@@ -175,7 +246,8 @@ public class WorkflowAiConversationService {
                 conversation,
                 WorkflowAiMessageRole.SYSTEM,
                 "Accepted final plan and created draft workflow " + workflow.id(),
-                null
+                null,
+                conversation.getModelConfig()
         );
         return response(
                 conversation,
@@ -184,7 +256,8 @@ public class WorkflowAiConversationService {
                 List.of(),
                 readJson(conversation.getFinalPlan()),
                 draftPayload,
-                workflow
+                workflow,
+                null
         );
     }
 
@@ -192,10 +265,30 @@ public class WorkflowAiConversationService {
             WorkflowAiConversation conversation,
             String task
     ) {
-        ChatLanguageModel model = modelResolver.resolve(conversation.getModelConfig());
-        List<ChatMessage> messages = buildPrompt(conversation, task);
-        String raw = model.generate(messages).content().text().trim();
-        String cleaned = stripMarkdown(raw);
+        return callAssistant(
+                conversation,
+                task,
+                conversation.getModelConfig(),
+                null,
+                null
+        );
+    }
+
+    private WorkflowAiResponseDTO callAssistant(
+            WorkflowAiConversation conversation,
+            String task,
+            AiModelConfig modelConfig,
+            WorkflowAiMessage regeneratedFromMessage,
+            List<WorkflowAiMessage> historyOverride
+    ) {
+        ChatLanguageModel model = modelResolver.resolve(modelConfig);
+        List<ChatMessage> messages = buildPrompt(conversation, task, historyOverride);
+        Instant startedAt = Instant.now();
+        Response<AiMessage> modelResponse = model.generate(messages);
+        long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
+        String raw = modelResponse.content().text().trim();
+        ThinkingExtraction thinkingExtraction = extractThinking(raw);
+        String cleaned = stripMarkdown(thinkingExtraction.answer());
         ParsedAssistantResponse parsed = parseAssistantResponse(cleaned);
 
         JsonNode aslDefinition = parsed.aslDefinition();
@@ -218,11 +311,19 @@ public class WorkflowAiConversationService {
             conversation.setStage(parsed.stage());
         }
 
-        appendMessage(
+        WorkflowAiMessage assistantMessage = appendMessage(
                 conversation,
                 WorkflowAiMessageRole.ASSISTANT,
                 parsed.message() == null ? cleaned : parsed.message(),
-                cleaned
+                cleaned,
+                modelConfig,
+                thinkingExtraction.thinkingContent(),
+                durationMs,
+                modelResponse.tokenUsage(),
+                modelResponse.finishReason() == null
+                        ? null
+                        : modelResponse.finishReason().name(),
+                regeneratedFromMessage
         );
 
         return response(
@@ -236,13 +337,22 @@ public class WorkflowAiConversationService {
                 parsed.draftWorkflowPayload() == null
                         ? readDraftPayload(conversation)
                         : parsed.draftWorkflowPayload(),
-                null
+                null,
+                message(assistantMessage)
         );
     }
 
     private List<ChatMessage> buildPrompt(
             WorkflowAiConversation conversation,
             String task
+    ) {
+        return buildPrompt(conversation, task, null);
+    }
+
+    private List<ChatMessage> buildPrompt(
+            WorkflowAiConversation conversation,
+            String task,
+            List<WorkflowAiMessage> historyOverride
     ) {
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.systemMessage(SYSTEM_PROMPT));
@@ -251,8 +361,10 @@ public class WorkflowAiConversationService {
                         + "\nInitial request: " + conversation.getInitialInstruction()
                         + "\nTask: " + task
         ));
-        for (WorkflowAiMessage message :
-                messageRepository.findByConversationOrderByCreatedAtAsc(conversation)) {
+        List<WorkflowAiMessage> history = historyOverride == null
+                ? messageRepository.findByConversationOrderByCreatedAtAsc(conversation)
+                : historyOverride;
+        for (WorkflowAiMessage message : history) {
             if (message.getRole() == WorkflowAiMessageRole.ASSISTANT) {
                 messages.add(AiMessage.aiMessage(message.getContent()));
             } else if (message.getRole() == WorkflowAiMessageRole.USER) {
@@ -339,14 +451,51 @@ public class WorkflowAiConversationService {
             WorkflowAiConversation conversation,
             WorkflowAiMessageRole role,
             String content,
-            String structuredPayload
+            String structuredPayload,
+            AiModelConfig modelConfig
+    ) {
+        appendMessage(
+                conversation,
+                role,
+                content,
+                structuredPayload,
+                modelConfig,
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+    }
+
+    private WorkflowAiMessage appendMessage(
+            WorkflowAiConversation conversation,
+            WorkflowAiMessageRole role,
+            String content,
+            String structuredPayload,
+            AiModelConfig modelConfig,
+            String thinkingContent,
+            Long durationMs,
+            TokenUsage tokenUsage,
+            String finishReason,
+            WorkflowAiMessage regeneratedFromMessage
     ) {
         WorkflowAiMessage message = new WorkflowAiMessage();
         message.setConversation(conversation);
+        message.setModelConfig(modelConfig);
+        message.setRegeneratedFromMessage(regeneratedFromMessage);
         message.setRole(role);
         message.setContent(content == null ? "" : content);
         message.setStructuredPayload(structuredPayload);
-        messageRepository.save(message);
+        message.setThinkingContent(optionalText(thinkingContent));
+        message.setDurationMs(durationMs);
+        if (tokenUsage != null) {
+            message.setInputTokens(tokenUsage.inputTokenCount());
+            message.setOutputTokens(tokenUsage.outputTokenCount());
+            message.setTotalTokens(tokenUsage.totalTokenCount());
+        }
+        message.setFinishReason(finishReason);
+        return messageRepository.saveAndFlush(message);
     }
 
     private WorkflowAiResponseDTO response(
@@ -356,7 +505,8 @@ public class WorkflowAiConversationService {
             List<String> validationIssues,
             JsonNode finalPlan,
             CreateWorkflowRequestDTO draftWorkflowPayload,
-            WorkflowResponseDTO workflow
+            WorkflowResponseDTO workflow,
+            WorkflowAiMessageDTO assistantMessage
     ) {
         return new WorkflowAiResponseDTO(
                 conversation.getId(),
@@ -368,8 +518,81 @@ public class WorkflowAiConversationService {
                 finalPlan,
                 draftWorkflowPayload,
                 workflow == null ? null : workflow.id(),
-                workflow
+                workflow,
+                assistantMessage
         );
+    }
+
+    private WorkflowAiConversationSummaryDTO summary(
+            WorkflowAiConversation conversation
+    ) {
+        return new WorkflowAiConversationSummaryDTO(
+                conversation.getId(),
+                conversation.getName(),
+                conversation.getStage(),
+                conversation.getModelConfig().getId(),
+                conversation.getModelConfig().getDisplayName(),
+                conversation.getInitialInstruction(),
+                conversation.getCreatedAt(),
+                conversation.getUpdatedAt()
+        );
+    }
+
+    private WorkflowAiConversationDetailDTO detail(
+            WorkflowAiConversation conversation
+    ) {
+        return new WorkflowAiConversationDetailDTO(
+                conversation.getId(),
+                conversation.getName(),
+                conversation.getStage(),
+                conversation.getModelConfig().getId(),
+                conversation.getModelConfig().getDisplayName(),
+                conversation.getInitialInstruction(),
+                readJson(conversation.getDraftAsl()),
+                readJson(conversation.getFinalPlan()),
+                readDraftPayload(conversation),
+                messageRepository.findByConversationOrderByCreatedAtAsc(conversation)
+                        .stream()
+                        .map(this::message)
+                        .toList(),
+                conversation.getCreatedAt(),
+                conversation.getUpdatedAt()
+        );
+    }
+
+    private WorkflowAiMessageDTO message(WorkflowAiMessage message) {
+        return new WorkflowAiMessageDTO(
+                message.getId(),
+                message.getRole(),
+                message.getContent(),
+                message.getModelConfig() == null ? null : message.getModelConfig().getId(),
+                message.getModelConfig() == null ? null : message.getModelConfig().getDisplayName(),
+                message.getDurationMs(),
+                message.getInputTokens(),
+                message.getOutputTokens(),
+                message.getTotalTokens(),
+                message.getThinkingContent(),
+                message.getFinishReason(),
+                message.getRegeneratedFromMessage() == null
+                        ? null
+                        : message.getRegeneratedFromMessage().getId(),
+                message.getCreatedAt()
+        );
+    }
+
+    private List<WorkflowAiMessage> historyBeforeMessage(
+            WorkflowAiConversation conversation,
+            WorkflowAiMessage targetMessage
+    ) {
+        List<WorkflowAiMessage> history = new ArrayList<>();
+        for (WorkflowAiMessage message :
+                messageRepository.findByConversationOrderByCreatedAtAsc(conversation)) {
+            if (message.getId().equals(targetMessage.getId())) {
+                break;
+            }
+            history.add(message);
+        }
+        return history;
     }
 
     private CreateWorkflowRequestDTO fallbackDraftPayload(
@@ -459,6 +682,26 @@ public class WorkflowAiConversationService {
         return output.trim();
     }
 
+    private ThinkingExtraction extractThinking(String value) {
+        String output = value == null ? "" : value;
+        Matcher matcher = THINKING_PATTERN.matcher(output);
+        StringBuilder thinking = new StringBuilder();
+        while (matcher.find()) {
+            String block = matcher.group(1);
+            if (block != null && !block.isBlank()) {
+                if (!thinking.isEmpty()) {
+                    thinking.append("\n\n");
+                }
+                thinking.append(block.trim());
+            }
+        }
+        String answer = matcher.replaceAll("").trim();
+        return new ThinkingExtraction(
+                answer.isBlank() ? output.trim() : answer,
+                thinking.isEmpty() ? null : thinking.toString()
+        );
+    }
+
     private String generateConversationName(String instruction) {
         String compact = instruction.replaceAll("\\s+", " ").trim();
         if (compact.length() <= 48) {
@@ -481,6 +724,10 @@ public class WorkflowAiConversationService {
         return value.trim();
     }
 
+    private String optionalText(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
     private record ParsedAssistantResponse(
             WorkflowAiConversationStage stage,
             String message,
@@ -488,6 +735,12 @@ public class WorkflowAiConversationService {
             JsonNode finalPlan,
             CreateWorkflowRequestDTO draftWorkflowPayload,
             JsonNode draftWorkflowPayloadNode
+    ) {
+    }
+
+    private record ThinkingExtraction(
+            String answer,
+            String thinkingContent
     ) {
     }
 }

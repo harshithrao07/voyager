@@ -47,6 +47,9 @@ public class AiModelConfig {
     @Column(name = "model_name", nullable = false)
     private String modelName;
 
+    @Column(name = "api_key")
+    private String apiKey;
+
     @Column(name = "enabled", nullable = false)
     private boolean enabled = true;
 

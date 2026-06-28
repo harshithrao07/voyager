@@ -11,7 +11,11 @@ public interface AiModelConfigRepository
         extends JpaRepository<AiModelConfig, UUID> {
     List<AiModelConfig> findByEnabledTrueOrderByDefaultModelDescDisplayNameAsc();
 
+    List<AiModelConfig> findAllByOrderByBaseUrlAscDisplayNameAsc();
+
     Optional<AiModelConfig> findFirstByEnabledTrueOrderByDefaultModelDescDisplayNameAsc();
 
     long countByEnabledTrue();
+
+    Optional<AiModelConfig> findByBaseUrlAndModelName(String baseUrl, String modelName);
 }

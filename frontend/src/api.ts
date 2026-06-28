@@ -29,6 +29,34 @@ export interface AiModelConfigDTO {
   defaultModel: boolean;
 }
 
+export interface AiModelConfigRequest {
+  displayName: string;
+  baseUrl: string;
+  modelName: string;
+  apiKey?: string | null;
+  defaultModel: boolean;
+}
+
+export interface AiModelTestRequest {
+  baseUrl: string;
+  modelName?: string | null;
+  apiKey?: string | null;
+}
+
+export interface AiModelTestResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface AiModelDiscoverRequest {
+  baseUrl: string;
+  apiKey?: string | null;
+}
+
+export interface AiModelEnabledRequest {
+  enabled: boolean;
+}
+
 export interface CreateWorkflowRequest {
   name: string;
   priority: WorkflowPriorityDTO;
@@ -48,6 +76,7 @@ export interface WorkflowAiStartRequest {
 export interface WorkflowAiChatRequest {
   conversationId: string;
   message: string;
+  modelConfigId?: string | null;
 }
 
 export interface WorkflowAiReviewAslRequest {
@@ -70,6 +99,45 @@ export interface WorkflowAiResponse {
   draftWorkflowPayload?: CreateWorkflowRequest | null;
   workflowId?: string | null;
   workflow?: WorkflowResponseDTO | null;
+  assistantMessage?: WorkflowAiMessageDTO | null;
+}
+
+export interface WorkflowAiConversationSummaryDTO {
+  id: string;
+  name: string;
+  stage: WorkflowAiStage;
+  modelConfigId?: string | null;
+  modelDisplayName?: string | null;
+  initialInstruction: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowAiMessageDTO {
+  id: string;
+  role: 'USER' | 'ASSISTANT' | 'SYSTEM';
+  content: string;
+  modelConfigId?: string | null;
+  modelDisplayName?: string | null;
+  durationMs?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalTokens?: number | null;
+  thinkingContent?: string | null;
+  finishReason?: string | null;
+  regeneratedFromMessageId?: string | null;
+  createdAt: string;
+}
+
+export interface WorkflowAiConversationDetailDTO extends WorkflowAiConversationSummaryDTO {
+  aslDefinition?: any | null;
+  finalPlan?: any | null;
+  draftWorkflowPayload?: CreateWorkflowRequest | null;
+  messages: WorkflowAiMessageDTO[];
+}
+
+export interface WorkflowAiRegenerateRequest {
+  modelConfigId?: string | null;
 }
 
 export interface ListWorkflowsRequest {
@@ -124,7 +192,23 @@ export interface WorkflowPageDTO {
 
 async function readError(response: Response) {
   const errorText = await response.text().catch(() => 'Unknown error');
-  return `${response.status} - ${errorText || response.statusText || 'Request failed'}`;
+  if (!errorText) {
+    return `${response.status} - ${response.statusText || 'Request failed'}`;
+  }
+
+  try {
+    const parsed = JSON.parse(errorText);
+    const message = parsed.message || parsed.error || errorText;
+    return `${response.status} - ${message}`;
+  } catch {
+    const title = errorText.match(/<title>(.*?)<\/title>/i)?.[1];
+    const heading = errorText.match(/<h1[^>]*>(.*?)<\/h1>/i)?.[1];
+    const plainText = (title || heading || errorText)
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return `${response.status} - ${plainText.slice(0, 180)}${plainText.length > 180 ? '...' : ''}`;
+  }
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -173,6 +257,94 @@ export function getWorkflowRevisions(
 
 export function listAiModels(): Promise<AiModelConfigDTO[]> {
   return getJson<AiModelConfigDTO[]>('/app/v1/ai/models');
+}
+
+export function listAllAiModels(): Promise<AiModelConfigDTO[]> {
+  return getJson<AiModelConfigDTO[]>('/app/v1/ai/models/all');
+}
+
+export async function createAiModel(request: AiModelConfigRequest): Promise<AiModelConfigDTO> {
+  const response = await fetch('/app/v1/ai/models', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to add model: ${await readError(response)}`);
+  }
+
+  return response.json();
+}
+
+export async function testAiModel(request: AiModelTestRequest): Promise<AiModelTestResponse> {
+  const response = await fetch('/app/v1/ai/models/test', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to test model: ${await readError(response)}`);
+  }
+
+  return response.json();
+}
+
+export async function discoverAiModels(request: AiModelDiscoverRequest): Promise<AiModelConfigDTO[]> {
+  const response = await fetch('/app/v1/ai/models/discover', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to discover models: ${await readError(response)}`);
+  }
+
+  return response.json();
+}
+
+export async function setAiModelEnabled(
+  modelId: string,
+  request: AiModelEnabledRequest,
+): Promise<AiModelConfigDTO> {
+  const response = await fetch(`/app/v1/ai/models/${modelId}/enabled`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to update model: ${await readError(response)}`);
+  }
+
+  return response.json();
+}
+
+export async function deleteAiModel(modelId: string): Promise<void> {
+  const response = await fetch(`/app/v1/ai/models/${modelId}`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to delete model: ${await readError(response)}`);
+  }
+}
+export function listWorkflowAiConversations(): Promise<WorkflowAiConversationSummaryDTO[]> {
+  return getJson<WorkflowAiConversationSummaryDTO[]>('/app/v1/workflow-ai/conversations');
+}
+
+export function getWorkflowAiConversation(conversationId: string): Promise<WorkflowAiConversationDetailDTO> {
+  return getJson<WorkflowAiConversationDetailDTO>(`/app/v1/workflow-ai/conversations/${conversationId}`);
 }
 
 export async function createWorkflow(request: CreateWorkflowRequest): Promise<WorkflowResponseDTO> {
@@ -303,4 +475,23 @@ export function reviewWorkflowAiAsl(request: WorkflowAiReviewAslRequest): Promis
 
 export function acceptWorkflowAiPlan(request: WorkflowAiAcceptPlanRequest): Promise<WorkflowAiResponse> {
   return sendWorkflowAiSocket('/app/workflow-ai/accept', request);
+}
+
+export async function regenerateWorkflowAiMessage(
+  messageId: string,
+  request: WorkflowAiRegenerateRequest,
+): Promise<WorkflowAiResponse> {
+  const response = await fetch(`/app/v1/workflow-ai/messages/${messageId}/regenerate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to regenerate message: ${await readError(response)}`);
+  }
+
+  return response.json();
 }

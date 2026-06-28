@@ -10,6 +10,8 @@ import {
   getWorkflow,
   getWorkflowRevisions,
   listWorkflows,
+  listWorkflowAiConversations,
+  type WorkflowAiConversationSummaryDTO,
   type WorkflowDefinitionResponseDTO,
   type WorkflowPageDTO,
   type WorkflowResponseDTO,
@@ -73,6 +75,23 @@ function formatDateTime(value?: string | null) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date);
+}
+
+function formatChatTime(value?: string | null) {
+  if (!value) return '';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function compactChatTitle(chat: WorkflowAiConversationSummaryDTO) {
+  const title = chat.name?.trim() || chat.initialInstruction?.trim() || 'New workflow chat';
+  return title.replace(/\s+/g, ' ');
 }
 
 function formatSchedule(cronExpression?: string | null, timezone?: string | null) {
@@ -157,14 +176,21 @@ function workflowPath(workflowId: string) {
   return `/workflows/${encodeURIComponent(workflowId)}`;
 }
 
+function canonicalPath(pathname: string) {
+  const normalized = pathname.replace(/\/+$/, '') || '/';
+  return normalized === '/workflows/new' ? '/' : pathname;
+}
+
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [revisionPanelOpen, setRevisionPanelOpen] = useState(false);
+  const [newWorkflowResetKey, setNewWorkflowResetKey] = useState(0);
   const [route, setRoute] = useState<AppRoute>(() => parseRoute(window.location.pathname));
   const [workflowPage, setWorkflowPage] = useState<WorkflowPageDTO | null>(null);
   const [workflowSummaries, setWorkflowSummaries] = useState<WorkflowSummary[]>([]);
+  const [chatSummaries, setChatSummaries] = useState<WorkflowAiConversationSummaryDTO[]>([]);
   const [workflowListLoading, setWorkflowListLoading] = useState(true);
   const [workflowListError, setWorkflowListError] = useState<string | null>(null);
   const [workflowDetail, setWorkflowDetail] = useState<WorkflowResponseDTO | null>(null);
@@ -182,15 +208,31 @@ function App() {
     workflowRevisions[0] ||
     null;
   const currentDefinition = selectedRevision?.definition || workflowDetail?.activeDefinition?.definition || workflowDef;
-  const navigate = (path: string) => {
+  const navigate = (path: string, options: { replace?: boolean } = {}) => {
     if (window.location.pathname !== path) {
-      window.history.pushState({}, '', path);
+      if (options.replace) {
+        window.history.replaceState({}, '', path);
+      } else {
+        window.history.pushState({}, '', path);
+      }
     }
     setRoute(parseRoute(path));
   };
 
   useEffect(() => {
-    const handlePopState = () => setRoute(parseRoute(window.location.pathname));
+    const currentPath = canonicalPath(window.location.pathname);
+    if (currentPath !== window.location.pathname) {
+      window.history.replaceState({}, '', currentPath);
+      setRoute(parseRoute(currentPath));
+    }
+
+    const handlePopState = () => {
+      const path = canonicalPath(window.location.pathname);
+      if (path !== window.location.pathname) {
+        window.history.replaceState({}, '', path);
+      }
+      setRoute(parseRoute(path));
+    };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
@@ -227,6 +269,18 @@ function App() {
 
   useEffect(() => {
     loadWorkflows();
+  }, []);
+
+  const loadChats = () => {
+    listWorkflowAiConversations()
+      .then(setChatSummaries)
+      .catch((error: Error) => {
+        console.warn('Workflow AI chat history unavailable.', error);
+      });
+  };
+
+  useEffect(() => {
+    loadChats();
   }, []);
 
   useEffect(() => {
@@ -338,7 +392,29 @@ function App() {
     setSelectedWorkflow(null);
     setRevisionPanelOpen(false);
     setDetailsPanelOpen(false);
-    navigate('/workflows/new');
+    setNewWorkflowResetKey((key) => key + 1);
+    navigate('/');
+  };
+
+  const upsertChatSummary = (
+    previousId: string | null,
+    chat: WorkflowAiConversationSummaryDTO,
+  ) => {
+    setChatSummaries((current) => {
+      const filtered = current.filter((item) => (
+        item.id !== chat.id && (!previousId || item.id !== previousId)
+      ));
+      return [chat, ...filtered].sort((left, right) => (
+        new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+      ));
+    });
+  };
+
+  const handleChatSelected = (chat: WorkflowAiConversationSummaryDTO) => {
+    setSelectedWorkflow(null);
+    setRevisionPanelOpen(false);
+    setDetailsPanelOpen(false);
+    navigate(`/c/${chat.id}`);
   };
 
   const handleWorkflowCreated = (workflow: WorkflowResponseDTO) => {
@@ -397,11 +473,7 @@ function App() {
               <>
                 <button
                   type="button"
-                  onClick={() => {
-                    setSelectedWorkflow(null);
-                    setRevisionPanelOpen(false);
-                    navigate('/');
-                  }}
+                  onClick={handleCreateWorkflow}
                   className="flex items-center gap-1.5 text-left"
                   title="Voyager"
                 >
@@ -412,7 +484,10 @@ function App() {
             ) : (
               <button
                 type="button"
-                onClick={() => setSidebarOpen(true)}
+                onClick={() => {
+                  setSidebarOpen(true);
+                  handleCreateWorkflow();
+                }}
                 className="flex h-9 w-9 items-center justify-center rounded-DEFAULT border border-border-subtle bg-surface-container-lowest"
                 title="Expand sidebar"
               >
@@ -442,18 +517,55 @@ function App() {
               <span className="material-symbols-outlined shrink-0 text-[20px]">search</span>
               <span className={sidebarOpen ? 'inline truncate flex-1 text-left' : 'hidden'}>Search</span>
             </button>
-            {workflowSummaries.length > 0 && (
-              <button
-                className={`relative flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface`}
-                aria-label="Chats"
-                title="Chats"
-                type="button"
-              >
-                <span className="material-symbols-outlined shrink-0 text-[20px]">chat</span>
-                <span className={sidebarOpen ? 'inline truncate flex-1 text-left' : 'hidden'}>Chats</span>
-                {sidebarOpen && <span className="material-symbols-outlined shrink-0 text-[18px]">expand_more</span>}
-              </button>
-            )}
+            <div className={sidebarOpen ? 'pt-3' : 'pt-2'}>
+              {sidebarOpen && (
+                <div className="mb-1 flex items-center justify-between px-2">
+                  <div className="flex items-center gap-2 font-mono-sm text-label-mono text-secondary">
+                    <span className="material-symbols-outlined text-[18px] text-primary">chat_bubble</span>
+                    Chats
+                  </div>
+                  <button
+                    type="button"
+                    className="flex h-7 w-7 items-center justify-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-secondary"
+                    title="Filter chats"
+                    aria-label="Filter chats"
+                  >
+                    <span className="material-symbols-outlined text-[17px]">filter_list</span>
+                  </button>
+                </div>
+              )}
+              <div className="space-y-1">
+                {chatSummaries.length === 0 && sidebarOpen ? (
+                  <div className="mx-2 rounded-DEFAULT border border-border-subtle bg-surface-container-lowest px-3 py-2 font-mono-sm text-[11px] leading-5 text-on-surface-variant">
+                    No chats yet
+                  </div>
+                ) : chatSummaries.map((chat) => {
+                  const active = route.page === 'chat' && route.chatId === chat.id;
+                  const title = compactChatTitle(chat);
+                  const modelLabel = chat.modelDisplayName || 'AI model';
+                  const timeLabel = formatChatTime(chat.updatedAt || chat.createdAt);
+                  return (
+                    <button
+                      key={chat.id}
+                      type="button"
+                      onClick={() => handleChatSelected(chat)}
+                      className={`group relative flex h-10 w-full min-w-0 items-center rounded-DEFAULT font-mono-sm text-[12px] transition-colors ${sidebarOpen ? 'gap-2 px-2' : 'justify-center px-0'} ${active ? 'bg-primary/10 text-secondary shadow-[inset_0_0_0_1px_rgba(255,117,143,0.10)]' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-secondary'}`}
+                      aria-label={`Open chat ${title}`}
+                      title={`${title} - ${modelLabel}`}
+                    >
+                      <span className="material-symbols-outlined shrink-0 text-[18px] text-on-surface-variant group-hover:text-secondary">smart_toy</span>
+                      {active && <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />}
+                      <span className={sidebarOpen ? 'min-w-0 flex-1 truncate text-left' : 'hidden'}>
+                        <span className="inline text-on-surface-variant">&gt;_</span>
+                        <span className="ml-1.5 text-secondary">{title}</span>
+                        {timeLabel && <span className="mx-1.5 text-on-surface-variant">&middot; {timeLabel}</span>}
+                        <span className="text-on-surface-variant">&middot; {modelLabel}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <button
               onClick={() => navigate('/dashboard')}
               className={`relative flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} ${route.page === 'dashboard' ? 'bg-surface-container-low text-on-surface' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface'}`}
@@ -588,7 +700,14 @@ function App() {
           {route.page !== 'workflow' ? (
             <div className="flex-1 min-h-0 overflow-hidden">
               {route.page === 'create' || route.page === 'chat' ? (
-                <CreateWorkflowPage onWorkflowCreated={handleWorkflowCreated} onNavigate={navigate} />
+                <CreateWorkflowPage
+                  key={newWorkflowResetKey}
+                  routeChatId={route.page === 'chat' ? route.chatId : undefined}
+                  onWorkflowCreated={handleWorkflowCreated}
+                  onNavigate={navigate}
+                  onChatStarted={(chat) => upsertChatSummary(null, chat)}
+                  onChatUpdated={upsertChatSummary}
+                />
               ) : workflowListLoading ? (
                 <WorkspaceState title="Loading workflows" message="Fetching workflow list from /app/v1/workflows." />
               ) : workflowListError ? (
@@ -633,11 +752,11 @@ function App() {
       </div>
       {searchModalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-background/80 pt-[20vh] backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex cursor-pointer items-start justify-center bg-background/80 pt-[20vh] backdrop-blur-sm"
           onClick={() => setSearchModalOpen(false)}
         >
           <div
-            className="w-full max-w-2xl px-4"
+            className="w-full max-w-2xl cursor-default px-4"
             onClick={(e) => e.stopPropagation()}
           >
             <input

@@ -32,6 +32,25 @@
   body {
     @apply bg-surface-base text-on-surface font-body-sm overflow-hidden;
   }
+
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href],
+  summary,
+  select,
+  input[type="button"],
+  input[type="checkbox"],
+  input[type="file"],
+  input[type="radio"],
+  input[type="reset"],
+  input[type="submit"] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
 }
 
 @layer utilities {
@@ -136,6 +155,43 @@
     filter: drop-shadow(0 0 7px rgba(251, 113, 133, 0.7));
   }
 
+  .voyager-processing-bars {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 12px;
+  }
+
+  .voyager-processing-bars span {
+    width: 10px;
+    height: 7px;
+    border-radius: 1px;
+    background: #ff758f;
+    opacity: 0.5;
+    animation: voyager-processing-step 0.9s ease-in-out infinite;
+    box-shadow: 0 0 10px rgba(255, 117, 143, 0.3);
+  }
+
+  .voyager-processing-bars span:nth-child(2) {
+    animation-delay: 0.12s;
+  }
+
+  .voyager-processing-bars span:nth-child(3) {
+    animation-delay: 0.24s;
+  }
+
+  .voyager-stream-cursor {
+    display: inline-block;
+    width: 7px;
+    height: 1.1em;
+    margin-left: 3px;
+    transform: translateY(2px);
+    border-radius: 1px;
+    background: #ff758f;
+    animation: voyager-stream-caret 0.85s steps(1, end) infinite;
+    box-shadow: 0 0 10px rgba(255, 117, 143, 0.45);
+  }
+
   .tree-line::before {
     content: "";
     position: absolute;
@@ -173,5 +229,27 @@
 @keyframes workflow-edge-dash {
   to {
     stroke-dashoffset: -1000;
+  }
+}
+
+@keyframes voyager-processing-step {
+  0%, 100% {
+    height: 5px;
+    opacity: 0.35;
+    transform: translateY(1px);
+  }
+  45% {
+    height: 11px;
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes voyager-stream-caret {
+  0%, 48% {
+    opacity: 1;
+  }
+  49%, 100% {
+    opacity: 0;
   }
 }

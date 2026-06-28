@@ -44,6 +44,14 @@ public class WorkflowAiMessage {
     @JoinColumn(name = "conversation_id", nullable = false)
     private WorkflowAiConversation conversation;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "model_config_id")
+    private AiModelConfig modelConfig;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "regenerated_from_message_id")
+    private WorkflowAiMessage regeneratedFromMessage;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "role", nullable = false)
     private WorkflowAiMessageRole role;
@@ -54,6 +62,28 @@ public class WorkflowAiMessage {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "structured_payload", columnDefinition = "jsonb")
     private String structuredPayload;
+
+    @Column(name = "thinking_content", columnDefinition = "TEXT")
+    private String thinkingContent;
+
+    @Column(name = "duration_ms")
+    private Long durationMs;
+
+    @Column(name = "input_tokens")
+    private Integer inputTokens;
+
+    @Column(name = "output_tokens")
+    private Integer outputTokens;
+
+    @Column(name = "total_tokens")
+    private Integer totalTokens;
+
+    @Column(name = "finish_reason", length = 128)
+    private String finishReason;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "metadata_json", columnDefinition = "jsonb")
+    private String metadataJson;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

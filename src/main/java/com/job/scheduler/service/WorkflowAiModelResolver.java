@@ -18,7 +18,9 @@ public class WorkflowAiModelResolver {
         }
         return OpenAiChatModel.builder()
                 .baseUrl(config.getBaseUrl())
-                .apiKey("local")
+                .apiKey(config.getApiKey() == null || config.getApiKey().isBlank()
+                        ? "local"
+                        : config.getApiKey())
                 .modelName(config.getModelName())
                 .timeout(Duration.ofSeconds(90))
                 .maxRetries(0)

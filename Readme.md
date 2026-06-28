@@ -28,20 +28,23 @@ mvn test
 
 Useful local URLs:
 
-- API base URL: `http://localhost:8080/app/v1`
-- Swagger UI: `http://localhost:8080/swagger-ui.html`
-- OpenAPI JSON: `http://localhost:8080/v3/api-docs`
-- Health: `http://localhost:8080/actuator/health`
-- Prometheus metrics: `http://localhost:8080/actuator/prometheus`
+- Frontend UI: `http://localhost:3000`
+- API base URL: `http://localhost:8081/app/v1`
+- Swagger UI: `http://localhost:8081/swagger-ui.html`
+- OpenAPI JSON: `http://localhost:8081/v3/api-docs`
+- Health: `http://localhost:8081/actuator/health`
+- Prometheus metrics: `http://localhost:8081/actuator/prometheus`
 
 Local services:
 
 | Service | Port | Purpose |
 |---|---:|---|
-| App | `8080` | Spring Boot REST API, schedulers, workers |
+| Frontend | `3000` | React UI served by Nginx, proxies API and WebSocket traffic |
+| App | `8081` | Spring Boot REST API, schedulers, workers |
 | PostgreSQL | `5432` | Durable job and execution log storage |
 | Kafka | `9092` | Job queue, high-priority queue, and DLQ |
 | Redis | `6379` | Worker locks and idempotency markers |
+| MinIO | `9000`, `9001` | Workflow data object storage and console |
 | Prometheus | `9090` | Scrapes application and scheduler metrics |
 
 Stop the stack with `docker compose down`. Use `docker compose down -v` when you want a clean database, Kafka log, and Redis state.
