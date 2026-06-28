@@ -83,7 +83,7 @@ export default {
         "unit": "4px",
         "gutter": "1.5rem",
         "margin-page": "2rem",
-        "sidebar-width": "260px",
+        "sidebar-width": "200px",
         "content-max-width": "900px",
         "element-gap-xs": "4px",
         "element-gap-sm": "8px",

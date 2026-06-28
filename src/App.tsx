@@ -130,6 +130,7 @@ type AppRoute =
   | { page: 'dashboard' }
   | { page: 'workflows' }
   | { page: 'create' }
+  | { page: 'chat'; chatId: string }
   | { page: 'workflow'; workflowId: string };
 
 function parseRoute(pathname: string): AppRoute {
@@ -138,6 +139,11 @@ function parseRoute(pathname: string): AppRoute {
   if (normalized === '/dashboard') return { page: 'dashboard' };
   if (normalized === '/workflows/new') return { page: 'create' };
   if (normalized === '/workflows') return { page: 'workflows' };
+
+  const chatMatch = normalized.match(/^\/c\/([^/]+)$/);
+  if (chatMatch?.[1]) {
+    return { page: 'chat', chatId: decodeURIComponent(chatMatch[1]) };
+  }
 
   const workflowMatch = normalized.match(/^\/workflows\/([^/]+)$/);
   if (workflowMatch?.[1]) {
@@ -153,6 +159,7 @@ function workflowPath(workflowId: string) {
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [revisionPanelOpen, setRevisionPanelOpen] = useState(false);
   const [route, setRoute] = useState<AppRoute>(() => parseRoute(window.location.pathname));
@@ -186,6 +193,18 @@ function App() {
     const handlePopState = () => setRoute(parseRoute(window.location.pathname));
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSearchModalOpen(false);
+        setDetailsPanelOpen(false);
+        setRevisionPanelOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   const loadWorkflows = () => {
@@ -363,7 +382,7 @@ function App() {
     setRevisionPanelOpen(false);
   };
 
-  const createViewActive = route.page === 'create';
+  const createViewActive = route.page === 'create' || route.page === 'chat';
 
   return (
     <div className="font-body-sm text-body-sm overflow-hidden bg-surface-base selection:bg-primary/30 selection:text-primary">
@@ -413,6 +432,28 @@ function App() {
               {route.page === 'create' && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />}
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>New Workflow</span>
             </button>
+            <button
+              onClick={() => setSearchModalOpen(true)}
+              className={`relative flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface`}
+              aria-label="Search"
+              title="Search"
+              type="button"
+            >
+              <span className="material-symbols-outlined shrink-0 text-[20px]">search</span>
+              <span className={sidebarOpen ? 'inline truncate flex-1 text-left' : 'hidden'}>Search</span>
+            </button>
+            {workflowSummaries.length > 0 && (
+              <button
+                className={`relative flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface`}
+                aria-label="Chats"
+                title="Chats"
+                type="button"
+              >
+                <span className="material-symbols-outlined shrink-0 text-[20px]">chat</span>
+                <span className={sidebarOpen ? 'inline truncate flex-1 text-left' : 'hidden'}>Chats</span>
+                {sidebarOpen && <span className="material-symbols-outlined shrink-0 text-[18px]">expand_more</span>}
+              </button>
+            )}
             <button
               onClick={() => navigate('/dashboard')}
               className={`relative flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} ${route.page === 'dashboard' ? 'bg-surface-container-low text-on-surface' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface'}`}
@@ -485,7 +526,7 @@ function App() {
           </div>
         </aside>
         {/* Main Content Area */}
-        <main className={`voyager-main-bg relative flex h-full w-full flex-1 flex-col transition-[margin] duration-200 ease-out ${sidebarOpen ? 'md:ml-[260px]' : 'md:ml-16'}`}>
+        <main className={`voyager-main-bg relative flex h-full w-full flex-1 flex-col transition-[margin] duration-200 ease-out ${sidebarOpen ? 'md:ml-sidebar-width' : 'md:ml-16'}`}>
           {!createViewActive && (
           <header className="glass-shell z-10 flex min-h-14 flex-shrink-0 items-center px-4 py-2">
             <div className="flex w-full min-w-0 items-center justify-between gap-3">
@@ -546,8 +587,8 @@ function App() {
 
           {route.page !== 'workflow' ? (
             <div className="flex-1 min-h-0 overflow-hidden">
-              {route.page === 'create' ? (
-                <CreateWorkflowPage onWorkflowCreated={handleWorkflowCreated} />
+              {route.page === 'create' || route.page === 'chat' ? (
+                <CreateWorkflowPage onWorkflowCreated={handleWorkflowCreated} onNavigate={navigate} />
               ) : workflowListLoading ? (
                 <WorkspaceState title="Loading workflows" message="Fetching workflow list from /app/v1/workflows." />
               ) : workflowListError ? (
@@ -590,6 +631,24 @@ function App() {
           )}
         </main>
       </div>
+      {searchModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center bg-background/80 pt-[20vh] backdrop-blur-sm"
+          onClick={() => setSearchModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-2xl px-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              autoFocus
+              type="text"
+              placeholder="Search conversations ..."
+              className="w-full rounded-full border border-border-subtle bg-surface-container-highest px-6 py-4 font-mono-sm text-body-lg text-on-surface shadow-lg outline-none placeholder:text-on-surface-variant focus:border-primary/50 focus:ring-1 focus:ring-primary/50"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

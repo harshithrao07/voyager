@@ -16,7 +16,8 @@
     "geist": "^1.7.2",
     "lucide-react": "^1.21.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
