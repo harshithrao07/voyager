@@ -18,6 +18,9 @@ services:
       SCHEDULER_STORAGE_ACCESS_KEY: minioadmin
       SCHEDULER_STORAGE_SECRET_KEY: minioadmin
       SCHEDULER_STORAGE_BUCKET: scheduler-workflow-data
+      OLLAMA_OPENAI_BASE_URL: ${OLLAMA_OPENAI_BASE_URL:-http://host.docker.internal:11434/v1}
+      OLLAMA_OPENAI_API_KEY: ${OLLAMA_OPENAI_API_KEY:-ollama}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
       # Worker id picks up the per-replica container hostname so logs and Redis
       # lock tokens (workerId:randomUUID) are debuggable across instances.
       SCHEDULER_WORKER_ID: worker-${HOSTNAME:-host}
