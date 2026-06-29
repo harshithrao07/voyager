@@ -1,85 +1,70 @@
----
+﻿---
 name: ai-chatbot-ui
-description: [TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]
+description: Build, review, or refine AI chatbot interfaces for Voyager-style apps. Use when implementing chat UX, AI message bubbles, streaming states, thinking/reasoning panels, model pickers, local model endpoint controls, token/time metadata, regenerate/copy/edit actions, chat history sidebars, /c/{id} routes, or backend contracts for chat persistence and model selection.
 ---
 
-# Ai Chatbot Ui
+# AI Chatbot UI
 
 ## Overview
 
-[TODO: 1-2 sentences explaining what this skill enables]
+Use this skill to design and implement production-grade AI chat experiences that match Voyager's current direction: compact dark UI, local/OpenAI-compatible models, visible processing states, thinking panels, message metadata, and persisted chat history.
 
-## Structuring This Skill
+For detailed patterns, current web-backed references, and project-specific checklists, read [references/voyager-ai-chatbot-ui.md](references/voyager-ai-chatbot-ui.md).
 
-[TODO: Choose the structure that best fits this skill's purpose. Common patterns:
+## Workflow
 
-**1. Workflow-Based** (best for sequential processes)
-- Works well when there are clear step-by-step procedures
-- Example: DOCX skill with "Workflow Decision Tree" -> "Reading" -> "Creating" -> "Editing"
-- Structure: ## Overview -> ## Workflow Decision Tree -> ## Step 1 -> ## Step 2...
+1. Inspect the current app before changing UI.
+   - Start with `frontend/src/components/CreateWorkflowView.tsx`, `frontend/src/App.tsx`, `frontend/src/api.ts`, and `frontend/src/index.css`.
+   - Check backend DTOs/controllers/services under `src/main/java/com/job/scheduler` before changing data shape.
 
-**2. Task-Based** (best for tool collections)
-- Works well when the skill offers different operations/capabilities
-- Example: PDF skill with "Quick Start" -> "Merge PDFs" -> "Split PDFs" -> "Extract Text"
-- Structure: ## Overview -> ## Quick Start -> ## Task Category 1 -> ## Task Category 2...
+2. Preserve Voyager's product rules.
+   - Root `/` and "New Workflow" are the same new-chat/new-workflow page.
+   - First user send navigates immediately to `/c/{id}`.
+   - Chat history belongs in the sidebar under `Chats`.
+   - Model choice is per message, not only per conversation.
+   - AI and user messages use the same readable semantic font treatment.
+   - Model names, not generic product names, identify assistant replies.
 
-**3. Reference/Guidelines** (best for standards or specifications)
-- Works well for brand guidelines, coding standards, or requirements
-- Example: Brand styling with "Brand Guidelines" -> "Colors" -> "Typography" -> "Features"
-- Structure: ## Overview -> ## Guidelines -> ## Specifications -> ## Usage...
+3. Build the chat lifecycle.
+   - On send: append the user message and an assistant processing card immediately.
+   - While waiting: show a compact assistant card with "Processing request" and an animated indicator.
+   - On response: replace the processing card with the assistant message.
+   - If thinking is present: reveal thinking first, keep it collapsible, then reveal the answer.
+   - After completion: show token count, duration, regenerate, copy, edit, and more actions.
+   - On error: replace the processing card with an error message and keep the user message.
 
-**4. Capabilities-Based** (best for integrated systems)
-- Works well when the skill provides multiple interrelated features
-- Example: Product Management with "Core Capabilities" -> numbered capability list
-- Structure: ## Overview -> ## Core Capabilities -> ### 1. Feature -> ### 2. Feature...
+4. Treat streaming honestly.
+   - If the backend only returns a complete response, call it progressive reveal or UI streaming.
+   - Use true streaming only when the backend exposes SSE, WebSocket/STOMP, or fetch stream chunks.
+   - Do not fake token metadata; show it only when returned by the backend.
 
-Patterns can be mixed and matched as needed. Most skills combine patterns (e.g., start with task-based, add workflow for complex operations).
+5. Implement model controls as first-class chat UI.
+   - Keep model picker usable near a bottom composer; open upward or sideways when needed.
+   - Group added models by endpoint.
+   - Endpoint enable/disable acts on the endpoint group.
+   - Individual model enable/disable acts only on that model.
+   - Probe refreshes endpoint/model status.
+   - Surface localhost versus Docker host warnings as suggestions, not automatic rewrites.
 
-Delete this entire "Structuring This Skill" section when done - it's just guidance.]
+6. Verify.
+   - Run `npm.cmd run build` for frontend changes.
+   - Run `mvn -DskipTests compile` for backend contract changes.
+   - For visual changes, inspect desktop and narrow layouts with the app running when feasible.
 
-## [TODO: Replace with the first main section based on chosen structure]
+## UI Standards
 
-[TODO: Add content here. See examples in existing skills:
-- Code samples for technical skills
-- Decision trees for complex workflows
-- Concrete examples with realistic user requests
-- References to scripts/templates/references as needed]
+- Keep chat content centered with a practical max width; do not make a landing page for the chat screen.
+- Use stable dimensions for message action rows, model pickers, and composer controls.
+- Keep assistant actions at the lower edge of the assistant card after completion.
+- Keep user actions grouped inside the user card, usually bottom-right.
+- Make long model lists scroll after a small visible count.
+- Use icon buttons with tooltips/titles for copy, regenerate, edit, close, and menus.
+- Avoid explanatory in-app text unless it directly resolves state, error, or action.
 
-## Resources (optional)
+## Backend Standards
 
-Create only the resource directories this skill actually needs. Delete this section if no resources are required.
-
-### scripts/
-Executable code (Python/Bash/etc.) that can be run directly to perform specific operations.
-
-**Examples from other skills:**
-- PDF skill: `fill_fillable_fields.py`, `extract_form_field_info.py` - utilities for PDF manipulation
-- DOCX skill: `document.py`, `utilities.py` - Python modules for document processing
-
-**Appropriate for:** Python scripts, shell scripts, or any executable code that performs automation, data processing, or specific operations.
-
-**Note:** Scripts may be executed without loading into context, but can still be read by Codex for patching or environment adjustments.
-
-### references/
-Documentation and reference material intended to be loaded into context to inform Codex's process and thinking.
-
-**Examples from other skills:**
-- Product management: `communication.md`, `context_building.md` - detailed workflow guides
-- BigQuery: API reference documentation and query examples
-- Finance: Schema documentation, company policies
-
-**Appropriate for:** In-depth documentation, API references, database schemas, comprehensive guides, or any detailed information that Codex should reference while working.
-
-### assets/
-Files not intended to be loaded into context, but rather used within the output Codex produces.
-
-**Examples from other skills:**
-- Brand styling: PowerPoint template files (.pptx), logo files
-- Frontend builder: HTML/React boilerplate project directories
-- Typography: Font files (.ttf, .woff2)
-
-**Appropriate for:** Templates, boilerplate code, document templates, images, icons, fonts, or any files meant to be copied or used in the final output.
-
----
-
-**Not every skill requires all three types of resources.**
+- Persist conversations and messages in the backend.
+- Store `modelConfigId` and `modelDisplayName` on assistant messages so history can show model switches mid-chat.
+- Store `thinkingContent`, `durationMs`, `inputTokens`, `outputTokens`, and `totalTokens` when available.
+- Keep reasoning/thinking separate from final assistant content.
+- Never require a new database migration unless the user explicitly wants one or the existing schema cannot support the requested behavior.

@@ -1,4 +1,4 @@
-interface:
+﻿interface:
   display_name: "AI Chatbot UI"
   short_description: "Build polished AI chat interfaces for Voyager"
-  default_prompt: "Use -chatbot-ui to design and implement a Voyager-style AI chat experience."
+  default_prompt: "Use $ai-chatbot-ui to design and implement a Voyager-style AI chat experience."
