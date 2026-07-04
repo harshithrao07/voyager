@@ -19,6 +19,10 @@ services:
       OLLAMA_OPENAI_BASE_URL: ${OLLAMA_OPENAI_BASE_URL:-http://host.docker.internal:11434/v1}
       OLLAMA_OPENAI_API_KEY: ${OLLAMA_OPENAI_API_KEY:-ollama}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
+      JUDGE0_BASE_URL: ${JUDGE0_BASE_URL:-http://judge0-server:2358}
+      JUDGE0_AUTH_TOKEN: ${JUDGE0_AUTH_TOKEN:-}
+      JUDGE0_ENABLE_PER_PROCESS_AND_THREAD_TIME_LIMIT: ${JUDGE0_ENABLE_PER_PROCESS_AND_THREAD_TIME_LIMIT:-true}
+      JUDGE0_ENABLE_PER_PROCESS_AND_THREAD_MEMORY_LIMIT: ${JUDGE0_ENABLE_PER_PROCESS_AND_THREAD_MEMORY_LIMIT:-true}
       SCHEDULER_WORKER_ID: worker-${HOSTNAME:-host}
     depends_on:
       postgres:
@@ -29,6 +33,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      judge0-server:
+        condition: service_started
 
   frontend:
     build:
@@ -121,8 +127,51 @@ services:
     depends_on:
       - app
 
+  judge0-server:
+    image: judge0/judge0:latest
+    privileged: true
+    volumes:
+      - ./judge0.conf:/judge0.conf:ro
+    # Not published to the host: Judge0 stays private on the Docker network and is
+    # reached only by the app service via http://judge0-server:2358.
+    expose:
+      - "2358"
+    depends_on:
+      - judge0-db
+      - judge0-redis
+    restart: unless-stopped
+
+  judge0-worker:
+    image: judge0/judge0:latest
+    command: ["./scripts/workers"]
+    privileged: true
+    volumes:
+      - ./judge0.conf:/judge0.conf:ro
+    depends_on:
+      - judge0-server
+      - judge0-db
+      - judge0-redis
+    restart: unless-stopped
+
+  judge0-db:
+    image: postgres:16.2
+    env_file: judge0.conf
+    volumes:
+      - judge0-db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  judge0-redis:
+    image: redis:7.2.4
+    command:
+      - bash
+      - -c
+      - docker-entrypoint.sh --appendonly no --requirepass "$$REDIS_PASSWORD"
+    env_file: judge0.conf
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:
   kafka-data:
   minio-data:
+  judge0-db-data:

@@ -1,5 +1,6 @@
 package com.job.scheduler.config;
 
+import com.job.scheduler.service.Judge0Client;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
@@ -47,6 +48,34 @@ public class HealthIndicatorConfig {
                 );
                 return Health.up().build();
             } catch (Exception exception) {
+                return Health.down(exception).build();
+            }
+        };
+    }
+
+    /**
+     * Judge0 backs {@code function://} Task resources. Reports UP only when the
+     * engine advertises languages and has at least one execution worker; the
+     * languages/statuses/worker counts are surfaced as details for diagnostics.
+     * Custom indicators like this one are not part of the liveness/readiness
+     * groups, so a Judge0 outage marks {@code /actuator/health} degraded without
+     * failing the app's probes.
+     */
+    @Bean
+    public HealthIndicator judge0HealthIndicator(Judge0Client judge0Client) {
+        return () -> {
+            try {
+                int languages = judge0Client.listLanguages().size();
+                int statuses = judge0Client.countStatuses();
+                Judge0Client.WorkerStats workers = judge0Client.workerStats();
+                boolean healthy = languages > 0 && workers.total() > 0;
+                return (healthy ? Health.up() : Health.down())
+                        .withDetail("languages", languages)
+                        .withDetail("statuses", statuses)
+                        .withDetail("workers", workers.total())
+                        .withDetail("availableWorkers", workers.available())
+                        .build();
+            } catch (RuntimeException exception) {
                 return Health.down(exception).build();
             }
         };

@@ -1,0 +1,19 @@
+package com.job.scheduler.repository;
+
+import com.job.scheduler.entity.FunctionDefinition;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+@Repository
+public interface FunctionDefinitionRepository
+        extends JpaRepository<FunctionDefinition, UUID> {
+    boolean existsByNamespaceAndName(String namespace, String name);
+
+    Optional<FunctionDefinition> findByNamespaceAndName(String namespace, String name);
+
+    List<FunctionDefinition> findAllByOrderByUpdatedAtDesc();
+}

@@ -33,6 +33,20 @@ public final class TaskResourceErrors {
     public static final String MCP_TOOL_NOT_FOUND = "Mcp.ToolNotFound";
     public static final String MCP_TOOL_FAILED = "Mcp.ToolFailed";
 
+    // function://namespace/name@version
+    public static final String TIMEOUT = "States.Timeout";
+    public static final String FUNCTION_NOT_FOUND = "Function.NotFound";
+    public static final String FUNCTION_COMPILE_ERROR =
+            "Function.CompileError";
+    public static final String FUNCTION_RUNTIME_ERROR =
+            "Function.RuntimeError";
+    public static final String FUNCTION_MEMORY_EXCEEDED =
+            "Function.MemoryExceeded";
+    public static final String FUNCTION_INVALID_OUTPUT =
+            "Function.InvalidOutput";
+    public static final String FUNCTION_PLATFORM_ERROR =
+            "Function.PlatformError";
+
     private TaskResourceErrors() {
     }
 }

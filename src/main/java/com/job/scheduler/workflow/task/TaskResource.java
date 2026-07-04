@@ -27,6 +27,15 @@ public interface TaskResource {
      */
     JsonNode execute(URI resource, JsonNode arguments);
 
+    /**
+     * Executes with the workflow {@link TaskExecutionContext}. Resources that
+     * record per-run detail (e.g. function invocations) override this; the rest
+     * fall back to {@link #execute(URI, JsonNode)} and ignore the context.
+     */
+    default JsonNode execute(URI resource, JsonNode arguments, TaskExecutionContext context) {
+        return execute(resource, arguments);
+    }
+
     /** The resource operation: the URI host, or its trimmed path when hostless. */
     default String operation(URI resource) {
         String host = resource.getHost();

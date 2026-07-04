@@ -75,8 +75,8 @@ class WorkflowTaskWorkerServiceTest {
 
         worker.process(new WorkflowTaskDispatchEvent(attempt.getId()));
 
-        verify(attemptRepository, never()).findById(any());
-        verify(resourceRouter, never()).execute(any(), any());
+        verify(attemptRepository, never()).findByIdWithWorkerContext(any());
+        verify(resourceRouter, never()).execute(any(), any(), any());
     }
 
     @Test
@@ -84,10 +84,11 @@ class WorkflowTaskWorkerServiceTest {
         var result = objectMapper.createObjectNode().put("ok", true);
         when(queueService.claimForExecution(attempt.getId(), "worker-1"))
                 .thenReturn(true);
-        when(attemptRepository.findById(attempt.getId()))
+        when(attemptRepository.findByIdWithWorkerContext(attempt.getId()))
                 .thenReturn(Optional.of(attempt));
         when(resourceRouter.execute(
                 eq("scheduler://cleanup"),
+                any(),
                 any()
         )).thenReturn(result);
         when(workflowInterpreter.completeTaskSuccess(attempt.getId(), result))
@@ -111,9 +112,9 @@ class WorkflowTaskWorkerServiceTest {
     void persistsBasicTaskFailure() {
         when(queueService.claimForExecution(attempt.getId(), "worker-1"))
                 .thenReturn(true);
-        when(attemptRepository.findById(attempt.getId()))
+        when(attemptRepository.findByIdWithWorkerContext(attempt.getId()))
                 .thenReturn(Optional.of(attempt));
-        when(resourceRouter.execute(any(), any()))
+        when(resourceRouter.execute(any(), any(), any()))
                 .thenThrow(new IllegalArgumentException("bad arguments"));
 
         worker.process(new WorkflowTaskDispatchEvent(attempt.getId()));
@@ -129,9 +130,9 @@ class WorkflowTaskWorkerServiceTest {
     void resumesInterpreterWhenTaskFailureIsCaught() {
         when(queueService.claimForExecution(attempt.getId(), "worker-1"))
                 .thenReturn(true);
-        when(attemptRepository.findById(attempt.getId()))
+        when(attemptRepository.findByIdWithWorkerContext(attempt.getId()))
                 .thenReturn(Optional.of(attempt));
-        when(resourceRouter.execute(any(), any()))
+        when(resourceRouter.execute(any(), any(), any()))
                 .thenThrow(new IllegalArgumentException("bad arguments"));
         when(workflowInterpreter.completeTaskFailure(
                 attempt.getId(),

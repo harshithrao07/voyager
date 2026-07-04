@@ -5,6 +5,7 @@ import com.job.scheduler.entity.StateExecutionAttempt;
 import com.job.scheduler.repository.StateExecutionAttemptRepository;
 import com.job.scheduler.workflow.asl.runtime.InterpreterOutcome;
 import com.job.scheduler.workflow.asl.runtime.WorkflowInterpreter;
+import com.job.scheduler.workflow.task.TaskExecutionContext;
 import com.job.scheduler.workflow.task.TaskResourceException;
 import com.job.scheduler.workflow.task.TaskResourceRouter;
 import lombok.RequiredArgsConstructor;
@@ -36,20 +37,25 @@ public class WorkflowTaskWorkerService {
         }
 
         StateExecutionAttempt attempt = attemptRepository
-                .findById(event.stateExecutionAttemptId())
+                .findByIdWithWorkerContext(event.stateExecutionAttemptId())
                 .orElseThrow(() -> new IllegalStateException(
                         "Claimed task attempt does not exist"
                 ));
+        WorkerAttemptContext context = contextFor(attempt);
         final JsonNode result;
         try (TaskAttemptHeartbeatService.HeartbeatLease ignored =
                      heartbeatService.start(
                              attempt.getId(),
                              workerId,
-                             attempt.getHeartbeatSeconds()
+                             context.heartbeatSeconds()
                      )) {
             result = resourceRouter.execute(
-                    attempt.getStateExecution().getResource(),
-                    readJson(attempt.getArguments())
+                    context.resource(),
+                    readJson(context.arguments()),
+                    new TaskExecutionContext(
+                            context.workflowExecutionId(),
+                            context.stateName()
+                    )
             );
         } catch (TaskResourceException exception) {
             InterpreterOutcome outcome = workflowInterpreter.completeTaskFailure(
@@ -57,7 +63,7 @@ public class WorkflowTaskWorkerService {
                     exception.error(),
                     causeOf(exception)
             );
-            resumeAfterCatch(attempt, outcome);
+            resumeAfterCatch(context, outcome);
             return;
         } catch (RuntimeException exception) {
             InterpreterOutcome outcome = workflowInterpreter.completeTaskFailure(
@@ -65,7 +71,7 @@ public class WorkflowTaskWorkerService {
                     taskError(exception),
                     exception.getMessage()
             );
-            resumeAfterCatch(attempt, outcome);
+            resumeAfterCatch(context, outcome);
             return;
         }
 
@@ -74,11 +80,11 @@ public class WorkflowTaskWorkerService {
                         attempt.getId(),
                         result
                 );
-        resumeAfterCatch(attempt, outcome);
+        resumeAfterCatch(context, outcome);
     }
 
     private void resumeAfterCatch(
-            StateExecutionAttempt attempt,
+            WorkerAttemptContext context,
             InterpreterOutcome outcome
     ) {
         // Continued: the scope advanced to its next state. Succeeded/Failed: the
@@ -91,10 +97,22 @@ public class WorkflowTaskWorkerService {
         if (!shouldResume) {
             return;
         }
-        var scope = attempt.getStateExecution().getExecutionScope();
         executionRunner.resume(
+                context.workflowExecutionId(),
+                context.executionScopeId()
+        );
+    }
+
+    private WorkerAttemptContext contextFor(StateExecutionAttempt attempt) {
+        var stateExecution = attempt.getStateExecution();
+        var scope = stateExecution.getExecutionScope();
+        return new WorkerAttemptContext(
+                stateExecution.getResource(),
+                attempt.getArguments(),
+                attempt.getHeartbeatSeconds(),
                 scope.getWorkflowExecution().getId(),
-                scope.getId()
+                scope.getId(),
+                stateExecution.getStateName()
         );
     }
 
@@ -130,5 +148,15 @@ public class WorkflowTaskWorkerService {
             }
         }
         return exception.getMessage();
+    }
+
+    private record WorkerAttemptContext(
+            String resource,
+            String arguments,
+            Long heartbeatSeconds,
+            java.util.UUID workflowExecutionId,
+            java.util.UUID executionScopeId,
+            String stateName
+    ) {
     }
 }

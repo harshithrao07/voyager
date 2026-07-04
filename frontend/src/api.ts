@@ -249,6 +249,189 @@ export function getWorkflow(request: GetWorkflowRequest): Promise<WorkflowRespon
   return getJson<WorkflowResponseDTO>(`/app/v1/workflows/${request.workflowId}`);
 }
 
+export interface FunctionLanguageDTO {
+  id: number;
+  name: string;
+}
+
+export interface Judge0LimitsDTO {
+  cpuTimeLimit: number | null;
+  maxCpuTimeLimit: number | null;
+  wallTimeLimit: number | null;
+  maxWallTimeLimit: number | null;
+  memoryLimit: number | null;
+  maxMemoryLimit: number | null;
+  maxFileSize: number | null;
+  maxExtractSize: number | null;
+  enableNetwork: boolean | null;
+  allowEnableNetwork: boolean | null;
+}
+
+export interface Judge0RuntimeInfoDTO {
+  reachable: boolean;
+  error: string | null;
+  languageCount: number;
+  statusCount: number;
+  workers: number;
+  availableWorkers: number;
+  languages: FunctionLanguageDTO[];
+  limits: Judge0LimitsDTO | null;
+}
+
+export function getFunctionRuntimeInfo(): Promise<Judge0RuntimeInfoDTO> {
+  return getJson<Judge0RuntimeInfoDTO>('/app/v1/functions/runtime');
+}
+
+async function sendJson<T>(url: string, method: string, body: unknown): Promise<T> {
+  const response = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+
+  return response.json();
+}
+
+export type FunctionStatus = 'ENABLED' | 'DISABLED';
+export type FunctionVersionStatus = 'AVAILABLE' | 'ARCHIVED';
+export type FunctionSourceMode = 'SINGLE_FILE' | 'MULTI_FILE';
+export type FunctionInvocationStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+
+export interface FunctionDefinitionDTO {
+  id: string;
+  namespace: string;
+  name: string;
+  displayName: string;
+  description: string | null;
+  activeVersion: number | null;
+  status: FunctionStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FunctionDefinitionRequest {
+  namespace: string;
+  name: string;
+  displayName?: string | null;
+  description?: string | null;
+  status?: FunctionStatus | null;
+}
+
+export interface FunctionVersionDTO {
+  id: string;
+  functionId: string;
+  version: number;
+  sourceMode: FunctionSourceMode;
+  languageId: number;
+  hasSourceCode: boolean;
+  hasAdditionalFiles: boolean;
+  compilerOptions: string | null;
+  commandLineArguments: string | null;
+  cpuTimeLimitSeconds: number;
+  wallTimeLimitSeconds: number;
+  memoryLimitKb: number;
+  maxFileSizeKb: number;
+  maxOutputBytes: number;
+  enableNetwork: boolean;
+  status: FunctionVersionStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FunctionVersionRequest {
+  sourceMode?: FunctionSourceMode;
+  languageId: number;
+  sourceCode?: string | null;
+  additionalFilesBase64?: string | null;
+  compilerOptions?: string | null;
+  commandLineArguments?: string | null;
+  cpuTimeLimitSeconds?: number | null;
+  wallTimeLimitSeconds?: number | null;
+  memoryLimitKb?: number | null;
+  maxFileSizeKb?: number | null;
+  maxOutputBytes?: number | null;
+  enableNetwork?: boolean | null;
+}
+
+export interface FunctionInvocationDTO {
+  id: string;
+  functionId: string;
+  version: number;
+  workflowExecutionId: string | null;
+  stateName: string | null;
+  judge0Token: string | null;
+  status: FunctionInvocationStatus;
+  input: unknown;
+  output: unknown;
+  stdout: string | null;
+  stderr: string | null;
+  compileOutput: string | null;
+  message: string | null;
+  exitCode: number | null;
+  exitSignal: number | null;
+  judge0StatusId: number | null;
+  judge0StatusDescription: string | null;
+  errorName: string | null;
+  errorMessage: string | null;
+  timeSeconds: number | null;
+  wallTimeSeconds: number | null;
+  memoryKb: number | null;
+  startedAt: string;
+  completedAt: string | null;
+  durationMs: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FunctionTestInvocationRequest {
+  version?: number | null;
+  input: unknown;
+}
+
+export function listFunctionLanguages(): Promise<FunctionLanguageDTO[]> {
+  return getJson<FunctionLanguageDTO[]>('/app/v1/functions/languages');
+}
+
+export function listFunctions(): Promise<FunctionDefinitionDTO[]> {
+  return getJson<FunctionDefinitionDTO[]>('/app/v1/functions');
+}
+
+export function getFunctionDefinition(functionId: string): Promise<FunctionDefinitionDTO> {
+  return getJson<FunctionDefinitionDTO>(`/app/v1/functions/${functionId}`);
+}
+
+export function createFunctionDefinition(request: FunctionDefinitionRequest): Promise<FunctionDefinitionDTO> {
+  return sendJson<FunctionDefinitionDTO>('/app/v1/functions', 'POST', request);
+}
+
+export function updateFunctionDefinition(functionId: string, request: FunctionDefinitionRequest): Promise<FunctionDefinitionDTO> {
+  return sendJson<FunctionDefinitionDTO>(`/app/v1/functions/${functionId}`, 'PUT', request);
+}
+
+export function listFunctionVersions(functionId: string): Promise<FunctionVersionDTO[]> {
+  return getJson<FunctionVersionDTO[]>(`/app/v1/functions/${functionId}/versions`);
+}
+
+export function createFunctionVersion(functionId: string, request: FunctionVersionRequest): Promise<FunctionVersionDTO> {
+  return sendJson<FunctionVersionDTO>(`/app/v1/functions/${functionId}/versions`, 'POST', request);
+}
+
+export function activateFunctionVersion(functionId: string, version: number): Promise<FunctionDefinitionDTO> {
+  return sendJson<FunctionDefinitionDTO>(`/app/v1/functions/${functionId}/versions/${version}/activate`, 'POST', {});
+}
+
+export function testInvokeFunction(functionId: string, request: FunctionTestInvocationRequest): Promise<FunctionInvocationDTO> {
+  return sendJson<FunctionInvocationDTO>(`/app/v1/functions/${functionId}/test-invocations`, 'POST', request);
+}
+
+export function listFunctionInvocations(functionId: string): Promise<FunctionInvocationDTO[]> {
+  return getJson<FunctionInvocationDTO[]>(`/app/v1/functions/${functionId}/invocations`);
+}
+
 export function getWorkflowRevisions(
   request: GetWorkflowRevisionsRequest,
 ): Promise<WorkflowDefinitionResponseDTO[]> {

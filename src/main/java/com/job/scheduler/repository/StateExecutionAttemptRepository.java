@@ -21,6 +21,18 @@ public interface StateExecutionAttemptRepository
             int attemptNumber
     );
 
+    @Query("""
+            SELECT attempt
+            FROM StateExecutionAttempt attempt
+            JOIN FETCH attempt.stateExecution stateExecution
+            JOIN FETCH stateExecution.executionScope scope
+            JOIN FETCH scope.workflowExecution
+            WHERE attempt.id = :attemptId
+            """)
+    Optional<StateExecutionAttempt> findByIdWithWorkerContext(
+            @Param("attemptId") UUID attemptId
+    );
+
     Optional<StateExecutionAttempt>
     findFirstByStateExecutionOrderByAttemptNumberDesc(
             StateExecution stateExecution

@@ -18,6 +18,14 @@ public class TaskResourceRouter {
     private final List<TaskResource> resources;
 
     public JsonNode execute(String resource, JsonNode arguments) {
+        return execute(resource, arguments, TaskExecutionContext.NONE);
+    }
+
+    public JsonNode execute(
+            String resource,
+            JsonNode arguments,
+            TaskExecutionContext context
+    ) {
         URI uri = URI.create(resource);
         return resources.stream()
                 .filter(candidate -> candidate.supports(uri))
@@ -26,6 +34,6 @@ public class TaskResourceRouter {
                         TaskResourceErrors.TASK_FAILED,
                         "Unsupported Task resource: " + resource
                 ))
-                .execute(uri, arguments);
+                .execute(uri, arguments, context);
     }
 }

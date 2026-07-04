@@ -4,6 +4,8 @@ import { WorkspaceState } from './components/WorkspaceState';
 import { DashboardPage } from './pages/DashboardPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { CreateWorkflowPage } from './pages/CreateWorkflowPage';
+import { SettingsPage } from './pages/SettingsPage';
+import { FunctionsPage } from './pages/FunctionsPage';
 import { WorkflowDetailPage, type WorkflowRevision } from './pages/WorkflowDetailPage';
 import {
   getWorkflow,
@@ -270,7 +272,9 @@ type AppRoute =
   | { page: 'workflows' }
   | { page: 'create' }
   | { page: 'chat'; chatId: string }
-  | { page: 'workflow'; workflowId: string };
+  | { page: 'workflow'; workflowId: string }
+  | { page: 'settings' }
+  | { page: 'functions' };
 
 function parseRoute(pathname: string): AppRoute {
   const normalized = pathname.replace(/\/+$/, '') || '/';
@@ -278,6 +282,8 @@ function parseRoute(pathname: string): AppRoute {
   if (normalized === '/dashboard') return { page: 'dashboard' };
   if (normalized === '/workflows/new') return { page: 'create' };
   if (normalized === '/workflows') return { page: 'workflows' };
+  if (normalized === '/settings') return { page: 'settings' };
+  if (normalized === '/functions') return { page: 'functions' };
 
   const chatMatch = normalized.match(/^\/c\/([^/]+)$/);
   if (chatMatch?.[1]) {
@@ -596,7 +602,7 @@ function App() {
   // Shared sidebar nav-item styling (design: Voyager.dc.html). Active item gets a
   // surface fill; the accent bar is rendered separately via `navActiveBar`.
   const navItemClass = (active: boolean) =>
-    `relative flex h-10 w-full items-center rounded-lg font-mono-sm text-label-mono transition-colors ${
+    `relative flex h-10 w-full items-center rounded-lg font-mono-sm text-[13px] transition-colors ${
       sidebarOpen ? 'gap-3 px-3' : 'justify-center px-0'
     } ${
       active
@@ -630,27 +636,27 @@ function App() {
                 <button
                   type="button"
                   onClick={() => setSidebarOpen(false)}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border-subtle bg-surface-container-lowest text-on-surface-variant transition-colors hover:text-on-surface"
+                  className="flex h-8 w-8 shrink-0 cursor-ew-resize items-center justify-center rounded-lg border border-border-subtle bg-surface-container-lowest text-on-surface-variant transition-colors hover:text-on-surface"
                   aria-label="Collapse sidebar"
                   aria-controls="app-sidebar"
                   aria-expanded={sidebarOpen}
                   title="Collapse sidebar"
                 >
-                  <span className="material-symbols-outlined text-[18px] leading-none">left_panel_close</span>
+                  <span className="material-symbols-outlined text-[18px] leading-none">menu</span>
                 </button>
               </>
             ) : (
               <button
                 type="button"
                 onClick={() => setSidebarOpen(true)}
-                className="group relative h-[34px] w-[34px]"
+                className="group relative h-[34px] w-[34px] cursor-ew-resize"
                 aria-label="Expand sidebar"
                 aria-controls="app-sidebar"
                 aria-expanded={sidebarOpen}
                 title="Expand sidebar"
               >
                 <img src="/voyager-logo.svg" alt="" className="absolute inset-0 h-[34px] w-[34px] opacity-100 transition-opacity duration-200 group-hover:opacity-0" />
-                <span className="material-symbols-outlined absolute inset-0 flex items-center justify-center text-[20px] leading-none text-primary opacity-0 transition-opacity duration-200 group-hover:opacity-100">left_panel_open</span>
+                <span className="material-symbols-outlined absolute inset-0 flex items-center justify-center text-[20px] leading-none text-primary opacity-0 transition-opacity duration-200 group-hover:opacity-100">left_panel_close</span>
               </button>
             )}
           </div>
@@ -684,7 +690,14 @@ function App() {
             <div className={sidebarOpen ? 'pt-2' : 'pt-1'}>
               <button
                 type="button"
-                onClick={() => setChatsOpen((open) => !open)}
+                onClick={() => {
+                  if (!sidebarOpen) {
+                    setSidebarOpen(true);
+                    setChatsOpen(true);
+                  } else {
+                    setChatsOpen((open) => !open);
+                  }
+                }}
                 className={navItemClass(false)}
                 title="Chats"
                 aria-label={chatsOpen ? 'Collapse chats' : 'Expand chats'}
@@ -709,7 +722,7 @@ function App() {
                       key={chat.id}
                       type="button"
                       onClick={() => handleChatSelected(chat)}
-                      className={`group relative flex h-[38px] w-full min-w-0 items-center gap-2 rounded-lg px-2 font-mono-sm text-[11px] transition-colors ${active ? 'bg-primary/10 text-secondary' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-secondary'}`}
+                      className={`group relative flex h-10 w-full min-w-0 items-center gap-2 rounded-lg px-2 font-mono-sm text-[12px] transition-colors ${active ? 'bg-primary/10 text-secondary' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-secondary'}`}
                       aria-label={`Open chat ${title}`}
                       title={`${title} - ${modelLabel}`}
                     >
@@ -759,13 +772,24 @@ function App() {
               {(route.page === 'workflows' || route.page === 'workflow') && navActiveBar}
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Workflows</span>
             </button>
+            <button
+              onClick={() => navigate('/functions')}
+              className={navItemClass(route.page === 'functions')}
+              aria-label="Functions"
+              title="Functions"
+            >
+              <span className="material-symbols-outlined shrink-0 text-[18px]">function</span>
+              {route.page === 'functions' && navActiveBar}
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Functions</span>
+            </button>
             <div className="mx-2 my-3 h-px bg-border-subtle" />
             <button className={navItemClass(false)} aria-label="Docs" title="Docs">
               <span className="material-symbols-outlined shrink-0 text-[18px]">description</span>
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Docs</span>
             </button>
-            <button className={navItemClass(false)} aria-label="Settings" title="Settings">
+            <button onClick={() => navigate('/settings')} className={navItemClass(route.page === 'settings')} aria-label="Settings" title="Settings">
               <span className="material-symbols-outlined shrink-0 text-[18px]">settings</span>
+              {route.page === 'settings' && navActiveBar}
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Settings</span>
             </button>
           </div>
@@ -803,7 +827,7 @@ function App() {
                   </div>
                 ) : (
                   <span className="font-display text-[16px] font-semibold leading-6 text-primary">
-                {route.page === 'dashboard' ? 'Dashboard' : 'Workflow Executions'}
+                {route.page === 'dashboard' ? 'Dashboard' : route.page === 'settings' ? 'Settings' : route.page === 'functions' ? 'Functions' : 'Workflow Executions'}
                   </span>
                 )}
               </div>
@@ -859,6 +883,10 @@ function App() {
                   onChatStarted={(chat) => upsertChatSummary(null, chat)}
                   onChatUpdated={upsertChatSummary}
                 />
+              ) : route.page === 'settings' ? (
+                <SettingsPage />
+              ) : route.page === 'functions' ? (
+                <FunctionsPage />
               ) : workflowListLoading ? (
                 <WorkspaceState title="Loading workflows" message="Fetching workflow list from /app/v1/workflows." />
               ) : workflowListError ? (
