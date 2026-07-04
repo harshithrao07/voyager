@@ -1,45 +1,62 @@
-import { useState, type ReactNode } from 'react';
-import { Compass, DatabaseZap, HeartPulse, RotateCcw, ShieldCheck, Sparkles } from 'lucide-react';
+import { useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { Compass, Lightbulb, Sparkles, X } from 'lucide-react';
 
 const promptExamples = [
   {
-    icon: <HeartPulse size={15} />,
-    label: 'API health check',
+    label: 'Monitor API health',
     prompt: 'Run an API health check every 5 minutes. If it fails twice, retry once and notify Slack.',
   },
   {
-    icon: <RotateCcw size={15} />,
-    label: 'Failed payment retry',
+    label: 'Retry failed payments',
     prompt: 'Retry failed payment sync jobs with backoff, stop after 3 attempts, and create an alert when all attempts fail.',
   },
   {
-    icon: <DatabaseZap size={15} />,
-    label: 'Fetch transform notify',
+    label: 'Fetch, transform, notify',
     prompt: 'Fetch customer records from an API, transform the response, store the result, then notify the operations channel.',
   },
   {
-    icon: <ShieldCheck size={15} />,
-    label: 'Compliance report',
+    label: 'Generate compliance report',
     prompt: 'Generate a daily compliance report, branch on missing data, and send the final summary by email.',
   },
 ];
 
 export function WorkflowAiEmptyState({
   chatInputNode,
-  onSelectPrompt,
+  onSubmitPrompt,
+  onPreviewPrompt,
+  onImportTemplate,
 }: {
   chatInputNode: ReactNode;
-  onSelectPrompt: (prompt: string) => void;
+  onSubmitPrompt: (prompt: string) => void;
+  onPreviewPrompt?: (prompt: string | null) => void;
+  onImportTemplate?: (raw: string, fileName?: string) => void;
 }) {
   const [examplesOpen, setExamplesOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const openTemplatePicker = () => fileInputRef.current?.click();
+
+  const handleTemplateFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      const raw = await file.text();
+      onImportTemplate?.(raw, file.name);
+    } catch {
+      onImportTemplate?.('', file.name);
+    }
+  };
+
+  const previewExample = (prompt: string | null) => onPreviewPrompt?.(prompt);
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 pb-[7vh] pt-6 md:px-8">
-      <div className="w-full max-w-[940px]">
-        <div className="mb-16 text-center">
+      <div className="w-full max-w-[640px]">
+        <div className="mb-14 text-center">
           <div className="voyager-hero-wordmark inline-flex items-center justify-center gap-1.5">
-            <img src="/voyager-logo.svg" alt="" className="h-16 w-16 shrink-0 md:h-20 md:w-20" />
-            <div className="font-mono-sm text-[34px] font-semibold leading-none tracking-normal text-primary md:text-[42px]">Voyager</div>
+            <img src="/voyager-logo.svg" alt="" className="h-16 w-16 shrink-0" />
+            <div className="font-mono-sm text-[38px] font-semibold leading-none tracking-normal text-primary md:text-[40px]">Voyager</div>
           </div>
           <p className="mx-auto mt-3 max-w-[520px] font-mono-sm text-[11px] uppercase tracking-[0.2em] text-secondary/80">
             Smooth sailing for complex workflows
@@ -54,40 +71,73 @@ export function WorkflowAiEmptyState({
           Not sure what to ask? Try one of these
         </div>
 
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,.asl,application/json"
+          className="hidden"
+          onChange={handleTemplateFile}
+        />
+
         <div className="mx-auto mt-4 grid max-w-[560px] gap-4 md:grid-cols-2">
           <ActionTile
             icon={<Sparkles size={15} />}
             title="Import from template"
-            subtitle="Start from a proven workflow"
-            onClick={() => onSelectPrompt('Create a workflow from a proven template for a scheduled data sync with retries, validation, and notification.')}
+            subtitle="Start from an ASL JSON file"
+            onClick={openTemplatePicker}
           />
           <ActionTile
             icon={<Compass size={15} />}
-            title={examplesOpen ? 'Hide examples' : 'Explore examples'}
+            title="Explore examples"
             subtitle="See what's possible"
-            onClick={() => setExamplesOpen((open) => !open)}
+            onClick={() => setExamplesOpen((open) => {
+              const next = !open;
+              if (!next) previewExample(null);
+              return next;
+            })}
             active={examplesOpen}
           />
         </div>
 
         {examplesOpen && (
-          <div className="mx-auto mt-5 grid max-w-[900px] gap-3 md:grid-cols-2">
-            {promptExamples.map((example) => (
+          <div className="voyager-examples-panel mx-auto mt-5 w-full max-w-[600px] rounded-[18px] border text-left">
+            <div className="flex h-10 items-center justify-between px-4">
+              <div className="flex items-center gap-2 text-body-sm text-on-surface-variant">
+                <Lightbulb size={14} className="text-secondary/80" />
+                <span>Voyager's choice</span>
+              </div>
               <button
-                key={example.label}
                 type="button"
-                onClick={() => onSelectPrompt(example.prompt)}
-                className="voyager-action-tile group flex min-h-[64px] items-center gap-3 rounded-lg border border-border-subtle px-4 py-3 text-left transition-colors hover:border-secondary/45"
+                onClick={() => {
+                  previewExample(null);
+                  setExamplesOpen(false);
+                }}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-on-surface transition-colors hover:bg-surface-container-high"
+                title="Close examples"
               >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-secondary/25 bg-secondary-container/25 text-secondary">
-                  {example.icon}
-                </span>
-                <span className="min-w-0">
-                  <span className="block truncate font-mono-sm text-[11px] font-semibold text-on-surface">{example.label}</span>
-                  <span className="mt-0.5 line-clamp-2 block text-body-sm text-on-surface-variant">{example.prompt}</span>
-                </span>
+                <X size={15} />
               </button>
-            ))}
+            </div>
+            <div className="divide-y divide-border-muted/70 px-3 pb-3">
+              {promptExamples.map((example) => (
+                <button
+                  key={example.label}
+                  type="button"
+                  onClick={() => {
+                    previewExample(null);
+                    onSubmitPrompt(example.prompt);
+                  }}
+                  onMouseEnter={() => previewExample(example.prompt)}
+                  onMouseLeave={() => previewExample(null)}
+                  onFocus={() => previewExample(example.prompt)}
+                  onBlur={() => previewExample(null)}
+                  title="Click to send this example"
+                  className="block min-h-[48px] w-full rounded-md px-2 py-3 text-left text-[13px] leading-[1.45] text-on-surface transition-colors hover:bg-surface-container-high/55 focus-visible:bg-surface-container-high focus-visible:outline-none"
+                >
+                  {example.label}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>

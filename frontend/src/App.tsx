@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { WorkflowSummary } from './components/WorkflowListView';
 import { WorkspaceState } from './components/WorkspaceState';
 import { DashboardPage } from './pages/DashboardPage';
@@ -89,6 +88,39 @@ function formatChatTime(value?: string | null) {
   }).format(date);
 }
 
+function formatChatDate(value?: string | null) {
+  if (!value) return 'Unknown date';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown date';
+
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: '2-digit',
+    year: 'numeric',
+  }).format(date);
+}
+
+function formatChatDateTime(value?: string | null) {
+  if (!value) return '';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function chatSortTime(chat: WorkflowAiConversationSummaryDTO) {
+  const date = new Date(chat.updatedAt || chat.createdAt || '');
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
 function compactChatTitle(chat: WorkflowAiConversationSummaryDTO) {
   const title = chat.name?.trim() || chat.initialInstruction?.trim() || 'New workflow chat';
   return title.replace(/\s+/g, ' ');
@@ -145,6 +177,94 @@ function buildGeneratedRevision(definition: any): WorkflowRevision {
   };
 }
 
+function ChatHistoryModal({
+  chats,
+  activeChatId,
+  onClose,
+  onSelect,
+}: {
+  chats: WorkflowAiConversationSummaryDTO[];
+  activeChatId?: string;
+  onClose: () => void;
+  onSelect: (chat: WorkflowAiConversationSummaryDTO) => void;
+}) {
+  let currentDate = '';
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex cursor-pointer items-start justify-center bg-background/80 px-4 pt-[12vh] backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <section
+        className="glass-shell w-full max-w-2xl cursor-default overflow-hidden rounded-xl border border-border-subtle bg-surface-container-lowest shadow-[0_26px_90px_rgba(0,0,0,0.5)]"
+        onClick={(event) => event.stopPropagation()}
+        aria-modal="true"
+        role="dialog"
+        aria-label="All chats"
+      >
+        <header className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
+          <div>
+            <h2 className="font-mono-sm text-[12px] font-semibold text-on-surface">All chats</h2>
+            <p className="mt-0.5 text-body-sm text-on-surface-variant">Sorted by latest activity</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border-subtle bg-surface-container-low text-on-surface-variant transition-colors hover:text-on-surface"
+            aria-label="Close all chats"
+            title="Close"
+          >
+            <span className="material-symbols-outlined text-[17px]">close</span>
+          </button>
+        </header>
+        <div className="max-h-[68vh] overflow-y-auto px-2 py-2">
+          {chats.length === 0 ? (
+            <div className="px-4 py-10 text-center text-body-sm text-on-surface-variant">No chats yet.</div>
+          ) : chats.map((chat) => {
+            const activityAt = chat.updatedAt || chat.createdAt;
+            const dateLabel = formatChatDate(activityAt);
+            const showDate = dateLabel !== currentDate;
+            currentDate = dateLabel;
+            const title = compactChatTitle(chat);
+            const active = chat.id === activeChatId;
+
+            return (
+              <div key={chat.id}>
+                {showDate && (
+                  <div className="px-2 pb-1 pt-3 font-mono-sm text-[10px] uppercase tracking-[0.12em] text-on-surface-variant">
+                    {dateLabel}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onSelect(chat)}
+                  className={`group flex min-h-[52px] w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
+                    active
+                      ? 'bg-primary/10 text-on-surface'
+                      : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface'
+                  }`}
+                  title={title}
+                >
+                  <span className="material-symbols-outlined shrink-0 text-[17px] text-secondary">smart_toy</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-mono-sm text-[11px] text-on-surface">{title}</span>
+                    <span className="mt-0.5 block truncate text-body-sm text-on-surface-variant">
+                      {chat.modelDisplayName || 'AI model'}
+                    </span>
+                  </span>
+                  <span className="shrink-0 font-mono-sm text-[10px] text-on-surface-variant">
+                    {formatChatDateTime(activityAt)}
+                  </span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 type AppRoute =
   | { page: 'dashboard' }
   | { page: 'workflows' }
@@ -183,7 +303,8 @@ function canonicalPath(pathname: string) {
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [chatsOpen, setChatsOpen] = useState(true);
+  const [chatsOpen, setChatsOpen] = useState(false);
+  const [chatHistoryModalOpen, setChatHistoryModalOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [revisionPanelOpen, setRevisionPanelOpen] = useState(false);
@@ -248,6 +369,7 @@ function App() {
 
       if (e.key === 'Escape') {
         setSearchModalOpen(false);
+        setChatHistoryModalOpen(false);
         setDetailsPanelOpen(false);
         setRevisionPanelOpen(false);
       }
@@ -421,6 +543,7 @@ function App() {
     setSelectedWorkflow(null);
     setRevisionPanelOpen(false);
     setDetailsPanelOpen(false);
+    setChatHistoryModalOpen(false);
     navigate(`/c/${chat.id}`);
   };
 
@@ -466,6 +589,23 @@ function App() {
   };
 
   const createViewActive = route.page === 'create' || route.page === 'chat';
+  const sortedChatSummaries = [...chatSummaries].sort((left, right) => chatSortTime(right) - chatSortTime(left));
+  const sidebarChatSummaries = sortedChatSummaries.slice(0, 5);
+  const hiddenChatCount = Math.max(sortedChatSummaries.length - sidebarChatSummaries.length, 0);
+
+  // Shared sidebar nav-item styling (design: Voyager.dc.html). Active item gets a
+  // surface fill; the accent bar is rendered separately via `navActiveBar`.
+  const navItemClass = (active: boolean) =>
+    `relative flex h-10 w-full items-center rounded-lg font-mono-sm text-label-mono transition-colors ${
+      sidebarOpen ? 'gap-3 px-3' : 'justify-center px-0'
+    } ${
+      active
+        ? 'bg-surface-container-low text-on-surface'
+        : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface'
+    }`;
+  const navActiveBar = (
+    <span className="absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" />
+  );
 
   return (
     <div className="font-body-sm text-body-sm overflow-hidden bg-surface-base selection:bg-primary/30 selection:text-primary">
@@ -475,86 +615,91 @@ function App() {
           className={`voyager-sidebar-shell fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border-subtle transition-[width] duration-200 ease-out md:flex ${sidebarOpen ? 'w-sidebar-width' : 'w-16'}`}
           aria-label={sidebarOpen ? 'Expanded navigation' : 'Collapsed navigation'}
         >
-          <div className={`flex border-b border-border-subtle px-3 ${sidebarOpen ? 'h-24 flex-col justify-center' : 'h-16 items-center justify-center px-2'}`}>
+          <div className={`flex h-[72px] items-center border-b border-border-subtle ${sidebarOpen ? 'justify-between px-3.5' : 'justify-center px-0'}`}>
             {sidebarOpen ? (
               <>
                 <button
                   type="button"
                   onClick={handleCreateWorkflow}
-                  className="flex items-center gap-1.5 text-left"
+                  className="flex min-w-0 items-center gap-2 overflow-hidden text-left"
                   title="Voyager"
                 >
-                  <img src="/voyager-logo.svg" alt="" className="h-10 w-10 shrink-0" />
-                  <span className="font-mono-sm text-[18px] font-semibold leading-none tracking-normal text-primary">Voyager</span>
+                  <img src="/voyager-logo.svg" alt="" className="voyager-hero-wordmark h-[34px] w-[34px] shrink-0" />
+                  <span className="font-mono-sm text-[18px] font-semibold leading-none tracking-[-0.01em] text-primary">Voyager</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSidebarOpen(false)}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border-subtle bg-surface-container-lowest text-on-surface-variant transition-colors hover:text-on-surface"
+                  aria-label="Collapse sidebar"
+                  aria-controls="app-sidebar"
+                  aria-expanded={sidebarOpen}
+                  title="Collapse sidebar"
+                >
+                  <span className="material-symbols-outlined text-[18px] leading-none">left_panel_close</span>
                 </button>
               </>
             ) : (
               <button
                 type="button"
-                onClick={() => {
-                  setSidebarOpen(true);
-                  handleCreateWorkflow();
-                }}
-                className="flex h-9 w-9 items-center justify-center rounded-DEFAULT border border-border-subtle bg-surface-container-lowest"
+                onClick={() => setSidebarOpen(true)}
+                className="group relative h-[34px] w-[34px]"
+                aria-label="Expand sidebar"
+                aria-controls="app-sidebar"
+                aria-expanded={sidebarOpen}
                 title="Expand sidebar"
               >
-                <img src="/voyager-logo.svg" alt="" className="h-9 w-9" />
+                <img src="/voyager-logo.svg" alt="" className="absolute inset-0 h-[34px] w-[34px] opacity-100 transition-opacity duration-200 group-hover:opacity-0" />
+                <span className="material-symbols-outlined absolute inset-0 flex items-center justify-center text-[20px] leading-none text-primary opacity-0 transition-opacity duration-200 group-hover:opacity-100">left_panel_open</span>
               </button>
             )}
           </div>
           <div className="flex-1 space-y-1 overflow-y-auto px-1 py-4">
             <button
               onClick={handleCreateWorkflow}
-              className={`relative flex h-10 w-full items-center rounded-lg border font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-3' : 'justify-center px-0'} ${route.page === 'create' ? 'border-primary/55 bg-primary/10 text-on-surface shadow-[0_14px_34px_rgba(240,140,140,0.12)]' : 'border-primary/35 bg-surface-container-low/60 text-on-surface hover:border-primary/55 hover:bg-primary/10'}`}
+              className={navItemClass(route.page === 'create')}
               aria-label="New Workflow"
               title="New Workflow"
               type="button"
             >
               <span className="material-symbols-outlined shrink-0 text-[18px]">add</span>
-              {route.page === 'create' && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />}
+              {route.page === 'create' && navActiveBar}
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>New Workflow</span>
             </button>
             <button
               onClick={() => setSearchModalOpen(true)}
-              className={`relative flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface`}
+              className={navItemClass(false)}
               aria-label="Search"
               title="Search (Ctrl+K)"
               type="button"
             >
               <span className="material-symbols-outlined shrink-0 text-[18px]">search</span>
-              <span className={sidebarOpen ? 'inline truncate flex-1 text-left' : 'hidden'}>Search</span>
+              <span className={sidebarOpen ? 'inline flex-1 truncate text-left' : 'hidden'}>Search</span>
               {sidebarOpen && (
                 <span className="rounded-md border border-border-subtle bg-surface-container-low px-1.5 py-0.5 font-mono-sm text-[10px] text-on-surface-variant">
                   Ctrl K
                 </span>
               )}
             </button>
-            <div className={sidebarOpen ? 'pt-3' : 'pt-2'}>
-              {sidebarOpen && (
-                <>
-                <div className="mb-2 px-2 font-mono-sm text-[10px] uppercase tracking-[0.14em] text-on-surface-variant/70">
-                  Workspace
-                </div>
-                <div className="mb-1 flex items-center justify-between px-2">
-                  <div className="flex items-center gap-2 font-mono-sm text-label-mono text-secondary">
-                    <span className="material-symbols-outlined text-[18px] text-primary">chat_bubble</span>
-                    Chats
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setChatsOpen((open) => !open)}
-                    className="flex h-7 w-7 items-center justify-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-secondary"
-                    title={chatsOpen ? 'Collapse chats' : 'Expand chats'}
-                    aria-label={chatsOpen ? 'Collapse chats' : 'Expand chats'}
-                    aria-expanded={chatsOpen}
-                  >
-                    {chatsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  </button>
-                </div>
-                </>
-              )}
-              <div className="space-y-1">
-                {chatsOpen && chatSummaries.map((chat) => {
+            <div className={sidebarOpen ? 'pt-2' : 'pt-1'}>
+              <button
+                type="button"
+                onClick={() => setChatsOpen((open) => !open)}
+                className={navItemClass(false)}
+                title="Chats"
+                aria-label={chatsOpen ? 'Collapse chats' : 'Expand chats'}
+                aria-expanded={chatsOpen}
+              >
+                <span className="material-symbols-outlined shrink-0 text-[18px]">chat_bubble</span>
+                <span className={sidebarOpen ? 'inline flex-1 truncate text-left' : 'hidden'}>Chats</span>
+                {sidebarOpen && (
+                  <span className="material-symbols-outlined shrink-0 text-[16px]">
+                    {chatsOpen ? 'expand_more' : 'chevron_right'}
+                  </span>
+                )}
+              </button>
+              <div className="mt-0.5 space-y-0.5">
+                {sidebarOpen && chatsOpen && sidebarChatSummaries.map((chat) => {
                   const active = route.page === 'chat' && route.chatId === chat.id;
                   const title = compactChatTitle(chat);
                   const modelLabel = chat.modelDisplayName || 'AI model';
@@ -564,91 +709,82 @@ function App() {
                       key={chat.id}
                       type="button"
                       onClick={() => handleChatSelected(chat)}
-                      className={`group relative flex h-10 w-full min-w-0 items-center rounded-DEFAULT font-mono-sm text-[12px] transition-colors ${sidebarOpen ? 'gap-2 px-2' : 'justify-center px-0'} ${active ? 'bg-primary/10 text-secondary shadow-[inset_0_0_0_1px_rgba(255,117,143,0.10)]' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-secondary'}`}
+                      className={`group relative flex h-[38px] w-full min-w-0 items-center gap-2 rounded-lg px-2 font-mono-sm text-[11px] transition-colors ${active ? 'bg-primary/10 text-secondary' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-secondary'}`}
                       aria-label={`Open chat ${title}`}
                       title={`${title} - ${modelLabel}`}
                     >
-                      <span className="material-symbols-outlined shrink-0 text-[18px] text-on-surface-variant group-hover:text-secondary">smart_toy</span>
-                      {active && <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />}
-                      <span className={sidebarOpen ? 'min-w-0 flex-1 truncate text-left' : 'hidden'}>
-                        <span className="inline text-on-surface-variant">&gt;_</span>
+                      <span className="material-symbols-outlined shrink-0 text-[17px] text-on-surface-variant group-hover:text-secondary">smart_toy</span>
+                      {active && navActiveBar}
+                      <span className="min-w-0 flex-1 truncate text-left">
+                        <span className="text-on-surface-variant">&gt;_</span>
                         <span className="ml-1.5 text-secondary">{title}</span>
-                        {timeLabel && <span className="mx-1.5 text-on-surface-variant">&middot; {timeLabel}</span>}
-                        <span className="text-on-surface-variant">&middot; {modelLabel}</span>
+                        {timeLabel && <span className="ml-1.5 text-on-surface-variant">&middot; {timeLabel}</span>}
                       </span>
                     </button>
                   );
                 })}
+                {sidebarOpen && chatsOpen && hiddenChatCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setChatHistoryModalOpen(true)}
+                    className="flex h-8 w-full items-center gap-2 rounded-lg px-2 font-mono-sm text-[10px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface"
+                    aria-label="View all chats"
+                    title="View all chats"
+                  >
+                    <span className="material-symbols-outlined shrink-0 text-[16px]">more_horiz</span>
+                    <span className="min-w-0 flex-1 truncate text-left">View all chats</span>
+                    <span className="rounded-md border border-border-subtle px-1.5 py-0.5 text-[9px]">{hiddenChatCount}</span>
+                  </button>
+                )}
               </div>
             </div>
+            <div className="mx-2 my-3 h-px bg-border-subtle" />
             <button
               onClick={() => navigate('/dashboard')}
-              className={`relative flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} ${route.page === 'dashboard' ? 'bg-surface-container-low text-on-surface' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface'}`}
+              className={navItemClass(route.page === 'dashboard')}
               aria-label="Dashboard"
               title="Dashboard"
             >
               <span className="material-symbols-outlined shrink-0 text-[18px]">dashboard</span>
-              {route.page === 'dashboard' && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />}
+              {route.page === 'dashboard' && navActiveBar}
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Dashboard</span>
             </button>
             <button
               onClick={() => navigate('/workflows')}
-              className={`relative flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} ${route.page === 'workflows' || route.page === 'workflow' ? 'bg-surface-container-low text-on-surface' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface'}`}
+              className={navItemClass(route.page === 'workflows' || route.page === 'workflow')}
               aria-label="Workflows"
               title="Workflows"
             >
               <span className="material-symbols-outlined shrink-0 text-[18px]">account_tree</span>
-              {(route.page === 'workflows' || route.page === 'workflow') && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />}
+              {(route.page === 'workflows' || route.page === 'workflow') && navActiveBar}
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Workflows</span>
             </button>
-            <button
-              onClick={() => selectedWorkflow && setActiveTab('executions')}
-              className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`}
-              aria-label="Executions"
-              title="Executions"
-            >
-              <span className="material-symbols-outlined shrink-0 text-[18px]">play_circle</span>
-              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Executions</span>
-            </button>
-            <button className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} aria-label="Workers" title="Workers">
-              <span className="material-symbols-outlined shrink-0 text-[18px]">groups</span>
-              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Workers</span>
-            </button>
-            <button className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} aria-label="Schedules" title="Schedules">
-              <span className="material-symbols-outlined shrink-0 text-[18px]">event_repeat</span>
-              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Schedules</span>
-            </button>
             <div className="mx-2 my-3 h-px bg-border-subtle" />
-            <button className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} aria-label="Docs" title="Docs">
+            <button className={navItemClass(false)} aria-label="Docs" title="Docs">
               <span className="material-symbols-outlined shrink-0 text-[18px]">description</span>
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Docs</span>
             </button>
-            <button className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} aria-label="Settings" title="Settings">
+            <button className={navItemClass(false)} aria-label="Settings" title="Settings">
               <span className="material-symbols-outlined shrink-0 text-[18px]">settings</span>
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Settings</span>
             </button>
           </div>
-          <div className="mt-auto space-y-1 border-t border-border-subtle px-1 py-4">
-            <button className={`flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-[11px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} type="button">
-              <span className="material-symbols-outlined shrink-0 text-[17px]">help</span>
-              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Help</span>
-            </button>
-            <button className={`flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-[11px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} type="button">
-              <span className="material-symbols-outlined shrink-0 text-[17px]">monitoring</span>
-              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Status</span>
-              {sidebarOpen && <span className="ml-auto h-2 w-2 rounded-full bg-secondary" />}
-            </button>
+          <div className="mt-auto border-t border-border-subtle p-2.5">
             <button
               type="button"
-              onClick={() => setSidebarOpen((open) => !open)}
-              className={`flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-[11px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`}
-              aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-              aria-controls="app-sidebar"
-              aria-expanded={sidebarOpen}
-              title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+              className={`flex w-full items-center gap-2.5 rounded-xl border border-border-subtle bg-surface-container-lowest p-2 text-left transition-colors hover:bg-surface-container-low ${sidebarOpen ? 'justify-start' : 'justify-center'}`}
+              aria-label="Account"
+              title="admin"
             >
-              {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>admin</span>
+              <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-primary to-primary-fixed font-mono-sm text-[12px] font-semibold text-on-primary">
+                AD
+              </span>
+              {sidebarOpen && (
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[12px] font-semibold text-on-surface">admin</span>
+                  <span className="mt-px block truncate font-mono-sm text-[10px] text-on-surface-variant">Workspace admin</span>
+                </span>
+              )}
             </button>
           </div>
         </aside>
@@ -782,6 +918,14 @@ function App() {
             />
           </div>
         </div>
+      )}
+      {chatHistoryModalOpen && (
+        <ChatHistoryModal
+          chats={sortedChatSummaries}
+          activeChatId={route.page === 'chat' ? route.chatId : undefined}
+          onClose={() => setChatHistoryModalOpen(false)}
+          onSelect={handleChatSelected}
+        />
       )}
     </div>
   );

@@ -21,6 +21,7 @@ type Props = {
   onOpenModelSettings: () => void;
   generating: boolean;
   canGenerate: boolean;
+  placeholder?: string;
 };
 
 export function ChatComposer({
@@ -42,6 +43,7 @@ export function ChatComposer({
   onOpenModelSettings,
   generating,
   canGenerate,
+  placeholder = 'Describe a workflow...',
 }: Props) {
   const hasPrompt = instruction.trim().length > 0;
   const openModelPicker = () => {
@@ -67,25 +69,27 @@ export function ChatComposer({
       : 'Send message';
 
   return (
-    <div className="voyager-composer-shell relative min-h-[126px] rounded-xl border p-5 pb-16 transition-colors">
-      <Sparkles size={15} className="absolute left-6 top-6 text-primary" />
-      <textarea
-        ref={instructionTextareaRef}
-        value={instruction}
-        onChange={(event) => onInstructionChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            handleSubmitIntent();
-          }
-        }}
-        rows={1}
-        className="max-h-[190px] min-h-[48px] w-full resize-none overflow-hidden border-0 bg-transparent pb-7 pl-8 font-body-md text-[13px] leading-5 text-on-surface shadow-none outline-none placeholder:text-on-surface-variant/75 focus:border-0 focus:outline-none focus:ring-0 focus-visible:outline-none"
-        placeholder="Describe a workflow..."
-        disabled={generating}
-      />
+    <div className="voyager-composer-shell relative min-h-[126px] rounded-[14px] border p-[18px] pb-[60px] transition-colors">
+      <div className="flex items-start gap-3">
+        <Sparkles size={15} className="mt-[2px] shrink-0 text-primary" />
+        <textarea
+          ref={instructionTextareaRef}
+          value={instruction}
+          onChange={(event) => onInstructionChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              handleSubmitIntent();
+            }
+          }}
+          rows={1}
+          className="max-h-[190px] min-h-[46px] w-full resize-none overflow-hidden border-0 bg-transparent p-0 pb-7 font-body-md text-[13px] leading-[1.5] text-on-surface shadow-none outline-none placeholder:text-on-surface-variant/75 focus:border-0 focus:outline-none focus:ring-0 focus-visible:outline-none"
+          placeholder={placeholder}
+          disabled={generating}
+        />
+      </div>
 
-      <div ref={modelPickerRef} className="absolute bottom-5 left-5 w-fit">
+      <div ref={modelPickerRef} className="absolute bottom-[18px] left-[18px] w-fit">
         <button
           type="button"
           onClick={() => {
@@ -97,7 +101,7 @@ export function ChatComposer({
           }}
           disabled={generating}
           title={selectedModel ? `Selected model: ${selectedModel.label}` : 'Select a model before sending'}
-          className="inline-flex h-10 max-w-[240px] items-center justify-start gap-2 rounded-lg border border-border-subtle bg-surface-container-low px-3 text-left text-body-md text-on-surface shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)] transition-colors hover:border-primary/45 hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex h-[38px] max-w-[220px] items-center justify-start gap-2 rounded-lg border border-border-subtle bg-surface-container-low px-3 text-left text-body-md text-on-surface shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)] transition-colors hover:border-primary/45 hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-60"
         >
           <span className="flex min-w-0 items-center gap-2">
             <Bot size={14} className="shrink-0 text-primary" />
@@ -110,7 +114,7 @@ export function ChatComposer({
 
         {modelPickerOpen && (
           <div className={`absolute left-0 z-50 w-[min(448px,calc(100vw-32px))] rounded-DEFAULT border border-border-subtle bg-surface-container-lowest p-2 shadow-[0_18px_60px_rgba(0,0,0,0.55)] ${
-            modelPickerPlacement === 'up' ? 'bottom-[48px]' : 'top-[48px]'
+            modelPickerPlacement === 'up' ? 'bottom-[46px]' : 'top-[46px]'
           }`}
           >
             <div className="flex gap-2">
@@ -163,7 +167,7 @@ export function ChatComposer({
         onClick={handleSubmitIntent}
         disabled={sendDisabled}
         title={sendTitle}
-        className="absolute bottom-5 right-5 flex h-10 w-10 items-center justify-center rounded-lg border border-primary/40 bg-primary text-on-primary shadow-[0_12px_34px_rgba(240,140,140,0.28)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-45"
+        className="absolute bottom-[18px] right-[18px] flex h-[38px] w-[38px] items-center justify-center rounded-lg border border-primary/40 bg-primary text-on-primary shadow-[0_12px_34px_rgba(239,138,76,0.28)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-45"
       >
         {generating ? <Loader2 className="animate-spin" size={16} /> : <span className="material-symbols-outlined text-[18px]">arrow_upward</span>}
       </button>

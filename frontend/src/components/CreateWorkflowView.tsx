@@ -213,6 +213,7 @@ export function CreateWorkflowView({
   const [timezone, setTimezone] = useState('UTC');
   const [idempotencyKey, setIdempotencyKey] = useState(newIdempotencyKey);
   const [instruction, setInstruction] = useState('');
+  const [previewPrompt, setPreviewPrompt] = useState<string | null>(null);
   const [models, setModels] = useState<AiModel[]>([]);
   const [allModels, setAllModels] = useState<AiModel[]>([]);
   const [modelId, setModelId] = useState('');
@@ -650,16 +651,22 @@ export function CreateWorkflowView({
     });
   };
 
-  const handleGenerate = async () => {
+  const handleGenerate = async (overrideInstruction?: string) => {
+    const currentInstruction = (overrideInstruction ?? instruction).trim();
+    if (!currentInstruction || generating || saving || accepting) return;
+
     const selectedModelForSend = models.find((model) => model.id === modelId) || null;
     if (!selectedModelForSend) {
+      if (overrideInstruction !== undefined) {
+        setInstruction(currentInstruction);
+        setPreviewPrompt(null);
+        window.requestAnimationFrame(() => instructionTextareaRef.current?.focus());
+      }
       setModelPickerOpen(true);
       toast.error('Select a model before sending.');
       return;
     }
-    if (!canGenerate) return;
 
-    const currentInstruction = instruction;
     const sentAt = Date.now();
     const startingNewConversation = !conversationId;
     const provisionalConversationId = startingNewConversation ? newConversationRouteId() : null;
@@ -1242,16 +1249,30 @@ export function CreateWorkflowView({
     return () => window.clearTimeout(timeout);
   }, [streamingActivityKey]);
 
-  const handleSelectPrompt = (prompt: string) => {
-    setInstruction(prompt);
-    window.requestAnimationFrame(() => instructionTextareaRef.current?.focus());
+  const handleSubmitPrompt = (prompt: string) => {
+    setPreviewPrompt(null);
+    void handleGenerate(prompt);
+  };
+
+  const handleImportTemplate = (raw: string, fileName?: string) => {
+    try {
+      const parsed = parseDefinition(raw);
+      setDefinitionText(formatJson(parsed));
+      setValidationIssues([]);
+      setError(null);
+      setMode('manual');
+      toast.success(fileName ? `Imported ${fileName} into the ASL editor.` : 'Template imported into the ASL editor.');
+    } catch (err: any) {
+      toast.error(err?.message ? `Import failed: ${err.message}` : 'Import failed. Expected ASL JSON with StartAt and States.');
+    }
   };
 
   const chatInputNode = (
     <ChatComposer
       instruction={instruction}
       onInstructionChange={setInstruction}
-      onSubmit={handleGenerate}
+      placeholder={previewPrompt || 'Describe a workflow...'}
+      onSubmit={() => handleGenerate()}
       instructionTextareaRef={instructionTextareaRef}
       modelPickerRef={modelPickerRef}
       selectedModel={selectedModel}
@@ -1292,7 +1313,9 @@ export function CreateWorkflowView({
             {messages.length === 0 ? (
               <WorkflowAiEmptyState
                 chatInputNode={chatInputNode}
-                onSelectPrompt={handleSelectPrompt}
+                onSubmitPrompt={handleSubmitPrompt}
+                onPreviewPrompt={setPreviewPrompt}
+                onImportTemplate={handleImportTemplate}
               />
             ) : (
               <>
