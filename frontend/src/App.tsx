@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { WorkflowSummary } from './components/WorkflowListView';
 import { WorkspaceState } from './components/WorkspaceState';
 import { DashboardPage } from './pages/DashboardPage';
@@ -183,6 +183,7 @@ function canonicalPath(pathname: string) {
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [chatsOpen, setChatsOpen] = useState(true);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [revisionPanelOpen, setRevisionPanelOpen] = useState(false);
@@ -239,6 +240,12 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setSearchModalOpen(true);
+        return;
+      }
+
       if (e.key === 'Escape') {
         setSearchModalOpen(false);
         setDetailsPanelOpen(false);
@@ -465,7 +472,7 @@ function App() {
       <div className="flex h-screen">
         <aside
           id="app-sidebar"
-          className={`fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border-subtle bg-surface-container-lowest transition-[width] duration-200 ease-out md:flex ${sidebarOpen ? 'w-sidebar-width' : 'w-16'}`}
+          className={`voyager-sidebar-shell fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-border-subtle transition-[width] duration-200 ease-out md:flex ${sidebarOpen ? 'w-sidebar-width' : 'w-16'}`}
           aria-label={sidebarOpen ? 'Expanded navigation' : 'Collapsed navigation'}
         >
           <div className={`flex border-b border-border-subtle px-3 ${sidebarOpen ? 'h-24 flex-col justify-center' : 'h-16 items-center justify-center px-2'}`}>
@@ -477,8 +484,8 @@ function App() {
                   className="flex items-center gap-1.5 text-left"
                   title="Voyager"
                 >
-                  <img src="/voyager-logo.svg" alt="" className="h-12 w-12 shrink-0" />
-                  <span className="font-mono-sm text-[24px] font-semibold leading-none tracking-normal text-primary">Voyager</span>
+                  <img src="/voyager-logo.svg" alt="" className="h-10 w-10 shrink-0" />
+                  <span className="font-mono-sm text-[18px] font-semibold leading-none tracking-normal text-primary">Voyager</span>
                 </button>
               </>
             ) : (
@@ -498,27 +505,36 @@ function App() {
           <div className="flex-1 space-y-1 overflow-y-auto px-1 py-4">
             <button
               onClick={handleCreateWorkflow}
-              className={`relative flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} ${route.page === 'create' ? 'bg-surface-container-low text-on-surface' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface'}`}
+              className={`relative flex h-10 w-full items-center rounded-lg border font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-3' : 'justify-center px-0'} ${route.page === 'create' ? 'border-primary/55 bg-primary/10 text-on-surface shadow-[0_14px_34px_rgba(240,140,140,0.12)]' : 'border-primary/35 bg-surface-container-low/60 text-on-surface hover:border-primary/55 hover:bg-primary/10'}`}
               aria-label="New Workflow"
               title="New Workflow"
               type="button"
             >
-              <span className="material-symbols-outlined shrink-0 text-[20px]">add</span>
+              <span className="material-symbols-outlined shrink-0 text-[18px]">add</span>
               {route.page === 'create' && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />}
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>New Workflow</span>
             </button>
             <button
               onClick={() => setSearchModalOpen(true)}
-              className={`relative flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface`}
+              className={`relative flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono transition-colors ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'} text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface`}
               aria-label="Search"
-              title="Search"
+              title="Search (Ctrl+K)"
               type="button"
             >
-              <span className="material-symbols-outlined shrink-0 text-[20px]">search</span>
+              <span className="material-symbols-outlined shrink-0 text-[18px]">search</span>
               <span className={sidebarOpen ? 'inline truncate flex-1 text-left' : 'hidden'}>Search</span>
+              {sidebarOpen && (
+                <span className="rounded-md border border-border-subtle bg-surface-container-low px-1.5 py-0.5 font-mono-sm text-[10px] text-on-surface-variant">
+                  Ctrl K
+                </span>
+              )}
             </button>
             <div className={sidebarOpen ? 'pt-3' : 'pt-2'}>
               {sidebarOpen && (
+                <>
+                <div className="mb-2 px-2 font-mono-sm text-[10px] uppercase tracking-[0.14em] text-on-surface-variant/70">
+                  Workspace
+                </div>
                 <div className="mb-1 flex items-center justify-between px-2">
                   <div className="flex items-center gap-2 font-mono-sm text-label-mono text-secondary">
                     <span className="material-symbols-outlined text-[18px] text-primary">chat_bubble</span>
@@ -526,20 +542,19 @@ function App() {
                   </div>
                   <button
                     type="button"
+                    onClick={() => setChatsOpen((open) => !open)}
                     className="flex h-7 w-7 items-center justify-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-secondary"
-                    title="Filter chats"
-                    aria-label="Filter chats"
+                    title={chatsOpen ? 'Collapse chats' : 'Expand chats'}
+                    aria-label={chatsOpen ? 'Collapse chats' : 'Expand chats'}
+                    aria-expanded={chatsOpen}
                   >
-                    <span className="material-symbols-outlined text-[17px]">filter_list</span>
+                    {chatsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   </button>
                 </div>
+                </>
               )}
               <div className="space-y-1">
-                {chatSummaries.length === 0 && sidebarOpen ? (
-                  <div className="mx-2 rounded-DEFAULT border border-border-subtle bg-surface-container-lowest px-3 py-2 font-mono-sm text-[11px] leading-5 text-on-surface-variant">
-                    No chats yet
-                  </div>
-                ) : chatSummaries.map((chat) => {
+                {chatsOpen && chatSummaries.map((chat) => {
                   const active = route.page === 'chat' && route.chatId === chat.id;
                   const title = compactChatTitle(chat);
                   const modelLabel = chat.modelDisplayName || 'AI model';
@@ -572,7 +587,7 @@ function App() {
               aria-label="Dashboard"
               title="Dashboard"
             >
-              <span className="material-symbols-outlined shrink-0 text-[20px]">dashboard</span>
+              <span className="material-symbols-outlined shrink-0 text-[18px]">dashboard</span>
               {route.page === 'dashboard' && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />}
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Dashboard</span>
             </button>
@@ -582,7 +597,7 @@ function App() {
               aria-label="Workflows"
               title="Workflows"
             >
-              <span className="material-symbols-outlined shrink-0 text-[20px]">account_tree</span>
+              <span className="material-symbols-outlined shrink-0 text-[18px]">account_tree</span>
               {(route.page === 'workflows' || route.page === 'workflow') && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />}
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Workflows</span>
             </button>
@@ -592,41 +607,41 @@ function App() {
               aria-label="Executions"
               title="Executions"
             >
-              <span className="material-symbols-outlined shrink-0 text-[20px]">play_circle</span>
+              <span className="material-symbols-outlined shrink-0 text-[18px]">play_circle</span>
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Executions</span>
             </button>
             <button className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} aria-label="Workers" title="Workers">
-              <span className="material-symbols-outlined shrink-0 text-[20px]">groups</span>
+              <span className="material-symbols-outlined shrink-0 text-[18px]">groups</span>
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Workers</span>
             </button>
             <button className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} aria-label="Schedules" title="Schedules">
-              <span className="material-symbols-outlined shrink-0 text-[20px]">event_repeat</span>
+              <span className="material-symbols-outlined shrink-0 text-[18px]">event_repeat</span>
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Schedules</span>
             </button>
             <div className="mx-2 my-3 h-px bg-border-subtle" />
             <button className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} aria-label="Docs" title="Docs">
-              <span className="material-symbols-outlined shrink-0 text-[20px]">description</span>
+              <span className="material-symbols-outlined shrink-0 text-[18px]">description</span>
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Docs</span>
             </button>
             <button className={`flex h-10 w-full items-center rounded-DEFAULT font-mono-sm text-label-mono text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} aria-label="Settings" title="Settings">
-              <span className="material-symbols-outlined shrink-0 text-[20px]">settings</span>
+              <span className="material-symbols-outlined shrink-0 text-[18px]">settings</span>
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Settings</span>
             </button>
           </div>
           <div className="mt-auto space-y-1 border-t border-border-subtle px-1 py-4">
-            <button className={`flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-[13px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} type="button">
-              <span className="material-symbols-outlined shrink-0 text-[19px]">help</span>
+            <button className={`flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-[11px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} type="button">
+              <span className="material-symbols-outlined shrink-0 text-[17px]">help</span>
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Help</span>
             </button>
-            <button className={`flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-[13px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} type="button">
-              <span className="material-symbols-outlined shrink-0 text-[19px]">monitoring</span>
+            <button className={`flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-[11px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`} type="button">
+              <span className="material-symbols-outlined shrink-0 text-[17px]">monitoring</span>
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Status</span>
               {sidebarOpen && <span className="ml-auto h-2 w-2 rounded-full bg-secondary" />}
             </button>
             <button
               type="button"
               onClick={() => setSidebarOpen((open) => !open)}
-              className={`flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-[13px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`}
+              className={`flex h-9 w-full items-center rounded-DEFAULT font-mono-sm text-[11px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface ${sidebarOpen ? 'gap-3 px-2' : 'justify-center px-0'}`}
               aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
               aria-controls="app-sidebar"
               aria-expanded={sidebarOpen}
@@ -638,7 +653,7 @@ function App() {
           </div>
         </aside>
         {/* Main Content Area */}
-        <main className={`voyager-main-bg relative flex h-full w-full flex-1 flex-col transition-[margin] duration-200 ease-out ${sidebarOpen ? 'md:ml-sidebar-width' : 'md:ml-16'}`}>
+        <main className={`voyager-polished-bg relative flex h-full w-full flex-1 flex-col transition-[margin] duration-200 ease-out ${sidebarOpen ? 'md:ml-sidebar-width' : 'md:ml-16'}`}>
           {!createViewActive && (
           <header className="glass-shell z-10 flex min-h-14 flex-shrink-0 items-center px-4 py-2">
             <div className="flex w-full min-w-0 items-center justify-between gap-3">
@@ -646,12 +661,12 @@ function App() {
                 {selectedWorkflow ? (
                   <div className="flex min-w-0 items-center gap-2">
                     <span className={`h-2 w-2 shrink-0 rounded-full ${selectedWorkflow.status === 'Failed' ? 'bg-status-error' : selectedWorkflow.status === 'Paused' || selectedWorkflow.status === 'Archived' ? 'bg-on-surface-variant' : selectedWorkflow.status === 'Draft' ? 'bg-status-info' : 'bg-status-success'}`}></span>
-                    <h1 className="truncate font-display text-[20px] font-semibold leading-7 text-primary">
+                    <h1 className="truncate font-display text-[16px] font-semibold leading-6 text-primary">
                       {selectedWorkflow.name}
                     </h1>
                   </div>
                 ) : (
-                  <span className="font-display text-[20px] font-semibold leading-7 text-primary">
+                  <span className="font-display text-[16px] font-semibold leading-6 text-primary">
                 {route.page === 'dashboard' ? 'Dashboard' : 'Workflow Executions'}
                   </span>
                 )}

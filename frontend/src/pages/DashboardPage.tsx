@@ -18,7 +18,7 @@ function DashboardMetric({ label, value, tone }: { label: string; value: string 
   return (
     <div className="border-b border-border-subtle px-4 py-3 md:border-b-0 md:border-r">
       <div className="text-label-caps font-label-caps text-on-surface-variant">{label}</div>
-      <div className={`mt-1 font-mono-sm text-[20px] font-semibold ${tone}`}>{value}</div>
+      <div className={`mt-1 font-mono-sm text-[14px] font-semibold ${tone}`}>{value}</div>
     </div>
   );
 }
@@ -40,7 +40,7 @@ export function DashboardPage({ workflows, totalWorkflows, onSelect }: Props) {
       <div className="flex-1 overflow-hidden p-4">
         <section className="glass-panel flex h-full min-h-0 flex-col overflow-hidden border border-border-subtle bg-surface">
           <div className="glass-shell flex h-11 shrink-0 items-center justify-between border-b border-border-subtle bg-surface-elevated px-4">
-            <h2 className="font-display text-[18px] font-semibold leading-6 text-primary">Workflow Executions</h2>
+            <h2 className="font-display text-[14px] font-semibold leading-5 text-primary">Workflow Executions</h2>
             <button className="rounded-DEFAULT border border-border-subtle bg-surface-lowest px-3 py-1.5 font-body-sm text-body-sm text-on-surface-variant transition-colors hover:text-primary">
               Saved view: Open
             </button>

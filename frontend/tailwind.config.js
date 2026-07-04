@@ -83,7 +83,7 @@ export default {
         "unit": "4px",
         "gutter": "1.5rem",
         "margin-page": "2rem",
-        "sidebar-width": "200px",
+        "sidebar-width": "240px",
         "content-max-width": "900px",
         "element-gap-xs": "4px",
         "element-gap-sm": "8px",
@@ -102,16 +102,16 @@ export default {
         "body-sm": ["Geist"]
       },
       fontSize: {
-        "display": ["48px", { "lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "600" }],
-        "headline-lg": ["24px", { "lineHeight": "32px", "fontWeight": "500" }],
-        "headline-md": ["18px", { "lineHeight": "24px", "fontWeight": "500" }],
-        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
-        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
-        "label-mono": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "400" }],
-        "headline-lg-mobile": ["20px", { "lineHeight": "28px", "fontWeight": "500" }],
-        "mono-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "400" }],
-        "label-caps": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "400" }],
-        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }]
+        "display": ["34px", { "lineHeight": "1.14", "letterSpacing": "0", "fontWeight": "600" }],
+        "headline-lg": ["18px", { "lineHeight": "25px", "fontWeight": "500" }],
+        "headline-md": ["14px", { "lineHeight": "20px", "fontWeight": "500" }],
+        "body-lg": ["13px", { "lineHeight": "20px", "fontWeight": "400" }],
+        "body-md": ["12px", { "lineHeight": "18px", "fontWeight": "400" }],
+        "label-mono": ["10px", { "lineHeight": "14px", "letterSpacing": "0.035em", "fontWeight": "400" }],
+        "headline-lg-mobile": ["16px", { "lineHeight": "23px", "fontWeight": "500" }],
+        "mono-sm": ["10px", { "lineHeight": "14px", "letterSpacing": "0.035em", "fontWeight": "400" }],
+        "label-caps": ["10px", { "lineHeight": "14px", "letterSpacing": "0.035em", "fontWeight": "400" }],
+        "body-sm": ["12px", { "lineHeight": "18px", "fontWeight": "400" }]
       }
     },
   },
