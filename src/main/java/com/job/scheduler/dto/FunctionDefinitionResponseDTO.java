@@ -9,7 +9,6 @@ public record FunctionDefinitionResponseDTO(
         UUID id,
         String namespace,
         String name,
-        String displayName,
         String description,
         Integer activeVersion,
         FunctionStatus status,

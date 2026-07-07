@@ -2,7 +2,6 @@ import type { WorkflowSummary } from '../components/WorkflowListView';
 
 type Props = {
   workflows: WorkflowSummary[];
-  totalWorkflows?: number;
   onSelect: (workflow: WorkflowSummary) => void;
 };
 
@@ -14,29 +13,9 @@ function workflowStatusBadgeClass(status: WorkflowSummary['status']) {
   return 'border-status-success/20 bg-status-success/10 text-status-success';
 }
 
-function DashboardMetric({ label, value, tone }: { label: string; value: string | number; tone: string }) {
-  return (
-    <div className="border-b border-border-subtle px-4 py-3 md:border-b-0 md:border-r">
-      <div className="text-label-caps font-label-caps text-on-surface-variant">{label}</div>
-      <div className={`mt-1 font-mono-sm text-[14px] font-semibold ${tone}`}>{value}</div>
-    </div>
-  );
-}
-
-export function DashboardPage({ workflows, totalWorkflows, onSelect }: Props) {
-  const activeCount = workflows.filter((workflow) => workflow.status === 'Active').length;
-  const pausedCount = workflows.filter((workflow) => workflow.status === 'Paused').length;
-  const archivedCount = workflows.filter((workflow) => workflow.status === 'Archived').length;
-
+export function DashboardPage({ workflows, onSelect }: Props) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface-lowest">
-      <div className="glass-shell grid shrink-0 grid-cols-1 border-b border-border-subtle bg-surface-base md:grid-cols-4">
-        <DashboardMetric label="Total workflows" value={totalWorkflows ?? workflows.length} tone="text-primary" />
-        <DashboardMetric label="Active workflows" value={activeCount} tone="text-status-success" />
-        <DashboardMetric label="Paused workflows" value={pausedCount} tone="text-on-surface-variant" />
-        <DashboardMetric label="Archived workflows" value={archivedCount} tone="text-status-info" />
-      </div>
-
       <div className="flex-1 overflow-hidden p-4">
         <section className="glass-panel flex h-full min-h-0 flex-col overflow-hidden border border-border-subtle bg-surface">
           <div className="glass-shell flex h-11 shrink-0 items-center justify-between border-b border-border-subtle bg-surface-elevated px-4">

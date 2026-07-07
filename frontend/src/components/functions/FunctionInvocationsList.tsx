@@ -9,11 +9,21 @@ const statusTone: Record<string, string> = {
 };
 
 function formatTime(value: string | null) {
-  if (!value) return '—';
+  if (!value) return '-';
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? value
     : new Intl.DateTimeFormat(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(date);
+}
+
+function formatMaybe(value: unknown) {
+  if (value === null || value === undefined || value === '') return '-';
+  return String(value);
+}
+
+function formatJson(value: unknown) {
+  if (value === null || value === undefined) return '-';
+  return JSON.stringify(value, null, 2);
 }
 
 export function FunctionInvocationsList({ functionId, refreshKey }: { functionId: string; refreshKey: number }) {
@@ -34,7 +44,7 @@ export function FunctionInvocationsList({ functionId, refreshKey }: { functionId
   if (loading) {
     return (
       <div className="flex items-center gap-2 font-mono-sm text-[12px] text-on-surface-variant">
-        <Loader2 size={14} className="animate-spin" /> Loading invocations…
+        <Loader2 size={14} className="animate-spin" /> Loading invocations...
       </div>
     );
   }
@@ -44,7 +54,7 @@ export function FunctionInvocationsList({ functionId, refreshKey }: { functionId
   if (invocations.length === 0) {
     return (
       <div className="flex min-h-[120px] items-center justify-center rounded-lg border border-dashed border-border-subtle text-body-sm text-on-surface-variant/70">
-        No invocations yet — run a test or trigger a workflow function task.
+        No invocations yet. Run a test or trigger a workflow function task.
       </div>
     );
   }
@@ -65,7 +75,7 @@ export function FunctionInvocationsList({ functionId, refreshKey }: { functionId
               <span className="font-mono-sm text-[11px] text-on-surface-variant">v{invocation.version}</span>
               <span className="flex-1 truncate font-mono-sm text-[11px] text-on-surface-variant">{formatTime(invocation.startedAt)}</span>
               {invocation.workflowExecutionId && (
-                <span className="hidden rounded border border-border-subtle px-1.5 py-0.5 font-mono-sm text-[10px] text-on-surface-variant md:inline" title={`Workflow run ${invocation.workflowExecutionId}${invocation.stateName ? ` · ${invocation.stateName}` : ''}`}>
+                <span className="hidden rounded border border-border-subtle px-1.5 py-0.5 font-mono-sm text-[10px] text-on-surface-variant md:inline" title={`Workflow run ${invocation.workflowExecutionId}${invocation.stateName ? ` - ${invocation.stateName}` : ''}`}>
                   workflow
                 </span>
               )}
@@ -74,17 +84,45 @@ export function FunctionInvocationsList({ functionId, refreshKey }: { functionId
             </button>
             {expanded && (
               <div className="space-y-2 border-t border-border-subtle bg-surface-base/50 px-3 py-3">
-                {invocation.stateName && <Detail label="Workflow state" body={invocation.stateName} />}
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                  <Mini label="Invocation ID" value={invocation.id} />
+                  <Mini label="Function ID" value={invocation.functionId} />
+                  <Mini label="Judge0 token" value={formatMaybe(invocation.judge0Token)} />
+                  <Mini label="Judge0 status" value={`${formatMaybe(invocation.judge0StatusId)} ${formatMaybe(invocation.judge0StatusDescription)}`} />
+                  <Mini label="Workflow run" value={formatMaybe(invocation.workflowExecutionId)} />
+                  <Mini label="Workflow state" value={formatMaybe(invocation.stateName)} />
+                  <Mini label="Exit code" value={formatMaybe(invocation.exitCode)} />
+                  <Mini label="Exit signal" value={formatMaybe(invocation.exitSignal)} />
+                  <Mini label="CPU time" value={invocation.timeSeconds != null ? `${invocation.timeSeconds}s` : '-'} />
+                  <Mini label="Wall time" value={invocation.wallTimeSeconds != null ? `${invocation.wallTimeSeconds}s` : '-'} />
+                  <Mini label="Memory" value={invocation.memoryKb != null ? `${invocation.memoryKb} KB` : '-'} />
+                  <Mini label="Duration" value={invocation.durationMs != null ? `${invocation.durationMs}ms` : '-'} />
+                  <Mini label="Started" value={formatTime(invocation.startedAt)} />
+                  <Mini label="Completed" value={formatTime(invocation.completedAt)} />
+                  <Mini label="Created" value={formatTime(invocation.createdAt)} />
+                  <Mini label="Updated" value={formatTime(invocation.updatedAt)} />
+                </div>
+                <Detail label="Input" body={formatJson(invocation.input)} />
                 {invocation.output != null && <Detail label="Output" body={JSON.stringify(invocation.output, null, 2)} />}
                 {invocation.stdout && <Detail label="stdout" body={invocation.stdout} />}
                 {invocation.stderr && <Detail label="stderr" body={invocation.stderr} />}
                 {invocation.compileOutput && <Detail label="compile output" body={invocation.compileOutput} />}
+                {invocation.message && <Detail label="message" body={invocation.message} />}
                 {invocation.errorMessage && <Detail label="error" body={invocation.errorMessage} />}
               </div>
             )}
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function Mini({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md border border-border-subtle bg-surface-container-lowest px-2.5 py-2">
+      <div className="font-mono-sm text-[9px] uppercase tracking-[0.06em] text-on-surface-variant/70">{label}</div>
+      <div className="mt-1 truncate font-mono-sm text-[10px] text-on-surface" title={value}>{value}</div>
     </div>
   );
 }

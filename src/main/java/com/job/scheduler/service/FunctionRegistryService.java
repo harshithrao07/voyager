@@ -107,7 +107,8 @@ public class FunctionRegistryService {
             FunctionVersionRequestDTO request
     ) {
         FunctionDefinition function = findFunction(functionId);
-        validateVersionRequest(request);
+        FunctionVersionStatus status = versionStatus(request);
+        validateVersionRequest(request, status);
 
         FunctionVersion version = new FunctionVersion();
         version.setFunctionDefinition(function);
@@ -139,10 +140,11 @@ public class FunctionRegistryService {
                 defaultMaxOutputBytes
         ));
         version.setEnableNetwork(Boolean.TRUE.equals(request.enableNetwork()));
-        version.setStatus(FunctionVersionStatus.AVAILABLE);
+        version.setStatus(status);
 
         FunctionVersion saved = versionRepository.save(version);
-        if (function.getActiveVersion() == null) {
+        if (status == FunctionVersionStatus.AVAILABLE
+                && function.getActiveVersion() == null) {
             function.setActiveVersion(saved.getVersion());
             functionRepository.save(function);
         }
@@ -209,7 +211,6 @@ public class FunctionRegistryService {
                 function.getId(),
                 function.getNamespace(),
                 function.getName(),
-                function.getDisplayName(),
                 function.getDescription(),
                 function.getActiveVersion(),
                 function.getStatus(),
@@ -245,29 +246,31 @@ public class FunctionRegistryService {
             FunctionDefinition function,
             FunctionDefinitionRequestDTO request
     ) {
-        function.setDisplayName(blankToNull(request.displayName()) == null
-                ? request.name()
-                : request.displayName().trim());
         function.setDescription(blankToNull(request.description()));
         function.setStatus(request.status() == null
                 ? FunctionStatus.ENABLED
                 : request.status());
     }
 
-    private void validateVersionRequest(FunctionVersionRequestDTO request) {
+    private void validateVersionRequest(
+            FunctionVersionRequestDTO request,
+            FunctionVersionStatus status
+    ) {
         assertLanguageAllowed(request.languageId());
         FunctionSourceMode mode = sourceMode(request);
-        if (mode == FunctionSourceMode.SINGLE_FILE
-                && blankToNull(request.sourceCode()) == null) {
-            throw new IllegalArgumentException(
-                    "sourceCode is required for SINGLE_FILE functions"
-            );
-        }
-        if (mode == FunctionSourceMode.MULTI_FILE
-                && blankToNull(request.additionalFilesBase64()) == null) {
-            throw new IllegalArgumentException(
-                    "additionalFilesBase64 is required for MULTI_FILE functions"
-            );
+        if (status != FunctionVersionStatus.DRAFT) {
+            if (mode == FunctionSourceMode.SINGLE_FILE
+                    && blankToNull(request.sourceCode()) == null) {
+                throw new IllegalArgumentException(
+                        "sourceCode is required for SINGLE_FILE functions"
+                );
+            }
+            if (mode == FunctionSourceMode.MULTI_FILE
+                    && blankToNull(request.additionalFilesBase64()) == null) {
+                throw new IllegalArgumentException(
+                        "additionalFilesBase64 is required for MULTI_FILE functions"
+                );
+            }
         }
         if (mode == FunctionSourceMode.SINGLE_FILE
                 && blankToNull(request.additionalFilesBase64()) != null) {
@@ -281,6 +284,18 @@ public class FunctionRegistryService {
                     "sourceCode is not valid for MULTI_FILE functions"
             );
         }
+    }
+
+    private FunctionVersionStatus versionStatus(FunctionVersionRequestDTO request) {
+        FunctionVersionStatus status = request.status() == null
+                ? FunctionVersionStatus.AVAILABLE
+                : request.status();
+        if (status == FunctionVersionStatus.ARCHIVED) {
+            throw new IllegalArgumentException(
+                    "Archived function versions cannot be created directly"
+            );
+        }
+        return status;
     }
 
     private void assertLanguageAllowed(Integer languageId) {

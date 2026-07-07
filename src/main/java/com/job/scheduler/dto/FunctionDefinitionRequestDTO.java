@@ -19,8 +19,6 @@ public record FunctionDefinitionRequestDTO(
         )
         String name,
 
-        String displayName,
-
         String description,
 
         FunctionStatus status

@@ -29,6 +29,7 @@ type Props = {
   onTimezoneChange: (value: string) => void;
   fieldClass: string;
   monoFieldClass: string;
+  reserveTopControlsSpace?: boolean;
 };
 
 export function ManualWorkflowEditor({
@@ -55,6 +56,7 @@ export function ManualWorkflowEditor({
   onTimezoneChange,
   fieldClass,
   monoFieldClass,
+  reserveTopControlsSpace,
 }: Props) {
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-transparent">
@@ -93,7 +95,7 @@ export function ManualWorkflowEditor({
         </main>
 
         <aside className="hidden min-h-0 flex-col overflow-y-auto border-l border-border-subtle bg-surface-base xl:flex">
-          <div className="border-b border-border-subtle p-6">
+          <div className={`border-b border-border-subtle p-6 ${reserveTopControlsSpace ? 'pt-[82px]' : ''}`}>
             <button
               type="button"
               onClick={onSave}

@@ -4,6 +4,8 @@ import com.job.scheduler.dto.FunctionDefinitionRequestDTO;
 import com.job.scheduler.dto.FunctionDefinitionResponseDTO;
 import com.job.scheduler.dto.FunctionInvocationResponseDTO;
 import com.job.scheduler.dto.FunctionLanguageDTO;
+import com.job.scheduler.dto.FunctionRunRequestDTO;
+import com.job.scheduler.dto.FunctionRunResultDTO;
 import com.job.scheduler.dto.FunctionTestInvocationRequestDTO;
 import com.job.scheduler.dto.FunctionVersionRequestDTO;
 import com.job.scheduler.dto.FunctionVersionResponseDTO;
@@ -46,6 +48,13 @@ public class FunctionController {
     @GetMapping("/runtime")
     public ResponseEntity<Judge0RuntimeInfoDTO> getRuntimeInfo() {
         return ResponseEntity.ok(judge0RuntimeService.runtimeInfo());
+    }
+
+    @PostMapping("/run")
+    public ResponseEntity<FunctionRunResultDTO> run(
+            @Valid @RequestBody FunctionRunRequestDTO request
+    ) {
+        return ResponseEntity.ok(functionInvocationService.run(request));
     }
 
     @PostMapping

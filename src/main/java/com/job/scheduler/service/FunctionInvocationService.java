@@ -1,6 +1,8 @@
 package com.job.scheduler.service;
 
 import com.job.scheduler.dto.FunctionInvocationResponseDTO;
+import com.job.scheduler.dto.FunctionRunRequestDTO;
+import com.job.scheduler.dto.FunctionRunResultDTO;
 import com.job.scheduler.dto.FunctionTestInvocationRequestDTO;
 import com.job.scheduler.entity.FunctionDefinition;
 import com.job.scheduler.entity.FunctionInvocation;
@@ -42,6 +44,122 @@ public class FunctionInvocationService {
 
     @Value("${scheduler.judge0.max-poll-duration-ms:60000}")
     private long maxPollDurationMs;
+
+    @Value("${scheduler.judge0.default-cpu-time-limit-seconds:2.0}")
+    private double defaultCpuTimeLimitSeconds;
+
+    @Value("${scheduler.judge0.default-wall-time-limit-seconds:10.0}")
+    private double defaultWallTimeLimitSeconds;
+
+    @Value("${scheduler.judge0.default-memory-limit-kb:131072}")
+    private int defaultMemoryLimitKb;
+
+    @Value("${scheduler.judge0.default-max-file-size-kb:1024}")
+    private int defaultMaxFileSizeKb;
+
+    @Value("${scheduler.judge0.default-max-output-bytes:65536}")
+    private int defaultMaxOutputBytes;
+
+    /**
+     * Executes ad-hoc code (no persisted function/version) so the editor can run
+     * test cases before publishing. Same stdin-JSON/stdout-JSON contract and error
+     * mapping as a real invocation, but nothing is saved.
+     */
+    public FunctionRunResultDTO run(FunctionRunRequestDTO request) {
+        FunctionSourceMode mode = request.sourceMode() == null
+                ? FunctionSourceMode.SINGLE_FILE
+                : request.sourceMode();
+        int maxOutputBytes = request.maxOutputBytes() != null
+                ? request.maxOutputBytes()
+                : defaultMaxOutputBytes;
+        int memoryLimitKb = request.memoryLimitKb() != null
+                ? request.memoryLimitKb()
+                : defaultMemoryLimitKb;
+        Judge0SubmissionRequest submission = new Judge0SubmissionRequest(
+                request.languageId(),
+                mode == FunctionSourceMode.SINGLE_FILE ? blankToNull(request.sourceCode()) : null,
+                mode == FunctionSourceMode.MULTI_FILE ? blankToNull(request.additionalFilesBase64()) : null,
+                nonNullInput(request.input()).toString(),
+                blankToNull(request.compilerOptions()),
+                blankToNull(request.commandLineArguments()),
+                request.cpuTimeLimitSeconds() != null ? request.cpuTimeLimitSeconds() : defaultCpuTimeLimitSeconds,
+                request.wallTimeLimitSeconds() != null ? request.wallTimeLimitSeconds() : defaultWallTimeLimitSeconds,
+                memoryLimitKb,
+                request.maxFileSizeKb() != null ? request.maxFileSizeKb() : defaultMaxFileSizeKb,
+                Boolean.TRUE.equals(request.enableNetwork())
+        );
+
+        try {
+            String token = judge0Client.createSubmission(submission);
+            Judge0SubmissionResult result = pollUntilComplete(token);
+            String stdout = truncate(result.stdout(), maxOutputBytes);
+            String stderr = truncate(result.stderr(), maxOutputBytes);
+            String compileOutput = truncate(result.compileOutput(), maxOutputBytes);
+            String message = truncate(result.message(), maxOutputBytes);
+
+            if (result.isAccepted()) {
+                JsonNode output = null;
+                String errorName = null;
+                String errorMessage = null;
+                FunctionInvocationStatus status;
+                if (stdout == null || stdout.isBlank()) {
+                    status = FunctionInvocationStatus.FAILED;
+                    errorName = TaskResourceErrors.FUNCTION_INVALID_OUTPUT;
+                    errorMessage = "Function stdout must contain JSON";
+                } else {
+                    try {
+                        output = objectMapper.readTree(stdout.trim());
+                        status = FunctionInvocationStatus.SUCCEEDED;
+                    } catch (Exception exception) {
+                        status = FunctionInvocationStatus.FAILED;
+                        errorName = TaskResourceErrors.FUNCTION_INVALID_OUTPUT;
+                        errorMessage = "Function stdout must be valid JSON";
+                    }
+                }
+                return new FunctionRunResultDTO(status, output, stdout, stderr, compileOutput,
+                        message, result.exitCode(), result.statusId(), result.statusDescription(),
+                        errorName, errorMessage, result.timeSeconds(), result.memoryKb());
+            }
+
+            return new FunctionRunResultDTO(FunctionInvocationStatus.FAILED, null, stdout, stderr,
+                    compileOutput, message, result.exitCode(), result.statusId(),
+                    result.statusDescription(), adHocErrorName(memoryLimitKb, result),
+                    errorMessageFor(result), result.timeSeconds(), result.memoryKb());
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return new FunctionRunResultDTO(FunctionInvocationStatus.FAILED, null, null, null, null,
+                    "Run was interrupted", null, null, null, TaskResourceErrors.TIMEOUT,
+                    "Run was interrupted", null, null);
+        } catch (TaskResourceException exception) {
+            return new FunctionRunResultDTO(FunctionInvocationStatus.FAILED, null, null, null, null,
+                    exception.getMessage(), null, null, null, exception.error(),
+                    exception.getMessage(), null, null);
+        }
+    }
+
+    private String adHocErrorName(int memoryLimitKb, Judge0SubmissionResult result) {
+        Integer statusId = result.statusId();
+        if (statusId != null && statusId == 6) {
+            return TaskResourceErrors.FUNCTION_COMPILE_ERROR;
+        }
+        if (statusId != null && statusId == 5) {
+            return TaskResourceErrors.TIMEOUT;
+        }
+        String description = result.statusDescription() == null
+                ? "" : result.statusDescription().toLowerCase(Locale.ROOT);
+        String message = result.message() == null
+                ? "" : result.message().toLowerCase(Locale.ROOT);
+        Long usedKb = result.memoryKb();
+        if (description.contains("memory") || message.contains("memory")
+                || (usedKb != null && memoryLimitKb > 0 && usedKb >= memoryLimitKb)) {
+            return TaskResourceErrors.FUNCTION_MEMORY_EXCEEDED;
+        }
+        return TaskResourceErrors.FUNCTION_RUNTIME_ERROR;
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
 
     public JsonNode invokeForTask(
             String namespace,

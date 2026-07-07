@@ -47,9 +47,6 @@ public class FunctionDefinition {
     @Column(name = "name", nullable = false, updatable = false)
     private String name;
 
-    @Column(name = "display_name", nullable = false)
-    private String displayName;
-
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 

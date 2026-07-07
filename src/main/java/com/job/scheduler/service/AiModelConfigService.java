@@ -9,7 +9,6 @@ import com.job.scheduler.enums.AiModelProviderType;
 import com.job.scheduler.repository.AiModelConfigRepository;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
@@ -32,15 +31,8 @@ public class AiModelConfigService {
             .connectTimeout(Duration.ofSeconds(5))
             .build();
 
-    @Value("${langchain4j.open-ai.chat-model.base-url:http://localhost:11434/v1}")
-    private String defaultBaseUrl;
-
-    @Value("${langchain4j.open-ai.chat-model.model-name:qwen3:8b}")
-    private String defaultModelName;
-
     @Transactional
     public List<AiModelConfigDTO> listEnabledModels() {
-        seedDefaultModelIfNeeded();
         return repository.findByEnabledTrueOrderByDefaultModelDescDisplayNameAsc()
                 .stream()
                 .map(this::toDto)
@@ -49,7 +41,6 @@ public class AiModelConfigService {
 
     @Transactional
     public List<AiModelConfigDTO> listAllModels() {
-        seedDefaultModelIfNeeded();
         return repository.findAllByOrderByBaseUrlAscDisplayNameAsc()
                 .stream()
                 .map(this::toDto)
@@ -58,7 +49,6 @@ public class AiModelConfigService {
 
     @Transactional
     public AiModelConfig resolveModel(UUID modelConfigId) {
-        seedDefaultModelIfNeeded();
         if (modelConfigId != null) {
             AiModelConfig model = repository.findById(modelConfigId)
                     .orElseThrow(() -> new IllegalArgumentException(
@@ -289,21 +279,6 @@ public class AiModelConfigService {
                     "Could not reach model endpoint: " + exception.getMessage()
             );
         }
-    }
-
-    private void seedDefaultModelIfNeeded() {
-        if (repository.count() > 0) {
-            return;
-        }
-        AiModelConfig model = new AiModelConfig();
-        model.setDisplayName(defaultModelName);
-        model.setProviderType(AiModelProviderType.OPENAI_COMPATIBLE_LOCAL);
-        model.setBaseUrl(defaultBaseUrl);
-        model.setModelName(defaultModelName);
-        model.setApiKey(null);
-        model.setEnabled(true);
-        model.setDefaultModel(true);
-        repository.save(model);
     }
 
     private void ensureDefaultModel() {

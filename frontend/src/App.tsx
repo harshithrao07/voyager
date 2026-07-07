@@ -316,6 +316,7 @@ function App() {
   const [revisionPanelOpen, setRevisionPanelOpen] = useState(false);
   const [newWorkflowResetKey, setNewWorkflowResetKey] = useState(0);
   const [route, setRoute] = useState<AppRoute>(() => parseRoute(window.location.pathname));
+  const [functionsWorkbenchActive, setFunctionsWorkbenchActive] = useState(false);
   const [workflowPage, setWorkflowPage] = useState<WorkflowPageDTO | null>(null);
   const [workflowSummaries, setWorkflowSummaries] = useState<WorkflowSummary[]>([]);
   const [chatSummaries, setChatSummaries] = useState<WorkflowAiConversationSummaryDTO[]>([]);
@@ -417,6 +418,12 @@ function App() {
   useEffect(() => {
     loadChats();
   }, []);
+
+  useEffect(() => {
+    if (route.page !== 'functions') {
+      setFunctionsWorkbenchActive(false);
+    }
+  }, [route.page]);
 
   useEffect(() => {
     if (route.page !== 'workflow') {
@@ -595,9 +602,11 @@ function App() {
   };
 
   const createViewActive = route.page === 'create' || route.page === 'chat';
+  const hideMainHeader = createViewActive || (route.page === 'functions' && functionsWorkbenchActive);
   const sortedChatSummaries = [...chatSummaries].sort((left, right) => chatSortTime(right) - chatSortTime(left));
   const sidebarChatSummaries = sortedChatSummaries.slice(0, 5);
   const hiddenChatCount = Math.max(sortedChatSummaries.length - sidebarChatSummaries.length, 0);
+  const hasSidebarChats = sortedChatSummaries.length > 0;
 
   // Shared sidebar nav-item styling (design: Voyager.dc.html). Active item gets a
   // surface fill; the accent bar is rendered separately via `navActiveBar`.
@@ -687,70 +696,72 @@ function App() {
                 </span>
               )}
             </button>
-            <div className={sidebarOpen ? 'pt-2' : 'pt-1'}>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!sidebarOpen) {
-                    setSidebarOpen(true);
-                    setChatsOpen(true);
-                  } else {
-                    setChatsOpen((open) => !open);
-                  }
-                }}
-                className={navItemClass(false)}
-                title="Chats"
-                aria-label={chatsOpen ? 'Collapse chats' : 'Expand chats'}
-                aria-expanded={chatsOpen}
-              >
-                <span className="material-symbols-outlined shrink-0 text-[18px]">chat_bubble</span>
-                <span className={sidebarOpen ? 'inline flex-1 truncate text-left' : 'hidden'}>Chats</span>
-                {sidebarOpen && (
-                  <span className="material-symbols-outlined shrink-0 text-[16px]">
-                    {chatsOpen ? 'expand_more' : 'chevron_right'}
-                  </span>
-                )}
-              </button>
-              <div className="mt-0.5 space-y-0.5">
-                {sidebarOpen && chatsOpen && sidebarChatSummaries.map((chat) => {
-                  const active = route.page === 'chat' && route.chatId === chat.id;
-                  const title = compactChatTitle(chat);
-                  const modelLabel = chat.modelDisplayName || 'AI model';
-                  const timeLabel = formatChatTime(chat.updatedAt || chat.createdAt);
-                  return (
+            {hasSidebarChats && (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!sidebarOpen) {
+                      setSidebarOpen(true);
+                      setChatsOpen(true);
+                    } else {
+                      setChatsOpen((open) => !open);
+                    }
+                  }}
+                  className={navItemClass(false)}
+                  title="Chats"
+                  aria-label={chatsOpen ? 'Collapse chats' : 'Expand chats'}
+                  aria-expanded={chatsOpen}
+                >
+                  <span className="material-symbols-outlined shrink-0 text-[18px]">chat_bubble</span>
+                  <span className={sidebarOpen ? 'inline flex-1 truncate text-left' : 'hidden'}>Chats</span>
+                  {sidebarOpen && (
+                    <span className="material-symbols-outlined shrink-0 text-[16px]">
+                      {chatsOpen ? 'expand_more' : 'chevron_right'}
+                    </span>
+                  )}
+                </button>
+                <div className="mt-0.5 space-y-0.5">
+                  {sidebarOpen && chatsOpen && sidebarChatSummaries.map((chat) => {
+                    const active = route.page === 'chat' && route.chatId === chat.id;
+                    const title = compactChatTitle(chat);
+                    const modelLabel = chat.modelDisplayName || 'AI model';
+                    const timeLabel = formatChatTime(chat.updatedAt || chat.createdAt);
+                    return (
+                      <button
+                        key={chat.id}
+                        type="button"
+                        onClick={() => handleChatSelected(chat)}
+                        className={`group relative flex h-10 w-full min-w-0 items-center gap-2 rounded-lg px-2 font-mono-sm text-[12px] transition-colors ${active ? 'bg-primary/10 text-secondary' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-secondary'}`}
+                        aria-label={`Open chat ${title}`}
+                        title={`${title} - ${modelLabel}`}
+                      >
+                        <span className="material-symbols-outlined shrink-0 text-[17px] text-on-surface-variant group-hover:text-secondary">smart_toy</span>
+                        {active && navActiveBar}
+                        <span className="min-w-0 flex-1 truncate text-left">
+                          <span className="text-on-surface-variant">&gt;_</span>
+                          <span className="ml-1.5 text-secondary">{title}</span>
+                          {timeLabel && <span className="ml-1.5 text-on-surface-variant">&middot; {timeLabel}</span>}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {sidebarOpen && chatsOpen && hiddenChatCount > 0 && (
                     <button
-                      key={chat.id}
                       type="button"
-                      onClick={() => handleChatSelected(chat)}
-                      className={`group relative flex h-10 w-full min-w-0 items-center gap-2 rounded-lg px-2 font-mono-sm text-[12px] transition-colors ${active ? 'bg-primary/10 text-secondary' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-secondary'}`}
-                      aria-label={`Open chat ${title}`}
-                      title={`${title} - ${modelLabel}`}
+                      onClick={() => setChatHistoryModalOpen(true)}
+                      className="flex h-8 w-full items-center gap-2 rounded-lg px-2 font-mono-sm text-[10px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface"
+                      aria-label="View all chats"
+                      title="View all chats"
                     >
-                      <span className="material-symbols-outlined shrink-0 text-[17px] text-on-surface-variant group-hover:text-secondary">smart_toy</span>
-                      {active && navActiveBar}
-                      <span className="min-w-0 flex-1 truncate text-left">
-                        <span className="text-on-surface-variant">&gt;_</span>
-                        <span className="ml-1.5 text-secondary">{title}</span>
-                        {timeLabel && <span className="ml-1.5 text-on-surface-variant">&middot; {timeLabel}</span>}
-                      </span>
+                      <span className="material-symbols-outlined shrink-0 text-[16px]">more_horiz</span>
+                      <span className="min-w-0 flex-1 truncate text-left">View all chats</span>
+                      <span className="rounded-md border border-border-subtle px-1.5 py-0.5 text-[9px]">{hiddenChatCount}</span>
                     </button>
-                  );
-                })}
-                {sidebarOpen && chatsOpen && hiddenChatCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setChatHistoryModalOpen(true)}
-                    className="flex h-8 w-full items-center gap-2 rounded-lg px-2 font-mono-sm text-[10px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface"
-                    aria-label="View all chats"
-                    title="View all chats"
-                  >
-                    <span className="material-symbols-outlined shrink-0 text-[16px]">more_horiz</span>
-                    <span className="min-w-0 flex-1 truncate text-left">View all chats</span>
-                    <span className="rounded-md border border-border-subtle px-1.5 py-0.5 text-[9px]">{hiddenChatCount}</span>
-                  </button>
-                )}
+                  )}
+                </div>
               </div>
-            </div>
+            )}
             <div className="mx-2 my-3 h-px bg-border-subtle" />
             <button
               onClick={() => navigate('/dashboard')}
@@ -793,7 +804,7 @@ function App() {
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Settings</span>
             </button>
           </div>
-          <div className="mt-auto border-t border-border-subtle p-2.5">
+          <div className="mt-auto border-border-subtle p-2.5">
             <button
               type="button"
               className={`flex w-full items-center gap-2.5 rounded-xl border border-border-subtle bg-surface-container-lowest p-2 text-left transition-colors hover:bg-surface-container-low ${sidebarOpen ? 'justify-start' : 'justify-center'}`}
@@ -804,17 +815,14 @@ function App() {
                 AD
               </span>
               {sidebarOpen && (
-                <span className="min-w-0 flex-1">
                   <span className="block truncate text-[12px] font-semibold text-on-surface">admin</span>
-                  <span className="mt-px block truncate font-mono-sm text-[10px] text-on-surface-variant">Workspace admin</span>
-                </span>
               )}
             </button>
           </div>
         </aside>
         {/* Main Content Area */}
-        <main className={`voyager-polished-bg relative flex h-full w-full flex-1 flex-col transition-[margin] duration-200 ease-out ${sidebarOpen ? 'md:ml-sidebar-width' : 'md:ml-16'}`}>
-          {!createViewActive && (
+        <main className={`voyager-polished-bg relative flex h-full w-full flex-1 flex-col transition-[margin] duration-200 ease-out ${route.page === 'functions' && functionsWorkbenchActive ? 'z-50' : 'z-0'} ${sidebarOpen ? 'md:ml-sidebar-width' : 'md:ml-16'}`}>
+          {!hideMainHeader && (
           <header className="glass-shell z-10 flex min-h-14 flex-shrink-0 items-center px-4 py-2">
             <div className="flex w-full min-w-0 items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3">
@@ -886,7 +894,7 @@ function App() {
               ) : route.page === 'settings' ? (
                 <SettingsPage />
               ) : route.page === 'functions' ? (
-                <FunctionsPage />
+                <FunctionsPage onWorkbenchModeChange={setFunctionsWorkbenchActive} />
               ) : workflowListLoading ? (
                 <WorkspaceState title="Loading workflows" message="Fetching workflow list from /app/v1/workflows." />
               ) : workflowListError ? (
@@ -898,11 +906,14 @@ function App() {
               ) : route.page === 'dashboard' ? (
                 <DashboardPage
                   workflows={workflowSummaries}
-                  totalWorkflows={workflowPage?.totalElements}
                   onSelect={handleWorkflowSelected}
                 />
               ) : (
-                <WorkflowsPage workflows={workflowSummaries} onSelect={handleWorkflowSelected} />
+                <WorkflowsPage
+                  workflows={workflowSummaries}
+                  totalWorkflows={workflowPage?.totalElements}
+                  onSelect={handleWorkflowSelected}
+                />
               )}
             </div>
           ) : (

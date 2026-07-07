@@ -1,6 +1,7 @@
 package com.job.scheduler.dto;
 
 import com.job.scheduler.enums.FunctionSourceMode;
+import com.job.scheduler.enums.FunctionVersionStatus;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
@@ -40,6 +41,8 @@ public record FunctionVersionRequestDTO(
         @Min(1)
         Integer maxOutputBytes,
 
-        Boolean enableNetwork
+        Boolean enableNetwork,
+
+        FunctionVersionStatus status
 ) {
 }

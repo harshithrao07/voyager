@@ -1,6 +1,8 @@
 package com.job.scheduler.service;
 
 import com.job.scheduler.dto.FunctionInvocationResponseDTO;
+import com.job.scheduler.dto.FunctionRunRequestDTO;
+import com.job.scheduler.dto.FunctionRunResultDTO;
 import com.job.scheduler.dto.FunctionTestInvocationRequestDTO;
 import com.job.scheduler.entity.FunctionDefinition;
 import com.job.scheduler.entity.FunctionInvocation;
@@ -28,6 +30,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -56,7 +59,7 @@ class FunctionInvocationServiceTest {
         );
         ReflectionTestUtils.setField(service, "pollIntervalMs", 1L);
         ReflectionTestUtils.setField(service, "maxPollDurationMs", 1000L);
-        when(invocationRepository.save(any())).thenAnswer(invocation -> {
+        lenient().when(invocationRepository.save(any())).thenAnswer(invocation -> {
             FunctionInvocation saved = invocation.getArgument(0);
             if (saved.getId() == null) {
                 saved.setId(UUID.randomUUID());
@@ -268,12 +271,43 @@ class FunctionInvocationServiceTest {
                 .isEqualTo(TaskResourceErrors.TIMEOUT);
     }
 
+    @Test
+    void runExecutesAdHocCodeAndParsesOutput() throws Exception {
+        when(judge0Client.createSubmission(any())).thenReturn("run-1");
+        when(judge0Client.getSubmission("run-1")).thenReturn(new Judge0SubmissionResult(
+                "run-1", 3, "Accepted", "{\"tax\":18}", "", null, null,
+                0, null, 0.01, 0.02, 12000L));
+
+        FunctionRunResultDTO result = service.run(new FunctionRunRequestDTO(
+                71, FunctionSourceMode.SINGLE_FILE, "print('{}')", null, null, null,
+                null, null, null, null, 4096, false, objectMapper.readTree("{\"amount\":100}")));
+
+        assertThat(result.status()).isEqualTo(FunctionInvocationStatus.SUCCEEDED);
+        assertThat(result.output().get("tax").intValue()).isEqualTo(18);
+        assertThat(result.errorName()).isNull();
+    }
+
+    @Test
+    void runMapsRuntimeError() {
+        when(judge0Client.createSubmission(any())).thenReturn("run-2");
+        when(judge0Client.getSubmission("run-2")).thenReturn(new Judge0SubmissionResult(
+                "run-2", 11, "Runtime Error (NZEC)", null, "boom", null, null,
+                1, null, null, null, null));
+
+        FunctionRunResultDTO result = service.run(new FunctionRunRequestDTO(
+                71, FunctionSourceMode.SINGLE_FILE, "raise SystemExit(1)", null, null, null,
+                null, null, null, null, 4096, false, objectMapper.createObjectNode()));
+
+        assertThat(result.status()).isEqualTo(FunctionInvocationStatus.FAILED);
+        assertThat(result.errorName()).isEqualTo(TaskResourceErrors.FUNCTION_RUNTIME_ERROR);
+        assertThat(result.stderr()).isEqualTo("boom");
+    }
+
     private FunctionDefinition function() {
         FunctionDefinition value = new FunctionDefinition();
         value.setId(UUID.randomUUID());
         value.setNamespace("billing");
         value.setName("tax");
-        value.setDisplayName("Tax");
         value.setActiveVersion(1);
         value.setStatus(FunctionStatus.ENABLED);
         return value;

@@ -297,7 +297,7 @@ async function sendJson<T>(url: string, method: string, body: unknown): Promise<
 }
 
 export type FunctionStatus = 'ENABLED' | 'DISABLED';
-export type FunctionVersionStatus = 'AVAILABLE' | 'ARCHIVED';
+export type FunctionVersionStatus = 'DRAFT' | 'AVAILABLE' | 'ARCHIVED';
 export type FunctionSourceMode = 'SINGLE_FILE' | 'MULTI_FILE';
 export type FunctionInvocationStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED';
 
@@ -305,7 +305,6 @@ export interface FunctionDefinitionDTO {
   id: string;
   namespace: string;
   name: string;
-  displayName: string;
   description: string | null;
   activeVersion: number | null;
   status: FunctionStatus;
@@ -316,7 +315,6 @@ export interface FunctionDefinitionDTO {
 export interface FunctionDefinitionRequest {
   namespace: string;
   name: string;
-  displayName?: string | null;
   description?: string | null;
   status?: FunctionStatus | null;
 }
@@ -355,6 +353,7 @@ export interface FunctionVersionRequest {
   maxFileSizeKb?: number | null;
   maxOutputBytes?: number | null;
   enableNetwork?: boolean | null;
+  status?: FunctionVersionStatus | null;
 }
 
 export interface FunctionInvocationDTO {
@@ -430,6 +429,42 @@ export function testInvokeFunction(functionId: string, request: FunctionTestInvo
 
 export function listFunctionInvocations(functionId: string): Promise<FunctionInvocationDTO[]> {
   return getJson<FunctionInvocationDTO[]>(`/app/v1/functions/${functionId}/invocations`);
+}
+
+export interface FunctionRunRequest {
+  languageId: number;
+  sourceMode?: FunctionSourceMode;
+  sourceCode?: string | null;
+  additionalFilesBase64?: string | null;
+  compilerOptions?: string | null;
+  commandLineArguments?: string | null;
+  cpuTimeLimitSeconds?: number | null;
+  wallTimeLimitSeconds?: number | null;
+  memoryLimitKb?: number | null;
+  maxFileSizeKb?: number | null;
+  maxOutputBytes?: number | null;
+  enableNetwork?: boolean | null;
+  input: unknown;
+}
+
+export interface FunctionRunResult {
+  status: FunctionInvocationStatus;
+  output: unknown;
+  stdout: string | null;
+  stderr: string | null;
+  compileOutput: string | null;
+  message: string | null;
+  exitCode: number | null;
+  judge0StatusId: number | null;
+  judge0StatusDescription: string | null;
+  errorName: string | null;
+  errorMessage: string | null;
+  timeSeconds: number | null;
+  memoryKb: number | null;
+}
+
+export function executeFunctionCode(request: FunctionRunRequest): Promise<FunctionRunResult> {
+  return sendJson<FunctionRunResult>('/app/v1/functions/run', 'POST', request);
 }
 
 export function getWorkflowRevisions(

@@ -1303,8 +1303,10 @@ export function CreateWorkflowView({
   return (
     <div className="relative flex h-full min-h-0 flex-col text-on-surface">
       {messages.length === 0 && (
-        <header className="flex min-h-16 shrink-0 items-center justify-end px-10 pt-6">
-          {modeSwitch}
+        <header className="pointer-events-none absolute right-10 top-2 z-30 flex justify-end">
+          <div className="pointer-events-auto">
+            {modeSwitch}
+          </div>
         </header>
       )}
       {mode === 'ai' ? (
@@ -1443,6 +1445,7 @@ export function CreateWorkflowView({
           onTimezoneChange={setTimezone}
           fieldClass={fieldClass}
           monoFieldClass={monoFieldClass}
+          reserveTopControlsSpace={messages.length === 0}
         />
       )}
     </div>
