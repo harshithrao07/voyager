@@ -1,6 +1,7 @@
 package com.job.scheduler.repository;
 
 import com.job.scheduler.entity.FunctionDefinition;
+import com.job.scheduler.enums.FunctionStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -16,4 +17,8 @@ public interface FunctionDefinitionRepository
     Optional<FunctionDefinition> findByNamespaceAndName(String namespace, String name);
 
     List<FunctionDefinition> findAllByOrderByUpdatedAtDesc();
+
+    List<FunctionDefinition> findByStatusNotOrderByUpdatedAtDesc(
+            FunctionStatus status
+    );
 }

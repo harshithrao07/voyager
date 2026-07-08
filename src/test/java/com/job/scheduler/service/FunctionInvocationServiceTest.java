@@ -44,6 +44,9 @@ class FunctionInvocationServiceTest {
     @Mock
     private Judge0Client judge0Client;
 
+    @Mock
+    private Judge0MultiFileSupport multiFileSupport;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private FunctionInvocationService service;
     private FunctionDefinition function;
@@ -55,6 +58,7 @@ class FunctionInvocationServiceTest {
                 functionRegistryService,
                 invocationRepository,
                 judge0Client,
+                multiFileSupport,
                 objectMapper
         );
         ReflectionTestUtils.setField(service, "pollIntervalMs", 1L);

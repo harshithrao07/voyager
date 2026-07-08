@@ -4,6 +4,7 @@ import com.job.scheduler.enums.FunctionSourceMode;
 import com.job.scheduler.enums.FunctionVersionStatus;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 public record FunctionVersionResponseDTO(
@@ -14,6 +15,9 @@ public record FunctionVersionResponseDTO(
         int languageId,
         boolean hasSourceCode,
         boolean hasAdditionalFiles,
+        String sourceCode,
+        String additionalFilesBase64,
+        List<FunctionSourceFileDTO> files,
         String compilerOptions,
         String commandLineArguments,
         double cpuTimeLimitSeconds,
@@ -22,6 +26,7 @@ public record FunctionVersionResponseDTO(
         int maxFileSizeKb,
         int maxOutputBytes,
         boolean enableNetwork,
+        String note,
         FunctionVersionStatus status,
         Instant createdAt,
         Instant updatedAt

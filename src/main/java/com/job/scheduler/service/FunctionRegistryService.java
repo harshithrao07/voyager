@@ -2,8 +2,10 @@ package com.job.scheduler.service;
 
 import com.job.scheduler.dto.FunctionDefinitionRequestDTO;
 import com.job.scheduler.dto.FunctionDefinitionResponseDTO;
+import com.job.scheduler.dto.FunctionSourceFileDTO;
 import com.job.scheduler.dto.FunctionVersionRequestDTO;
 import com.job.scheduler.dto.FunctionVersionResponseDTO;
+import com.job.scheduler.dto.FunctionVersionSettingsRequestDTO;
 import com.job.scheduler.entity.FunctionDefinition;
 import com.job.scheduler.entity.FunctionVersion;
 import com.job.scheduler.enums.FunctionSourceMode;
@@ -17,10 +19,17 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 @Service
 @RequiredArgsConstructor
@@ -74,8 +83,15 @@ public class FunctionRegistryService {
         return toResponse(functionRepository.save(function));
     }
 
-    public List<FunctionDefinitionResponseDTO> getFunctions() {
-        return functionRepository.findAllByOrderByUpdatedAtDesc()
+    public List<FunctionDefinitionResponseDTO> getFunctions(
+            boolean includeArchived
+    ) {
+        List<FunctionDefinition> functions = includeArchived
+                ? functionRepository.findAllByOrderByUpdatedAtDesc()
+                : functionRepository.findByStatusNotOrderByUpdatedAtDesc(
+                        FunctionStatus.ARCHIVED
+                );
+        return functions
                 .stream()
                 .map(this::toResponse)
                 .toList();
@@ -102,11 +118,22 @@ public class FunctionRegistryService {
     }
 
     @Transactional
+    public FunctionDefinitionResponseDTO archiveFunction(UUID functionId) {
+        FunctionDefinition function = findFunction(functionId);
+        if (function.getStatus() == FunctionStatus.ARCHIVED) {
+            return toResponse(function);
+        }
+        function.setStatus(FunctionStatus.ARCHIVED);
+        return toResponse(functionRepository.save(function));
+    }
+
+    @Transactional
     public FunctionVersionResponseDTO createVersion(
             UUID functionId,
             FunctionVersionRequestDTO request
     ) {
         FunctionDefinition function = findFunction(functionId);
+        ensureFunctionCanChangeVersions(function);
         FunctionVersionStatus status = versionStatus(request);
         validateVersionRequest(request, status);
 
@@ -140,6 +167,7 @@ public class FunctionRegistryService {
                 defaultMaxOutputBytes
         ));
         version.setEnableNetwork(Boolean.TRUE.equals(request.enableNetwork()));
+        version.setNote(blankToNull(request.note()));
         version.setStatus(status);
 
         FunctionVersion saved = versionRepository.save(version);
@@ -165,6 +193,7 @@ public class FunctionRegistryService {
             int version
     ) {
         FunctionDefinition function = findFunction(functionId);
+        ensureFunctionCanChangeVersions(function);
         FunctionVersion functionVersion = findVersion(function, version);
         if (functionVersion.getStatus() != FunctionVersionStatus.AVAILABLE) {
             throw new IllegalStateException(
@@ -173,6 +202,35 @@ public class FunctionRegistryService {
         }
         function.setActiveVersion(version);
         return toResponse(functionRepository.save(function));
+    }
+
+    @Transactional
+    public FunctionVersionResponseDTO updateVersionSettings(
+            UUID functionId,
+            int version,
+            FunctionVersionSettingsRequestDTO request
+    ) {
+        FunctionDefinition function = findFunction(functionId);
+        ensureFunctionCanChangeVersions(function);
+        FunctionVersion functionVersion = findVersion(function, version);
+        if (functionVersion.getStatus() == FunctionVersionStatus.ARCHIVED) {
+            throw new IllegalStateException(
+                    "Archived function versions cannot be changed"
+            );
+        }
+        functionVersion.setCompilerOptions(blankToNull(request.compilerOptions()));
+        functionVersion.setCommandLineArguments(blankToNull(
+                request.commandLineArguments()
+        ));
+        functionVersion.setCpuTimeLimitSeconds(request.cpuTimeLimitSeconds());
+        functionVersion.setWallTimeLimitSeconds(request.wallTimeLimitSeconds());
+        functionVersion.setMemoryLimitKb(request.memoryLimitKb());
+        functionVersion.setMaxFileSizeKb(request.maxFileSizeKb());
+        functionVersion.setMaxOutputBytes(request.maxOutputBytes());
+        functionVersion.setEnableNetwork(Boolean.TRUE.equals(
+                request.enableNetwork()
+        ));
+        return toResponse(versionRepository.save(functionVersion));
     }
 
     FunctionDefinition findFunction(UUID functionId) {
@@ -228,6 +286,9 @@ public class FunctionRegistryService {
                 version.getLanguageId(),
                 version.getSourceCode() != null,
                 version.getAdditionalFilesBase64() != null,
+                version.getSourceCode(),
+                version.getAdditionalFilesBase64(),
+                sourceFiles(version.getAdditionalFilesBase64()),
                 version.getCompilerOptions(),
                 version.getCommandLineArguments(),
                 version.getCpuTimeLimitSeconds(),
@@ -236,6 +297,7 @@ public class FunctionRegistryService {
                 version.getMaxFileSizeKb(),
                 version.getMaxOutputBytes(),
                 version.isEnableNetwork(),
+                version.getNote(),
                 version.getStatus(),
                 version.getCreatedAt(),
                 version.getUpdatedAt()
@@ -282,6 +344,14 @@ public class FunctionRegistryService {
                 && blankToNull(request.sourceCode()) != null) {
             throw new IllegalArgumentException(
                     "sourceCode is not valid for MULTI_FILE functions"
+            );
+        }
+    }
+
+    private void ensureFunctionCanChangeVersions(FunctionDefinition function) {
+        if (function.getStatus() == FunctionStatus.ARCHIVED) {
+            throw new IllegalStateException(
+                    "Archived functions cannot be changed"
             );
         }
     }
@@ -344,5 +414,33 @@ public class FunctionRegistryService {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private List<FunctionSourceFileDTO> sourceFiles(String additionalFilesBase64) {
+        String normalized = blankToNull(additionalFilesBase64);
+        if (normalized == null) {
+            return List.of();
+        }
+
+        List<FunctionSourceFileDTO> files = new ArrayList<>();
+        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(
+                Base64.getDecoder().decode(normalized)
+        ))) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                if (entry.isDirectory()) {
+                    continue;
+                }
+                ByteArrayOutputStream output = new ByteArrayOutputStream();
+                zip.transferTo(output);
+                files.add(new FunctionSourceFileDTO(
+                        entry.getName(),
+                        output.toString(StandardCharsets.UTF_8)
+                ));
+            }
+        } catch (Exception ignored) {
+            return List.of();
+        }
+        return files;
     }
 }

@@ -37,6 +37,7 @@ public class FunctionInvocationService {
     private final FunctionRegistryService functionRegistryService;
     private final FunctionInvocationRepository invocationRepository;
     private final Judge0Client judge0Client;
+    private final Judge0MultiFileSupport multiFileSupport;
     private final ObjectMapper objectMapper;
 
     @Value("${scheduler.judge0.poll-interval-ms:500}")
@@ -75,21 +76,35 @@ public class FunctionInvocationService {
         int memoryLimitKb = request.memoryLimitKb() != null
                 ? request.memoryLimitKb()
                 : defaultMemoryLimitKb;
-        Judge0SubmissionRequest submission = new Judge0SubmissionRequest(
-                request.languageId(),
-                mode == FunctionSourceMode.SINGLE_FILE ? blankToNull(request.sourceCode()) : null,
-                mode == FunctionSourceMode.MULTI_FILE ? blankToNull(request.additionalFilesBase64()) : null,
-                nonNullInput(request.input()).toString(),
-                blankToNull(request.compilerOptions()),
-                blankToNull(request.commandLineArguments()),
-                request.cpuTimeLimitSeconds() != null ? request.cpuTimeLimitSeconds() : defaultCpuTimeLimitSeconds,
-                request.wallTimeLimitSeconds() != null ? request.wallTimeLimitSeconds() : defaultWallTimeLimitSeconds,
-                memoryLimitKb,
-                request.maxFileSizeKb() != null ? request.maxFileSizeKb() : defaultMaxFileSizeKb,
-                Boolean.TRUE.equals(request.enableNetwork())
-        );
-
         try {
+            int submissionLanguageId = request.languageId();
+            String sourceCode = mode == FunctionSourceMode.SINGLE_FILE ? blankToNull(request.sourceCode()) : null;
+            String additionalFiles = mode == FunctionSourceMode.MULTI_FILE ? blankToNull(request.additionalFilesBase64()) : null;
+            String compilerOptions = blankToNull(request.compilerOptions());
+            String commandLineArguments = blankToNull(request.commandLineArguments());
+            if (mode == FunctionSourceMode.MULTI_FILE) {
+                // Rewrite to a Judge0 "Multi-file program" with generated compile/run
+                // scripts; the language-specific behaviour is baked into the archive.
+                additionalFiles = multiFileSupport.buildArchive(
+                        request.languageId(), additionalFiles, compilerOptions, commandLineArguments);
+                submissionLanguageId = Judge0MultiFileSupport.MULTI_FILE_LANGUAGE_ID;
+                compilerOptions = null;
+                commandLineArguments = null;
+            }
+            Judge0SubmissionRequest submission = new Judge0SubmissionRequest(
+                    submissionLanguageId,
+                    sourceCode,
+                    additionalFiles,
+                    nonNullInput(request.input()).toString(),
+                    compilerOptions,
+                    commandLineArguments,
+                    request.cpuTimeLimitSeconds() != null ? request.cpuTimeLimitSeconds() : defaultCpuTimeLimitSeconds,
+                    request.wallTimeLimitSeconds() != null ? request.wallTimeLimitSeconds() : defaultWallTimeLimitSeconds,
+                    memoryLimitKb,
+                    request.maxFileSizeKb() != null ? request.maxFileSizeKb() : defaultMaxFileSizeKb,
+                    Boolean.TRUE.equals(request.enableNetwork())
+            );
+
             String token = judge0Client.createSubmission(submission);
             Judge0SubmissionResult result = pollUntilComplete(token);
             String stdout = truncate(result.stdout(), maxOutputBytes);
@@ -134,6 +149,14 @@ public class FunctionInvocationService {
             return new FunctionRunResultDTO(FunctionInvocationStatus.FAILED, null, null, null, null,
                     exception.getMessage(), null, null, null, exception.error(),
                     exception.getMessage(), null, null);
+        } catch (RuntimeException exception) {
+            // Judge0 outages / rejected submissions / malformed responses must not
+            // surface as a 500 from the editor's run endpoint.
+            return new FunctionRunResultDTO(FunctionInvocationStatus.FAILED, null, null, null, null,
+                    "Execution backend error: " + exception.getMessage(), null, null, null,
+                    TaskResourceErrors.FUNCTION_RUNTIME_ERROR,
+                    "Could not run the function. The execution backend rejected the request or is unavailable.",
+                    null, null);
         }
     }
 
@@ -335,17 +358,28 @@ public class FunctionInvocationService {
             FunctionVersion version,
             JsonNode input
     ) {
+        boolean multiFile = version.getSourceMode() == FunctionSourceMode.MULTI_FILE;
+        int languageId = version.getLanguageId();
+        String sourceCode = multiFile ? null : version.getSourceCode();
+        String additionalFiles = multiFile ? version.getAdditionalFilesBase64() : null;
+        String compilerOptions = version.getCompilerOptions();
+        String commandLineArguments = version.getCommandLineArguments();
+        if (multiFile) {
+            // Submit as a Judge0 "Multi-file program" with generated compile/run
+            // scripts for the version's language.
+            additionalFiles = multiFileSupport.buildArchive(
+                    languageId, additionalFiles, compilerOptions, commandLineArguments);
+            languageId = Judge0MultiFileSupport.MULTI_FILE_LANGUAGE_ID;
+            compilerOptions = null;
+            commandLineArguments = null;
+        }
         return new Judge0SubmissionRequest(
-                version.getLanguageId(),
-                version.getSourceMode() == FunctionSourceMode.SINGLE_FILE
-                        ? version.getSourceCode()
-                        : null,
-                version.getSourceMode() == FunctionSourceMode.MULTI_FILE
-                        ? version.getAdditionalFilesBase64()
-                        : null,
+                languageId,
+                sourceCode,
+                additionalFiles,
                 input.toString(),
-                version.getCompilerOptions(),
-                version.getCommandLineArguments(),
+                compilerOptions,
+                commandLineArguments,
                 version.getCpuTimeLimitSeconds(),
                 version.getWallTimeLimitSeconds(),
                 version.getMemoryLimitKb(),

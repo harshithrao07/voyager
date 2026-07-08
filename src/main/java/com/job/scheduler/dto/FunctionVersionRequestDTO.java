@@ -43,6 +43,9 @@ public record FunctionVersionRequestDTO(
 
         Boolean enableNetwork,
 
+        @Size(max = 2_000, message = "note must be at most 2000 characters")
+        String note,
+
         FunctionVersionStatus status
 ) {
 }

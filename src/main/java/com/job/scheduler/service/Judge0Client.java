@@ -14,12 +14,18 @@ import tools.jackson.databind.node.ObjectNode;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @RequiredArgsConstructor
 public class Judge0Client {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
+
+    // Judge0 language ids are stable per instance; cache id -> name to avoid a
+    // /languages round-trip on every multi-file submission.
+    private final Map<Integer, String> languageNameCache = new ConcurrentHashMap<>();
 
     @Value("${scheduler.judge0.base-url:http://localhost:2358}")
     private String baseUrl;
@@ -56,6 +62,22 @@ public class Judge0Client {
             }
         }
         return languages;
+    }
+
+    /**
+     * Resolves a Judge0 language id to its display name (e.g. "Python (3.8.1)"),
+     * caching the full language list on first use. Returns {@code null} if the id
+     * is unknown or Judge0 is unreachable.
+     */
+    public String languageName(int languageId) {
+        String cached = languageNameCache.get(languageId);
+        if (cached != null) {
+            return cached;
+        }
+        for (FunctionLanguageDTO language : listLanguages()) {
+            languageNameCache.put(language.id(), language.name());
+        }
+        return languageNameCache.get(languageId);
     }
 
     public String createSubmission(Judge0SubmissionRequest request) {

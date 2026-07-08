@@ -296,7 +296,7 @@ async function sendJson<T>(url: string, method: string, body: unknown): Promise<
   return response.json();
 }
 
-export type FunctionStatus = 'ENABLED' | 'DISABLED';
+export type FunctionStatus = 'ENABLED' | 'DISABLED' | 'ARCHIVED';
 export type FunctionVersionStatus = 'DRAFT' | 'AVAILABLE' | 'ARCHIVED';
 export type FunctionSourceMode = 'SINGLE_FILE' | 'MULTI_FILE';
 export type FunctionInvocationStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED';
@@ -327,6 +327,9 @@ export interface FunctionVersionDTO {
   languageId: number;
   hasSourceCode: boolean;
   hasAdditionalFiles: boolean;
+  sourceCode: string | null;
+  additionalFilesBase64: string | null;
+  files: FunctionSourceFileDTO[];
   compilerOptions: string | null;
   commandLineArguments: string | null;
   cpuTimeLimitSeconds: number;
@@ -335,9 +338,15 @@ export interface FunctionVersionDTO {
   maxFileSizeKb: number;
   maxOutputBytes: number;
   enableNetwork: boolean;
+  note: string | null;
   status: FunctionVersionStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface FunctionSourceFileDTO {
+  path: string;
+  content: string;
 }
 
 export interface FunctionVersionRequest {
@@ -353,7 +362,19 @@ export interface FunctionVersionRequest {
   maxFileSizeKb?: number | null;
   maxOutputBytes?: number | null;
   enableNetwork?: boolean | null;
+  note?: string | null;
   status?: FunctionVersionStatus | null;
+}
+
+export interface FunctionVersionSettingsRequest {
+  compilerOptions?: string | null;
+  commandLineArguments?: string | null;
+  cpuTimeLimitSeconds: number;
+  wallTimeLimitSeconds: number;
+  memoryLimitKb: number;
+  maxFileSizeKb: number;
+  maxOutputBytes: number;
+  enableNetwork: boolean;
 }
 
 export interface FunctionInvocationDTO {
@@ -395,8 +416,16 @@ export function listFunctionLanguages(): Promise<FunctionLanguageDTO[]> {
   return getJson<FunctionLanguageDTO[]>('/app/v1/functions/languages');
 }
 
-export function listFunctions(): Promise<FunctionDefinitionDTO[]> {
-  return getJson<FunctionDefinitionDTO[]>('/app/v1/functions');
+export interface ListFunctionsRequest {
+  includeArchived?: boolean;
+}
+
+export function listFunctions(request: ListFunctionsRequest = {}): Promise<FunctionDefinitionDTO[]> {
+  const query = buildQuery({
+    includeArchived: request.includeArchived ? 'true' : undefined,
+  });
+
+  return getJson<FunctionDefinitionDTO[]>(`/app/v1/functions${query}`);
 }
 
 export function getFunctionDefinition(functionId: string): Promise<FunctionDefinitionDTO> {
@@ -411,6 +440,18 @@ export function updateFunctionDefinition(functionId: string, request: FunctionDe
   return sendJson<FunctionDefinitionDTO>(`/app/v1/functions/${functionId}`, 'PUT', request);
 }
 
+export async function deleteFunctionDefinition(functionId: string): Promise<FunctionDefinitionDTO> {
+  const response = await fetch(`/app/v1/functions/${functionId}`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+
+  return response.json();
+}
+
 export function listFunctionVersions(functionId: string): Promise<FunctionVersionDTO[]> {
   return getJson<FunctionVersionDTO[]>(`/app/v1/functions/${functionId}/versions`);
 }
@@ -421,6 +462,14 @@ export function createFunctionVersion(functionId: string, request: FunctionVersi
 
 export function activateFunctionVersion(functionId: string, version: number): Promise<FunctionDefinitionDTO> {
   return sendJson<FunctionDefinitionDTO>(`/app/v1/functions/${functionId}/versions/${version}/activate`, 'POST', {});
+}
+
+export function updateFunctionVersionSettings(
+  functionId: string,
+  version: number,
+  request: FunctionVersionSettingsRequest,
+): Promise<FunctionVersionDTO> {
+  return sendJson<FunctionVersionDTO>(`/app/v1/functions/${functionId}/versions/${version}/settings`, 'PUT', request);
 }
 
 export function testInvokeFunction(functionId: string, request: FunctionTestInvocationRequest): Promise<FunctionInvocationDTO> {

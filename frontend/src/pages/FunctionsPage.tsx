@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Activity,
+  AlertTriangle,
+  Archive,
+  ArrowLeft,
   Box,
   Braces,
-  ChevronRight,
   CheckCircle2,
   CircleSlash,
   Clock3,
   Copy,
-  Cpu,
   Database,
   FileCode2,
   FileText,
@@ -22,25 +23,27 @@ import {
   Settings,
   Sparkles,
   Terminal,
-  Zap,
+  Trash2,
 } from 'lucide-react';
 import {
   activateFunctionVersion,
   createFunctionDefinition,
   createFunctionVersion,
-  listFunctionInvocations,
+  deleteFunctionDefinition,
   listFunctionLanguages,
   listFunctionVersions,
   listFunctions,
   updateFunctionDefinition,
+  updateFunctionVersionSettings,
   type FunctionDefinitionDTO,
-  type FunctionInvocationDTO,
   type FunctionLanguageDTO,
   type FunctionVersionDTO,
+  type FunctionVersionSettingsRequest,
 } from '../api';
+import { FunctionCodeViewer } from '../components/functions/FunctionCodeViewer';
 import { FunctionInvocationsList } from '../components/functions/FunctionInvocationsList';
 import { FunctionTestPanel } from '../components/functions/FunctionTestPanel';
-import { FunctionVersionWorkbench, isModernLanguage } from '../components/functions/FunctionVersionWorkbench';
+import { FunctionVersionWorkbench } from '../components/functions/FunctionVersionWorkbench';
 
 type DetailTab = 'overview' | 'versions' | 'test' | 'invocations' | 'settings';
 
@@ -106,6 +109,29 @@ function valueOrDefault(value?: string | null) {
   return trimmed ? trimmed : 'Default';
 }
 
+function functionStatusLabel(status: FunctionDefinitionDTO['status']) {
+  if (status === 'ENABLED') return 'Enabled';
+  if (status === 'DISABLED') return 'Disabled';
+  return 'Archived';
+}
+
+function functionStatusTone(status: FunctionDefinitionDTO['status']) {
+  if (status === 'ENABLED') return 'ok';
+  if (status === 'ARCHIVED') return 'danger';
+  return 'muted';
+}
+
+function versionSourceFiles(version: FunctionVersionDTO | null) {
+  if (!version) return [];
+  if (version.sourceMode === 'SINGLE_FILE') {
+    return [{
+      path: 'main',
+      content: version.sourceCode || '',
+    }];
+  }
+  return version.files || [];
+}
+
 type FunctionsPageProps = {
   onWorkbenchModeChange?: (active: boolean) => void;
 };
@@ -118,13 +144,13 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
   const [versions, setVersions] = useState<FunctionVersionDTO[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
-  const [recentInvocations, setRecentInvocations] = useState<FunctionInvocationDTO[]>([]);
-  const [recentInvocationsLoading, setRecentInvocationsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const [showVersionWorkbench, setShowVersionWorkbench] = useState(false);
-  const [invocationsRefreshKey, setInvocationsRefreshKey] = useState(0);
+  const [newVersionLanguageId, setNewVersionLanguageId] = useState('');
+  const invocationsRefreshKey = 0;
   const [busy, setBusy] = useState(false);
 
   const languageName = useMemo(() => {
@@ -135,7 +161,9 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
   const selected = functions.find((fn) => fn.id === selectedId) || null;
   const activeFunctionCount = functions.filter((fn) => fn.status === 'ENABLED').length;
   const pausedFunctionCount = functions.filter((fn) => fn.status === 'DISABLED').length;
+  const archivedFunctionCount = functions.filter((fn) => fn.status === 'ARCHIVED').length;
   const draftFunctionCount = functions.filter((fn) => fn.activeVersion == null).length;
+  const nextVersionNumber = versions.reduce((max, version) => Math.max(max, version.version), 0) + 1;
   const filteredFunctions = functions.filter((fn) => {
     const query = search.trim().toLowerCase();
     if (!query) return true;
@@ -150,15 +178,18 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
   useEffect(() => () => onWorkbenchModeChange?.(false), [onWorkbenchModeChange]);
 
   const reloadFunctions = useCallback(() => (
-    listFunctions().then((data) => {
+    listFunctions({ includeArchived: showArchived }).then((data) => {
       setFunctions(data);
       return data;
     })
-  ), []);
+  ), [showArchived]);
 
   useEffect(() => {
     let active = true;
-    Promise.all([listFunctions(), listFunctionLanguages().catch(() => [])])
+    Promise.all([
+      listFunctions({ includeArchived: showArchived }),
+      listFunctionLanguages().catch(() => []),
+    ])
       .then(([fns, langs]) => {
         if (!active) return;
         setFunctions(fns);
@@ -167,7 +198,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
       .catch((err: Error) => { if (active) setError(err.message); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [showArchived]);
 
   const reloadVersions = useCallback((functionId: string) => {
     setVersionsLoading(true);
@@ -177,19 +208,10 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
       .finally(() => setVersionsLoading(false));
   }, []);
 
-  const reloadRecentInvocations = useCallback((functionId: string) => {
-    setRecentInvocationsLoading(true);
-    return listFunctionInvocations(functionId)
-      .then((data) => setRecentInvocations(data))
-      .catch(() => setRecentInvocations([]))
-      .finally(() => setRecentInvocationsLoading(false));
-  }, []);
-
   const openFunction = (id: string) => {
     setActiveTab('overview');
     setShowVersionWorkbench(false);
     reloadVersions(id);
-    reloadRecentInvocations(id);
   };
 
   const selectFunction = (id: string) => {
@@ -240,6 +262,34 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
     }
   };
 
+  const archiveSelected = async () => {
+    if (!selectedId || busy) return;
+    setBusy(true);
+    try {
+      await deleteFunctionDefinition(selectedId);
+      await reloadFunctions();
+      setSelectedId(null);
+      setVersions([]);
+      setActiveTab('overview');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateVersionSettings = async (
+    version: number,
+    request: FunctionVersionSettingsRequest,
+  ) => {
+    if (!selectedId || busy) return;
+    setBusy(true);
+    try {
+      await updateFunctionVersionSettings(selectedId, version, request);
+      await reloadVersions(selectedId);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center gap-2 bg-[#06101b] text-[12px] text-on-surface-variant">
@@ -258,153 +308,208 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface-lowest text-on-surface">
-      {!creating && (
-      <div className="glass-shell grid shrink-0 grid-cols-1 border-b border-border-subtle bg-surface-base md:grid-cols-4">
-        <FunctionMetric label="Total functions" value={functions.length} tone="text-primary" />
-        <FunctionMetric label="Active functions" value={activeFunctionCount} tone="text-status-success" />
-        <FunctionMetric label="Paused functions" value={pausedFunctionCount} tone="text-on-surface-variant" />
-        <FunctionMetric label="Draft functions" value={draftFunctionCount} tone="text-status-info" />
-      </div>
-      )}
-
-      <div className="flex min-h-0 flex-1 bg-[linear-gradient(180deg,#081421,#050b13)]">
-        {!creating && (
-        <aside className="flex w-[320px] shrink-0 flex-col border-r border-border-subtle bg-[linear-gradient(180deg,rgba(10,23,37,0.98),rgba(4,10,18,0.98))]">
-        <div className="border-b border-border-subtle p-3">
-          <button
-            type="button"
-            onClick={() => {
-              setCreating(true);
-              setSelectedId(null);
-              setVersions([]);
-              setRecentInvocations([]);
-              setShowVersionWorkbench(false);
-            }}
-            className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-primary/45 bg-primary text-[13px] font-semibold text-on-primary shadow-[0_16px_42px_rgba(242,121,90,0.24)] transition-colors hover:bg-primary-fixed-dim"
-          >
-            <Plus size={16} />
-            New Function
-          </button>
-
-          <div className="mt-3 flex gap-2">
-            <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border-subtle bg-surface-container-lowest px-3">
-              <Search size={14} className="text-on-surface-variant" />
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search functions..."
-                className="min-w-0 flex-1 border-none bg-transparent text-[12px] text-on-surface outline-none placeholder:text-on-surface-variant/55"
-              />
-            </label>
-            <button
-              type="button"
-              onClick={() => reloadFunctions()}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border-subtle text-on-surface-variant transition-colors hover:border-primary/45 hover:text-on-surface"
-              title="Refresh functions"
-            >
-              <RefreshCw size={14} />
-            </button>
-          </div>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
-          {filteredFunctions.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border-subtle px-3 py-8 text-center text-[12px] text-on-surface-variant">
-              No functions yet.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {filteredFunctions.map((fn) => {
-                const active = fn.id === selectedId && !creating;
-                return (
-                  <button
-                    key={fn.id}
-                    type="button"
-                    onClick={() => selectFunction(fn.id)}
-                    className={`group w-full rounded-lg border p-3 text-left transition-colors ${
-                      active
-                        ? 'border-primary/60 bg-[linear-gradient(145deg,rgba(242,121,90,0.14),rgba(14,23,34,0.78))]'
-                        : 'border-transparent hover:border-border-subtle hover:bg-surface-container-lowest/70'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className={`h-2 w-2 rounded-full ${fn.status === 'ENABLED' ? 'bg-secondary' : 'bg-on-surface-variant/45'}`} />
-                      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-on-surface">{fn.name}</span>
-                      <span className="rounded-md border border-border-subtle bg-surface-container-low px-1.5 py-0.5 font-mono-sm text-[10px] text-primary">
-                        {fn.activeVersion ? `v${fn.activeVersion}` : '-'}
-                      </span>
-                    </div>
-                    <div className="mt-1 pl-4 font-mono-sm text-[11px] text-on-surface-variant">
-                      <div className="truncate">{fn.namespace} / {fn.name}</div>
-                      <div className="mt-1">{formatUpdated(fn.updatedAt)}</div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+      {creating ? (
+        <FunctionCreateWorkbench
+          languages={languages}
+          onCancel={() => setCreating(false)}
+          onDone={handleFunctionCreated}
+        />
+      ) : selected && showVersionWorkbench ? (
+        <FunctionVersionWorkbench
+          resourceLabel={functionResource(selected, nextVersionNumber)}
+          languages={languages}
+          languageId={newVersionLanguageId}
+          onLanguageChange={setNewVersionLanguageId}
+          description={selected.description || ''}
+          metadata={(
+            <SelectedMetadata
+              selected={selected}
+              languages={languages}
+              languageId={newVersionLanguageId}
+              onLanguageChange={setNewVersionLanguageId}
+            />
           )}
-        </div>
-        </aside>
-        )}
+          onCancel={() => setShowVersionWorkbench(false)}
+          onSaveDraft={async (request) => {
+            await createFunctionVersion(selected.id, request);
+            await handleVersionCreated();
+          }}
+          publishLabel="Publish version"
+          onPublish={async (request) => {
+            await createFunctionVersion(selected.id, request);
+            await handleVersionCreated();
+          }}
+        />
+      ) : selected ? (
+        <FunctionDetail
+          selected={selected}
+          versions={versions}
+          versionsLoading={versionsLoading}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          languageName={languageName}
+          busy={busy}
+          onBack={() => {
+            setSelectedId(null);
+            setVersions([]);
+            setActiveTab('overview');
+          }}
+          onNewVersion={() => {
+            const sorted = [...versions].sort((left, right) => right.version - left.version);
+            const base = sorted.find((version) => version.version === selected.activeVersion) || sorted[0];
+            setNewVersionLanguageId(base ? String(base.languageId) : '');
+            setShowVersionWorkbench(true);
+          }}
+          onActivate={activate}
+          onToggleStatus={() => toggleStatus(selected)}
+          onArchive={archiveSelected}
+          onUpdateVersionSettings={updateVersionSettings}
+          testPanel={(
+            versions.length === 0 ? (
+              <EmptyPanel message="Publish a version first, then test it here." />
+            ) : (
+              <FunctionTestPanel
+                versions={versions}
+                activeVersion={selected.activeVersion}
+              />
+            )
+          )}
+          invocationsPanel={<FunctionInvocationsList functionId={selected.id} refreshKey={invocationsRefreshKey} />}
+        />
+      ) : (
+        <FunctionListView
+          functions={filteredFunctions}
+          totalCount={functions.length}
+          activeCount={activeFunctionCount}
+          pausedCount={pausedFunctionCount}
+          archivedOrDraftCount={showArchived ? archivedFunctionCount : draftFunctionCount}
+          showArchived={showArchived}
+          search={search}
+          onSearch={setSearch}
+          onToggleArchived={() => setShowArchived((value) => !value)}
+          onRefresh={() => reloadFunctions()}
+          onSelect={selectFunction}
+          onCreate={() => {
+            setCreating(true);
+            setSelectedId(null);
+            setVersions([]);
+            setShowVersionWorkbench(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
 
-        <main className="flex min-h-0 min-w-0 flex-1 w-full">
-        {creating ? (
-          <FunctionCreateWorkbench
-            languages={languages}
-            onCancel={() => setCreating(false)}
-            onDone={handleFunctionCreated}
+function FunctionListView({
+  functions,
+  totalCount,
+  activeCount,
+  pausedCount,
+  archivedOrDraftCount,
+  showArchived,
+  search,
+  onSearch,
+  onToggleArchived,
+  onRefresh,
+  onSelect,
+  onCreate,
+}: {
+  functions: FunctionDefinitionDTO[];
+  totalCount: number;
+  activeCount: number;
+  pausedCount: number;
+  archivedOrDraftCount: number;
+  showArchived: boolean;
+  search: string;
+  onSearch: (value: string) => void;
+  onToggleArchived: () => void;
+  onRefresh: () => void;
+  onSelect: (id: string) => void;
+  onCreate: () => void;
+}) {
+  return (
+    <div className="flex h-full min-h-0 w-full flex-1 flex-col">
+      <div className="glass-shell grid shrink-0 grid-cols-1 border-b border-border-subtle bg-surface-base md:grid-cols-4">
+        <FunctionMetric label={showArchived ? 'Visible functions' : 'Live functions'} value={totalCount} tone="text-primary" />
+        <FunctionMetric label="Active functions" value={activeCount} tone="text-status-success" />
+        <FunctionMetric label="Paused functions" value={pausedCount} tone="text-on-surface-variant" />
+        <FunctionMetric label={showArchived ? 'Archived functions' : 'Draft functions'} value={archivedOrDraftCount} tone={showArchived ? 'text-status-error' : 'text-status-info'} />
+      </div>
+
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle bg-surface-base/60 px-5 py-3">
+        <label className="flex h-9 min-w-[220px] flex-1 items-center gap-2 rounded-lg border border-border-subtle bg-surface-container-lowest px-3">
+          <Search size={14} className="text-on-surface-variant" />
+          <input
+            value={search}
+            onChange={(event) => onSearch(event.target.value)}
+            placeholder="Search functions..."
+            className="min-w-0 flex-1 border-none bg-transparent text-[12px] text-on-surface outline-none placeholder:text-on-surface-variant/55"
           />
-        ) : !selected ? (
-          <EmptyFunctionState onCreate={() => setCreating(true)} />
-        ) : showVersionWorkbench ? (
-          <FunctionVersionWorkbench
-            resourceLabel={functionResource(selected, (selected.activeVersion || 0) + 1)}
-            languages={languages}
-            metadata={<SelectedMetadata selected={selected} nextVersion={(selected.activeVersion || 0) + 1} />}
-            onCancel={() => setShowVersionWorkbench(false)}
-            onSaveDraft={async (request) => {
-              await createFunctionVersion(selected.id, request);
-              await handleVersionCreated();
-            }}
-            publishLabel="Publish version"
-            onPublish={async (request) => {
-              await createFunctionVersion(selected.id, request);
-              await handleVersionCreated();
-            }}
-          />
+        </label>
+        <button
+          type="button"
+          onClick={onToggleArchived}
+          className={`flex h-9 items-center gap-2 rounded-lg border px-3 text-[12px] transition-colors ${
+            showArchived
+              ? 'border-status-error/35 bg-status-error/10 text-status-error'
+              : 'border-border-subtle text-on-surface-variant hover:border-primary/45 hover:text-on-surface'
+          }`}
+        >
+          <Archive size={13} />
+          {showArchived ? 'Showing archived' : 'Show archived'}
+        </button>
+        <button
+          type="button"
+          onClick={onCreate}
+          className="flex h-9 items-center gap-2 rounded-lg border border-primary/45 bg-primary px-3 text-[13px] font-semibold text-on-primary shadow-[0_16px_42px_rgba(242,121,90,0.24)] transition-colors hover:bg-primary-fixed-dim"
+        >
+          <Plus size={16} />
+          New Function
+        </button>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border-subtle text-on-surface-variant transition-colors hover:border-primary/45 hover:text-on-surface"
+          title="Refresh functions"
+        >
+          <RefreshCw size={14} />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto bg-[linear-gradient(180deg,#081421,#050b13)] p-5">
+        {functions.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border-subtle px-3 py-16 text-center text-[12px] text-on-surface-variant">
+            No functions yet.
+          </div>
         ) : (
-          <FunctionDetail
-            selected={selected}
-            versions={versions}
-            versionsLoading={versionsLoading}
-            recentInvocations={recentInvocations}
-            recentInvocationsLoading={recentInvocationsLoading}
-            activeTab={activeTab}
-            setActiveTab={setActiveTab}
-            languageName={languageName}
-            busy={busy}
-            onNewVersion={() => setShowVersionWorkbench(true)}
-            onActivate={activate}
-            onToggleStatus={() => toggleStatus(selected)}
-            testPanel={(
-              versions.length === 0 ? (
-                <EmptyPanel message="Publish a version first, then test it here." />
-              ) : (
-                <FunctionTestPanel
-                  functionId={selected.id}
-                  versions={versions}
-                  activeVersion={selected.activeVersion}
-                  onInvoked={() => {
-                    setInvocationsRefreshKey((key) => key + 1);
-                    void reloadRecentInvocations(selected.id);
-                  }}
-                />
-              )
-            )}
-            invocationsPanel={<FunctionInvocationsList functionId={selected.id} refreshKey={invocationsRefreshKey} />}
-          />
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {functions.map((fn) => (
+              <button
+                key={fn.id}
+                type="button"
+                onClick={() => onSelect(fn.id)}
+                className="group flex flex-col rounded-lg border border-border-subtle bg-surface-container-lowest/60 p-4 text-left transition-colors hover:border-primary/55 hover:bg-[linear-gradient(145deg,rgba(242,121,90,0.1),rgba(14,23,34,0.78))]"
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${
+                    fn.status === 'ENABLED'
+                      ? 'bg-secondary'
+                      : fn.status === 'ARCHIVED'
+                        ? 'bg-status-error'
+                        : 'bg-on-surface-variant/45'
+                  }`} />
+                  <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-on-surface">{fn.name}</span>
+                  <span className="rounded-md border border-border-subtle bg-surface-container-low px-1.5 py-0.5 font-mono-sm text-[10px] text-primary">
+                    {fn.activeVersion ? `v${fn.activeVersion}` : '-'}
+                  </span>
+                </div>
+                <div className="mt-2 truncate font-mono-sm text-[11px] text-on-surface-variant">{fn.namespace} / {fn.name}</div>
+                <div className="mt-1 font-mono-sm text-[11px] text-on-surface-variant">{formatUpdated(fn.updatedAt)}</div>
+              </button>
+            ))}
+          </div>
         )}
-        </main>
       </div>
     </div>
   );
@@ -424,9 +529,7 @@ function FunctionCreateWorkbench({
   const [description, setDescription] = useState('');
   const [languageId, setLanguageId] = useState('');
 
-  const modernLanguages = languages.filter((language) => isModernLanguage(language.name));
-  const sortedLanguages = [...(modernLanguages.length > 0 ? modernLanguages : languages)]
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const sortedLanguages = [...languages].sort((a, b) => a.name.localeCompare(b.name));
   const validDefinition = slug.test(namespace) && slug.test(name);
   const metadata = (
     <div className="grid gap-3 lg:grid-cols-3">
@@ -491,30 +594,32 @@ function FunctionDetail({
   selected,
   versions,
   versionsLoading,
-  recentInvocations,
-  recentInvocationsLoading,
   activeTab,
   setActiveTab,
   languageName,
   busy,
+  onBack,
   onNewVersion,
   onActivate,
   onToggleStatus,
+  onArchive,
+  onUpdateVersionSettings,
   testPanel,
   invocationsPanel,
 }: {
   selected: FunctionDefinitionDTO;
   versions: FunctionVersionDTO[];
   versionsLoading: boolean;
-  recentInvocations: FunctionInvocationDTO[];
-  recentInvocationsLoading: boolean;
   activeTab: DetailTab;
   setActiveTab: (tab: DetailTab) => void;
   languageName: (id: number) => string;
   busy: boolean;
+  onBack: () => void;
   onNewVersion: () => void;
   onActivate: (version: number) => void;
   onToggleStatus: () => void;
+  onArchive: () => void;
+  onUpdateVersionSettings: (version: number, request: FunctionVersionSettingsRequest) => Promise<void>;
   testPanel: ReactNode;
   invocationsPanel: ReactNode;
 }) {
@@ -529,8 +634,9 @@ function FunctionDetail({
   const sourceModeLabel = displayVersion
     ? displayVersion.sourceMode === 'MULTI_FILE' ? 'Multi-file' : 'Single file'
     : 'No source';
-  const statusLabel = selected.status === 'ENABLED' ? 'Enabled' : 'Disabled';
+  const statusLabel = functionStatusLabel(selected.status);
   const networkLabel = displayVersion?.enableNetwork ? 'Network enabled' : 'Network disabled';
+  const archived = selected.status === 'ARCHIVED';
   const tabs: Array<{ id: DetailTab; label: string; icon: ReactNode }> = [
     { id: 'overview', label: 'Overview', icon: <FileText size={14} /> },
     { id: 'versions', label: 'Versions', icon: <Layers3 size={14} /> },
@@ -549,13 +655,23 @@ function FunctionDetail({
   return (
     <div className="flex h-full min-h-0 w-full flex-1 flex-col bg-[radial-gradient(ellipse_at_58%_0%,rgba(242,121,90,0.09),transparent_32%),linear-gradient(180deg,#081421,#050b13_64%,#040912)]">
       <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border-subtle/80 px-5">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="text-[14px] font-semibold text-on-surface-variant">Functions</span>
-          <span className="text-on-surface-variant">/</span>
-          <span className="min-w-0 truncate text-[14px] font-semibold text-on-surface">{selected.name}</span>
+        <div className="flex min-w-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onBack}
+            className="flex shrink-0 items-center gap-1.5 text-[14px] font-semibold text-on-surface-variant transition-colors hover:text-on-surface"
+            title="Back to functions"
+          >
+            <ArrowLeft size={14} />
+            Functions
+          </button>
+          <span className="text-on-surface-variant/60">/</span>
+          <span className="min-w-0 truncate text-[14px] font-semibold text-on-surface" aria-current="page">{selected.name}</span>
           <span className={`rounded-md border px-2 py-1 text-[11px] font-medium ${
             selected.status === 'ENABLED'
               ? 'border-secondary/35 bg-secondary/10 text-secondary'
+              : selected.status === 'ARCHIVED'
+                ? 'border-status-error/35 bg-status-error/10 text-status-error'
               : 'border-border-subtle bg-surface-container-low text-on-surface-variant'
           }`}>
             {statusLabel}
@@ -564,15 +680,8 @@ function FunctionDetail({
         <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
-            onClick={() => setActiveTab('test')}
-            className="flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-surface-container-lowest/70 px-3 text-[12px] text-on-surface transition-colors hover:border-primary/45 hover:text-primary"
-          >
-            <Zap size={14} />
-            Invoke function
-          </button>
-          <button
-            type="button"
             onClick={onNewVersion}
+            disabled={archived}
             className="flex h-9 items-center gap-2 rounded-lg border border-primary bg-primary px-3 text-[12px] font-semibold text-on-primary shadow-[0_16px_42px_rgba(242,121,90,0.24)] transition-colors hover:bg-primary-fixed-dim"
           >
             <Plus size={14} />
@@ -623,7 +732,7 @@ function FunctionDetail({
                   <HeroChip icon={<Terminal size={13} />} label={displayVersion ? languageName(displayVersion.languageId) : 'No runtime'} />
                   <HeroChip icon={<FileCode2 size={13} />} label={sourceModeLabel} />
                   <HeroChip icon={displayVersion?.enableNetwork ? <Network size={13} /> : <CircleSlash size={13} />} label={networkLabel} />
-                  <HeroChip icon={<CheckCircle2 size={13} />} label={statusLabel} tone={selected.status === 'ENABLED' ? 'ok' : 'muted'} />
+                  <HeroChip icon={<CheckCircle2 size={13} />} label={statusLabel} tone={functionStatusTone(selected.status)} />
                 </div>
               </div>
             </div>
@@ -665,37 +774,15 @@ function FunctionDetail({
 
           <div className="py-4">
             {activeTab === 'overview' && (
-              <div className="space-y-4">
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                  <FunctionOverviewDetails
-                    selected={selected}
-                    draftCount={draftCount}
-                    availableCount={availableCount}
-                    archivedCount={archivedCount}
-                  />
-                  <ExecutionProfileCard
-                    version={displayVersion}
-                    languageName={languageName}
-                  />
-                </div>
-                <VersionsOverviewTable
-                  versions={sortedVersions}
-                  activeVersion={selected.activeVersion}
-                  languageName={languageName}
-                  loading={versionsLoading}
-                  busy={busy}
-                  onActivate={onActivate}
-                  onNewVersion={onNewVersion}
-                />
-                <RecentActivityCard
-                  invocations={recentInvocations}
-                  loading={recentInvocationsLoading}
-                  onViewAll={() => setActiveTab('invocations')}
-                />
-              </div>
+              <FunctionOverviewDetails
+                selected={selected}
+                draftCount={draftCount}
+                availableCount={availableCount}
+                archivedCount={archivedCount}
+              />
             )}
             {activeTab === 'versions' && (
-              <VersionListPanel
+              <VersionHistoryPanel
                 versions={sortedVersions}
                 activeVersion={selected.activeVersion}
                 languageName={languageName}
@@ -714,8 +801,8 @@ function FunctionDetail({
                 resourceUri={resourceUri}
                 busy={busy}
                 onToggleStatus={onToggleStatus}
-                onCopyResource={copyResource}
-                languageName={languageName}
+                onArchive={onArchive}
+                onUpdateVersionSettings={onUpdateVersionSettings}
               />
             )}
           </div>
@@ -739,11 +826,13 @@ function FunctionSummaryCard({ icon, label, value }: { icon: ReactNode; label: s
   );
 }
 
-function HeroChip({ icon, label, tone = 'muted' }: { icon: ReactNode; label: string; tone?: 'ok' | 'muted' }) {
+function HeroChip({ icon, label, tone = 'muted' }: { icon: ReactNode; label: string; tone?: 'ok' | 'muted' | 'danger' }) {
   return (
     <span className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] ${
       tone === 'ok'
         ? 'border-secondary/35 bg-secondary/10 text-secondary'
+        : tone === 'danger'
+          ? 'border-status-error/35 bg-status-error/10 text-status-error'
         : 'border-border-subtle bg-surface-container-lowest/65 text-on-surface-variant'
     }`}>
       {icon}
@@ -783,50 +872,18 @@ function FunctionOverviewDetails({
   );
 }
 
-function ExecutionProfileCard({
-  version,
-  languageName,
-}: {
-  version: FunctionVersionDTO | null;
-  languageName: (id: number) => string;
-}) {
-  return (
-    <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-4">
-      <div className="mb-4 flex items-center gap-2">
-        <Cpu size={16} className="text-primary" />
-        <h3 className="text-[15px] font-semibold text-on-surface">Execution profile</h3>
-        {version && <span className="text-[12px] text-on-surface-variant">(v{version.version})</span>}
-      </div>
-      {version ? (
-        <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
-          <OverviewLine label="Language" value={languageName(version.languageId)} />
-          <OverviewLine label="Max output" value={formatOutputBytes(version.maxOutputBytes)} />
-          <OverviewLine label="Source mode" value={version.sourceMode === 'MULTI_FILE' ? 'Multi-file' : 'Single file'} />
-          <OverviewLine label="Network access" value={version.enableNetwork ? 'Enabled' : 'Disabled'} />
-          <OverviewLine label="CPU time" value={`${version.cpuTimeLimitSeconds}s`} />
-          <OverviewLine label="Compiler options" value={valueOrDefault(version.compilerOptions)} mono />
-          <OverviewLine label="Wall time" value={`${version.wallTimeLimitSeconds}s`} />
-          <OverviewLine label="Command arguments" value={valueOrDefault(version.commandLineArguments)} mono />
-          <OverviewLine label="Memory" value={formatLimitKb(version.memoryLimitKb)} />
-          <OverviewLine label="Max file size" value={formatLimitKb(version.maxFileSizeKb)} />
-        </div>
-      ) : (
-        <EmptyPanel message="No version exists yet. Publish one to see runtime limits and language details." />
-      )}
-    </div>
-  );
-}
-
 function OverviewLine({
   label,
   value,
   mono,
   copyable,
+  stacked,
 }: {
   label: string;
   value: string;
   mono?: boolean;
   copyable?: boolean;
+  stacked?: boolean;
 }) {
   const copyValue = async () => {
     if (!copyable) return;
@@ -836,6 +893,23 @@ function OverviewLine({
       // Best effort copy action.
     }
   };
+
+  if (stacked) {
+    return (
+      <div className="min-w-0 text-[12px]">
+        <div className="mb-1 text-on-surface-variant">{label}</div>
+        <button
+          type="button"
+          onClick={copyValue}
+          className={`block min-w-0 max-w-full truncate text-left text-on-surface ${mono ? 'font-mono-sm' : ''} ${copyable ? 'cursor-copy hover:text-primary' : 'cursor-default'}`}
+          title={value}
+        >
+          {value}
+          {copyable && <Copy size={12} className="ml-2 inline text-on-surface-variant" />}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="grid min-w-0 grid-cols-[145px_minmax(0,1fr)] items-center gap-3 text-[12px]">
@@ -853,7 +927,7 @@ function OverviewLine({
   );
 }
 
-function VersionsOverviewTable({
+function VersionHistoryPanel({
   versions,
   activeVersion,
   languageName,
@@ -870,91 +944,27 @@ function VersionsOverviewTable({
   onActivate: (version: number) => void;
   onNewVersion: () => void;
 }) {
-  return (
-    <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <h3 className="text-[15px] font-semibold text-on-surface">Versions</h3>
-        <button
-          type="button"
-          onClick={onNewVersion}
-          className="flex h-8 items-center gap-1.5 rounded-lg border border-primary bg-primary px-3 text-[12px] font-semibold text-on-primary transition-colors hover:bg-primary-fixed-dim"
-        >
-          <Plus size={13} />
-          Add version
-        </button>
-      </div>
-      <VersionTable
-        versions={versions}
-        activeVersion={activeVersion}
-        languageName={languageName}
-        loading={loading}
-        busy={busy}
-        onActivate={onActivate}
-        onNewVersion={onNewVersion}
-      />
-    </div>
+  const preferredVersion = activeVersion != null && versions.some((version) => version.version === activeVersion)
+    ? activeVersion
+    : versions[0]?.version ?? null;
+  const [selectedVersionNumber, setSelectedVersionNumber] = useState<number | null>(
+    preferredVersion,
   );
-}
+  const selectedVersion = versions.find((version) => version.version === selectedVersionNumber)
+    || versions.find((version) => version.version === activeVersion)
+    || versions[0]
+    || null;
 
-function VersionListPanel({
-  versions,
-  activeVersion,
-  languageName,
-  loading,
-  busy,
-  onActivate,
-  onNewVersion,
-}: {
-  versions: FunctionVersionDTO[];
-  activeVersion: number | null;
-  languageName: (id: number) => string;
-  loading: boolean;
-  busy: boolean;
-  onActivate: (version: number) => void;
-  onNewVersion: () => void;
-}) {
-  return (
-    <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div>
-          <h3 className="text-[15px] font-semibold text-on-surface">Version history</h3>
-          <p className="mt-1 text-[12px] text-on-surface-variant">Published and draft runtime snapshots for this function.</p>
-        </div>
-        <button type="button" onClick={onNewVersion} className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] text-primary hover:bg-primary/10">
-          <Plus size={13} />
-          Add version
-        </button>
-      </div>
-      <VersionTable
-        versions={versions}
-        activeVersion={activeVersion}
-        languageName={languageName}
-        loading={loading}
-        busy={busy}
-        onActivate={onActivate}
-        onNewVersion={onNewVersion}
-      />
-    </div>
-  );
-}
+  useEffect(() => {
+    if (versions.length === 0) {
+      setSelectedVersionNumber(null);
+      return;
+    }
+    if (!versions.some((version) => version.version === selectedVersionNumber)) {
+      setSelectedVersionNumber(preferredVersion);
+    }
+  }, [preferredVersion, selectedVersionNumber, versions]);
 
-function VersionTable({
-  versions,
-  activeVersion,
-  languageName,
-  loading,
-  busy,
-  onActivate,
-  onNewVersion,
-}: {
-  versions: FunctionVersionDTO[];
-  activeVersion: number | null;
-  languageName: (id: number) => string;
-  loading: boolean;
-  busy: boolean;
-  onActivate: (version: number) => void;
-  onNewVersion: () => void;
-}) {
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-[12px] text-on-surface-variant">
@@ -968,140 +978,127 @@ function VersionTable({
   }
 
   return (
-    <div className="overflow-x-auto">
-      <div className="min-w-[860px]">
-        <div className="grid grid-cols-[110px_120px_160px_130px_140px_minmax(190px,1fr)_34px] border-b border-border-subtle px-3 pb-2 font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant">
-          <div>Version</div>
-          <div>Status</div>
-          <div>Language</div>
-          <div>Source mode</div>
-          <div>Updated</div>
-          <div>Resource limits</div>
-          <div />
+    <div className="grid min-h-[560px] gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-4">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-[15px] font-semibold text-on-surface">Versions</h3>
+            <p className="mt-1 text-[12px] text-on-surface-variant">Click a version to inspect its source and details.</p>
+          </div>
+          <button type="button" onClick={onNewVersion} className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] text-primary hover:bg-primary/10">
+            <Plus size={13} />
+            Add
+          </button>
         </div>
-        <div className="space-y-2 pt-2">
-          {versions.map((version) => {
-            const active = activeVersion === version.version;
-            return (
-              <div
-                key={version.id}
-                className={`grid grid-cols-[110px_120px_160px_130px_140px_minmax(190px,1fr)_34px] items-center rounded-lg border px-3 py-3 text-[12px] ${
-                  active
-                    ? 'border-primary/55 bg-[linear-gradient(145deg,rgba(242,121,90,0.12),rgba(255,255,255,0.025))]'
-                    : 'border-border-subtle bg-surface-container-lowest/50'
-                }`}
-              >
-                <div className="font-mono-sm text-[13px] font-semibold text-on-surface">v{version.version}</div>
-                <div>
-                  <StatusChip
-                    label={active ? 'Active' : version.status.toLowerCase()}
-                    tone={active || version.status === 'AVAILABLE' ? 'ok' : version.status === 'DRAFT' ? 'info' : 'muted'}
-                  />
-                </div>
-                <div className="truncate text-on-surface">{languageName(version.languageId)}</div>
-                <div className="text-on-surface-variant">{version.sourceMode === 'MULTI_FILE' ? 'Multi-file' : 'Single file'}</div>
-                <div className="text-on-surface-variant">{formatUpdated(version.updatedAt).replace('Updated ', '')}</div>
-                <div className="truncate text-on-surface-variant" title={`${version.cpuTimeLimitSeconds}s CPU / ${formatLimitKb(version.memoryLimitKb)} RAM / ${formatOutputBytes(version.maxOutputBytes)} output`}>
-                  {version.cpuTimeLimitSeconds}s CPU / {formatLimitKb(version.memoryLimitKb)} RAM / {formatOutputBytes(version.maxOutputBytes)} output
-                </div>
-                <div className="flex justify-end">
-                  {!active && version.status === 'AVAILABLE' ? (
-                    <button
-                      type="button"
-                      onClick={() => onActivate(version.version)}
-                      disabled={busy}
-                      className="rounded-md border border-border-subtle px-2 py-1 text-[11px] text-on-surface-variant hover:border-primary/45 hover:text-primary disabled:opacity-50"
-                    >
-                      Activate
-                    </button>
-                  ) : (
-                    <ChevronRight size={15} className="text-on-surface-variant" />
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <div className="space-y-2">
+            {versions.map((version) => {
+              const selected = selectedVersion?.version === version.version;
+              const current = activeVersion === version.version;
+              return (
+                <button
+                  key={version.id}
+                  type="button"
+                  onClick={() => setSelectedVersionNumber(version.version)}
+                  className={`w-full rounded-lg border p-3 text-left transition-colors ${
+                    selected
+                      ? 'border-primary/55 bg-primary/10'
+                      : 'border-border-subtle bg-surface-container-lowest/50 hover:border-primary/35'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono-sm text-[13px] font-semibold text-on-surface">v{version.version}</span>
+                    <StatusChip
+                      label={current ? 'current' : version.status.toLowerCase()}
+                      tone={current || version.status === 'AVAILABLE' ? 'ok' : version.status === 'DRAFT' ? 'info' : 'muted'}
+                    />
+                  </div>
+                  <div className="mt-2 space-y-1 text-[11px] text-on-surface-variant">
+                    <div className="truncate">{languageName(version.languageId)}</div>
+                    <div>{version.sourceMode === 'MULTI_FILE' ? 'Multi-file' : 'Single file'} - {formatUpdated(version.updatedAt).replace('Updated ', '')}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
       </div>
+      <VersionInspector
+        title={selectedVersion ? `Version v${selectedVersion.version}` : 'Version details'}
+        version={selectedVersion}
+        activeVersion={activeVersion}
+        languageName={languageName}
+        busy={busy}
+        onActivate={onActivate}
+        emptyMessage="Choose a version to inspect its code and execution settings."
+      />
     </div>
   );
 }
 
-function RecentActivityCard({
-  invocations,
-  loading,
-  onViewAll,
+function VersionInspector({
+  title,
+  version,
+  activeVersion,
+  languageName,
+  busy,
+  onActivate,
+  emptyMessage,
 }: {
-  invocations: FunctionInvocationDTO[];
-  loading: boolean;
-  onViewAll: () => void;
+  title: string;
+  version: FunctionVersionDTO | null;
+  activeVersion: number | null;
+  languageName: (id: number) => string;
+  busy: boolean;
+  onActivate: (version: number) => void;
+  emptyMessage: string;
 }) {
-  const recent = invocations.slice(0, 3);
+  const files = useMemo(() => versionSourceFiles(version), [version]);
+  const isActive = Boolean(version && activeVersion === version.version);
+
   return (
     <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <h3 className="text-[15px] font-semibold text-on-surface">Recent activity</h3>
-        <button
-          type="button"
-          onClick={onViewAll}
-          className="flex h-8 items-center gap-1.5 rounded-lg border border-border-subtle px-3 text-[12px] text-on-surface-variant hover:border-primary/45 hover:text-on-surface"
-        >
-          View all invocations
-          <ChevronRight size={13} />
-        </button>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <FileCode2 size={16} className="text-primary" />
+            <h3 className="text-[15px] font-semibold text-on-surface">{title}</h3>
+            {isActive && <StatusChip label="current" tone="ok" />}
+          </div>
+          {version && (
+            <p className="mt-1 text-[12px] text-on-surface-variant">
+              {languageName(version.languageId)} - {version.sourceMode === 'MULTI_FILE' ? 'Multi-file' : 'Single file'} - {formatDateTime(version.updatedAt)}
+            </p>
+          )}
+        </div>
+        {version && !isActive && version.status === 'AVAILABLE' && (
+          <button
+            type="button"
+            onClick={() => onActivate(version.version)}
+            disabled={busy}
+            className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] text-primary hover:bg-primary/10 disabled:opacity-50"
+          >
+            <Power size={13} />
+            Activate
+          </button>
+        )}
       </div>
-      {loading ? (
-        <div className="flex items-center gap-2 text-[12px] text-on-surface-variant">
-          <Loader2 size={14} className="animate-spin" /> Loading recent activity...
-        </div>
-      ) : recent.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border-subtle px-3 py-6 text-center text-[12px] text-on-surface-variant">
-          No invocations yet. Run a test or trigger this function from a workflow.
-        </div>
+      {!version ? (
+        <EmptyPanel message={emptyMessage} />
       ) : (
-        <div className="divide-y divide-border-subtle">
-          {recent.map((invocation) => (
-            <button
-              key={invocation.id}
-              type="button"
-              onClick={onViewAll}
-              className="grid w-full grid-cols-[minmax(180px,1fr)_120px_120px_120px_24px] items-center gap-4 py-3 text-left text-[12px] hover:text-primary"
-            >
-              <div className="flex min-w-0 items-center gap-3">
-                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${
-                  invocation.status === 'SUCCEEDED'
-                    ? 'border-secondary/30 bg-secondary/10 text-secondary'
-                    : invocation.status === 'FAILED'
-                      ? 'border-status-error/30 bg-status-error/10 text-status-error'
-                      : 'border-status-info/30 bg-status-info/10 text-status-info'
-                }`}>
-                  <CheckCircle2 size={14} />
-                </span>
-                <div className="min-w-0">
-                  <div className="truncate text-on-surface">Invocation {invocation.status.toLowerCase()}</div>
-                  <div className="font-mono-sm text-[11px] text-on-surface-variant">v{invocation.version}</div>
-                </div>
-              </div>
-              <TinyInline label="Duration" value={invocation.durationMs != null ? `${invocation.durationMs} ms` : '-'} />
-              <TinyInline label="Memory" value={invocation.memoryKb != null ? formatLimitKb(invocation.memoryKb) : '-'} />
-              <TinyInline label="Started" value={formatUpdated(invocation.startedAt).replace('Updated ', '')} />
-              <ChevronRight size={15} className="justify-self-end text-on-surface-variant" />
-            </button>
-          ))}
+        <div className="space-y-4">
+          <FunctionCodeViewer files={files} languageName={languageName(version.languageId)} />
+          <VersionConfigGrid version={version} languageName={languageName} />
         </div>
       )}
     </div>
   );
 }
-
-function TinyInline({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] text-on-surface-variant">{label}</div>
-      <div className="mt-1 truncate text-[12px] text-on-surface">{value}</div>
-    </div>
-  );
-}
+type ConfirmState = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  tone: 'primary' | 'danger';
+  action: () => void | Promise<void>;
+};
 
 function FunctionSettingsPanel({
   selected,
@@ -1109,63 +1106,455 @@ function FunctionSettingsPanel({
   resourceUri,
   busy,
   onToggleStatus,
-  onCopyResource,
-  languageName,
+  onArchive,
+  onUpdateVersionSettings,
 }: {
   selected: FunctionDefinitionDTO;
   activeVersion: FunctionVersionDTO | null;
   resourceUri: string;
   busy: boolean;
   onToggleStatus: () => void;
-  onCopyResource: () => void;
-  languageName: (id: number) => string;
+  onArchive: () => void;
+  onUpdateVersionSettings: (version: number, request: FunctionVersionSettingsRequest) => Promise<void>;
 }) {
+  const [compilerOptions, setCompilerOptions] = useState('');
+  const [commandLineArguments, setCommandLineArguments] = useState('');
+  const [cpuTime, setCpuTime] = useState('');
+  const [wallTime, setWallTime] = useState('');
+  const [memoryLimit, setMemoryLimit] = useState('');
+  const [maxFileSize, setMaxFileSize] = useState('');
+  const [maxOutput, setMaxOutput] = useState('');
+  const [networkEnabled, setNetworkEnabled] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  const archived = selected.status === 'ARCHIVED';
+
+  useEffect(() => {
+    if (!activeVersion) return;
+    setCompilerOptions(activeVersion.compilerOptions || '');
+    setCommandLineArguments(activeVersion.commandLineArguments || '');
+    setCpuTime(String(activeVersion.cpuTimeLimitSeconds));
+    setWallTime(String(activeVersion.wallTimeLimitSeconds));
+    setMemoryLimit(String(activeVersion.memoryLimitKb));
+    setMaxFileSize(String(activeVersion.maxFileSizeKb));
+    setMaxOutput(String(activeVersion.maxOutputBytes));
+    setNetworkEnabled(activeVersion.enableNetwork);
+    setSettingsError(null);
+  }, [activeVersion]);
+
+  const readDecimal = (label: string, value: string, min: number) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < min) {
+      throw new Error(`${label} must be at least ${min}.`);
+    }
+    return parsed;
+  };
+
+  const readInteger = (label: string, value: string, min: number) => {
+    const parsed = readDecimal(label, value, min);
+    if (!Number.isInteger(parsed)) {
+      throw new Error(`${label} must be a whole number.`);
+    }
+    return parsed;
+  };
+
+  const buildRequest = (): FunctionVersionSettingsRequest => {
+    const cpuSeconds = readDecimal('CPU time', cpuTime, 0.1);
+    const wallSeconds = readDecimal('Wall time', wallTime, 0.1);
+    if (wallSeconds < cpuSeconds) {
+      throw new Error('Wall time must be greater than or equal to CPU time.');
+    }
+    if (compilerOptions.length > 512) {
+      throw new Error('Compiler options must be 512 characters or less.');
+    }
+    if (commandLineArguments.length > 512) {
+      throw new Error('Command-line arguments must be 512 characters or less.');
+    }
+    return {
+      compilerOptions: compilerOptions.trim() || null,
+      commandLineArguments: commandLineArguments.trim() || null,
+      cpuTimeLimitSeconds: cpuSeconds,
+      wallTimeLimitSeconds: wallSeconds,
+      memoryLimitKb: readInteger('Memory limit', memoryLimit, 1024),
+      maxFileSizeKb: readInteger('Max file size', maxFileSize, 1),
+      maxOutputBytes: readInteger('Max output', maxOutput, 1),
+      enableNetwork: networkEnabled,
+    };
+  };
+
+  const requestSave = () => {
+    if (!activeVersion || busy || archived) return;
+    try {
+      setSettingsError(null);
+      const request = buildRequest();
+      setConfirm({
+        title: 'Apply execution settings?',
+        message: `The updated resource limits will apply to v${activeVersion.version} the next time this function runs.`,
+        confirmLabel: 'Apply settings',
+        tone: 'primary',
+        action: () => onUpdateVersionSettings(activeVersion.version, request),
+      });
+    } catch (err) {
+      setSettingsError((err as Error).message);
+    }
+  };
+
+  const requestToggleStatus = () => {
+    if (busy) return;
+    const enabling = selected.status !== 'ENABLED';
+    setConfirm({
+      title: enabling ? 'Enable function?' : 'Disable function?',
+      message: enabling
+        ? 'Workflows will be able to resolve and run this function again.'
+        : 'Workflows will no longer be able to resolve or run this function until it is enabled again.',
+      confirmLabel: enabling ? 'Enable function' : 'Disable function',
+      tone: 'primary',
+      action: onToggleStatus,
+    });
+  };
+
+  const requestDelete = () => {
+    if (busy) return;
+    setConfirm({
+      title: 'Delete this function?',
+      message: 'This is a soft delete — the function is archived, not permanently removed. It stops resolving for workflows, but its versions and history are preserved and you can restore it later from "Show archived".',
+      confirmLabel: 'Delete function',
+      tone: 'danger',
+      action: onArchive,
+    });
+  };
+
+  const runConfirm = async () => {
+    const action = confirm?.action;
+    setConfirm(null);
+    if (action) await action();
+  };
+
+  const numberError = (value: string, opts: { min: number; integer?: boolean }): string | null => {
+    const trimmed = value.trim();
+    if (!trimmed) return 'Required.';
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) return 'Enter a number.';
+    if (opts.integer && !Number.isInteger(parsed)) return 'Whole number only.';
+    if (parsed < opts.min) return `Must be at least ${opts.min}.`;
+    return null;
+  };
+
+  const cpuError = numberError(cpuTime, { min: 0.1 });
+  const rawWallError = numberError(wallTime, { min: 0.1 });
+  const wallError = rawWallError
+    || (!cpuError && Number(wallTime) < Number(cpuTime) ? 'Must be ≥ CPU time.' : null);
+  const memoryError = numberError(memoryLimit, { min: 1024, integer: true });
+  const maxFileError = numberError(maxFileSize, { min: 1, integer: true });
+  const maxOutputError = numberError(maxOutput, { min: 1, integer: true });
+  const compilerError = compilerOptions.length > 512 ? 'Must be 512 characters or less.' : null;
+  const argsError = commandLineArguments.length > 512 ? 'Must be 512 characters or less.' : null;
+  const hasFieldErrors = Boolean(
+    cpuError || wallError || memoryError || maxFileError || maxOutputError || compilerError || argsError,
+  );
+
+  const statusToneClass = selected.status === 'ENABLED'
+    ? 'border-secondary/35 bg-secondary/10 text-secondary'
+    : selected.status === 'ARCHIVED'
+      ? 'border-status-error/35 bg-status-error/10 text-status-error'
+      : 'border-border-subtle bg-surface-container-low text-on-surface-variant';
+
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-      <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <Settings size={16} className="text-primary" />
-          <h3 className="text-[15px] font-semibold text-on-surface">Function settings</h3>
+    <div className="mx-auto w-full max-w-[720px] space-y-4">
+      <div className="rounded-xl border border-border-subtle bg-surface-container-lowest/55 p-5">
+        <SettingsSectionHeader
+          icon={<Settings size={16} className="text-primary" />}
+          title="Function"
+          description="General details and availability for this function."
+        />
+        <div className="mt-4 divide-y divide-border-subtle/70">
+          <SettingsRow label="Status" description="Whether workflows can resolve this function.">
+            <span className={`rounded-md border px-2 py-1 text-[11px] font-medium ${statusToneClass}`}>
+              {functionStatusLabel(selected.status)}
+            </span>
+          </SettingsRow>
+          <SettingsRow label="Resource URI" description="Reference used by workflows to call this function.">
+            <span className="max-w-full truncate font-mono-sm text-[12px] text-on-surface" title={resourceUri}>{resourceUri}</span>
+          </SettingsRow>
+          <SettingsRow label="Description" description="Human-readable summary of what this function does.">
+            <span className="max-w-full text-right text-[12px] text-on-surface-variant">{selected.description || 'No description'}</span>
+          </SettingsRow>
         </div>
-        <div className="space-y-3">
-          <OverviewLine label="Status" value={selected.status === 'ENABLED' ? 'Enabled' : 'Disabled'} />
-          <OverviewLine label="Resource" value={resourceUri} mono copyable />
-          <OverviewLine label="Description" value={selected.description || 'No description'} />
-          <button
-            type="button"
-            onClick={onToggleStatus}
-            disabled={busy}
-            className={`mt-2 flex h-9 items-center gap-2 rounded-lg border px-3 text-[12px] transition-colors disabled:opacity-50 ${
-              selected.status === 'ENABLED'
-                ? 'border-secondary/35 bg-secondary/10 text-secondary'
-                : 'border-border-subtle text-on-surface-variant hover:text-on-surface'
-            }`}
-          >
-            <Power size={14} />
-            {selected.status === 'ENABLED' ? 'Disable function' : 'Enable function'}
-          </button>
-          <button
-            type="button"
-            onClick={onCopyResource}
-            className="flex h-9 items-center gap-2 rounded-lg border border-border-subtle px-3 text-[12px] text-on-surface-variant hover:border-primary/45 hover:text-primary"
-          >
-            <Copy size={14} />
-            Copy function URI
-          </button>
-        </div>
-      </div>
-      <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <Braces size={16} className="text-primary" />
-          <h3 className="text-[15px] font-semibold text-on-surface">Active version settings</h3>
-        </div>
-        {activeVersion ? (
-          <VersionConfigGrid version={activeVersion} languageName={languageName} />
-        ) : (
-          <EmptyPanel message="No active version yet. Add a version, then activate it here." />
+
+        {!archived && (
+          <div className="mt-5 border-t border-border-subtle/70 pt-4">
+            <div className="text-[12px] font-semibold text-on-surface">Availability</div>
+            <p className="mt-1 text-[11px] leading-4 text-on-surface-variant">
+              Disabling pauses the function without removing it. Deleting is a soft delete — it archives the function so its history is preserved and it can be restored later.
+            </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={requestToggleStatus}
+                disabled={busy}
+                className={`flex h-9 items-center justify-center gap-2 rounded-lg border px-3 text-[12px] transition-colors disabled:opacity-50 ${
+                  selected.status === 'ENABLED'
+                    ? 'border-secondary/35 bg-secondary/10 text-secondary hover:bg-secondary/15'
+                    : 'border-border-subtle text-on-surface-variant hover:text-on-surface'
+                }`}
+              >
+                <Power size={14} />
+                {selected.status === 'ENABLED' ? 'Disable function' : 'Enable function'}
+              </button>
+              <button
+                type="button"
+                onClick={requestDelete}
+                disabled={busy}
+                className="flex h-9 items-center justify-center gap-2 rounded-lg border border-status-error/35 px-3 text-[12px] text-status-error transition-colors hover:bg-status-error/10 disabled:opacity-50"
+              >
+                <Trash2 size={14} />
+                Delete function
+              </button>
+            </div>
+          </div>
         )}
       </div>
+
+      <div className="rounded-xl border border-border-subtle bg-surface-container-lowest/55 p-5">
+        <SettingsSectionHeader
+          icon={<Braces size={16} className="text-primary" />}
+          title="Execution settings"
+          description={activeVersion ? `Resource limits applied to v${activeVersion.version} when it runs.` : 'Resource limits for the current version.'}
+        />
+        {activeVersion ? (
+          <div className="mt-4 space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <SettingsInput label="CPU time (s)" value={cpuTime} onChange={setCpuTime} disabled={busy || archived} error={cpuError} hint="Seconds, e.g. 2 or 0.5" />
+              <SettingsInput label="Wall time (s)" value={wallTime} onChange={setWallTime} disabled={busy || archived} error={wallError} hint="Seconds, ≥ CPU time" />
+              <SettingsInput label="Memory (KB)" value={memoryLimit} onChange={setMemoryLimit} disabled={busy || archived} error={memoryError} integer hint="Whole KB, min 1024" />
+              <SettingsInput label="Max file size (KB)" value={maxFileSize} onChange={setMaxFileSize} disabled={busy || archived} error={maxFileError} integer hint="Whole KB" />
+              <SettingsInput label="Max output (bytes)" value={maxOutput} onChange={setMaxOutput} disabled={busy || archived} error={maxOutputError} integer hint="Whole bytes" />
+            </div>
+            <label className="flex h-[58px] items-center justify-between rounded-lg border border-border-subtle bg-surface-container-lowest px-3">
+              <span>
+                <span className="block text-[12px] font-semibold text-on-surface">Network access</span>
+                <span className="mt-0.5 block text-[11px] text-on-surface-variant">Outbound calls during execution.</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={networkEnabled}
+                disabled={busy || archived}
+                onChange={(event) => setNetworkEnabled(event.target.checked)}
+                className="h-5 w-5 rounded border-border-subtle bg-surface-container text-primary focus:ring-primary disabled:opacity-50"
+              />
+            </label>
+            <SettingsTextInput label="Compiler options" value={compilerOptions} onChange={setCompilerOptions} disabled={busy || archived} placeholder="-O2 -pipe" maxLength={512} error={compilerError} />
+            <SettingsTextInput label="Command-line arguments" value={commandLineArguments} onChange={setCommandLineArguments} disabled={busy || archived} placeholder="--fast-mode" maxLength={512} error={argsError} />
+            {settingsError && <div className="text-[12px] text-status-error">{settingsError}</div>}
+            <div className="flex justify-end border-t border-border-subtle/70 pt-4">
+              <button
+                type="button"
+                onClick={requestSave}
+                disabled={busy || archived || hasFieldErrors}
+                className="flex h-9 items-center gap-2 rounded-lg border border-primary bg-primary px-4 text-[12px] font-semibold text-on-primary transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Settings size={14} />
+                Save execution settings
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4">
+            <EmptyPanel message="No current version yet. Add a version, then edit execution settings here." />
+          </div>
+        )}
+      </div>
+
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          message={confirm.message}
+          confirmLabel={confirm.confirmLabel}
+          tone={confirm.tone}
+          busy={busy}
+          onCancel={() => setConfirm(null)}
+          onConfirm={runConfirm}
+        />
+      )}
     </div>
+  );
+}
+
+function SettingsSectionHeader({ icon, title, description }: { icon: ReactNode; title: string; description: string }) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <div className="mt-0.5">{icon}</div>
+      <div>
+        <h3 className="text-[15px] font-semibold text-on-surface">{title}</h3>
+        <p className="mt-0.5 text-[12px] text-on-surface-variant">{description}</p>
+      </div>
+    </div>
+  );
+}
+
+function SettingsRow({ label, description, children }: { label: string; description: string; children: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-3">
+      <div className="min-w-0">
+        <div className="text-[12px] font-medium text-on-surface">{label}</div>
+        <div className="mt-0.5 text-[11px] text-on-surface-variant">{description}</div>
+      </div>
+      <div className="flex min-w-0 max-w-[55%] justify-end">{children}</div>
+    </div>
+  );
+}
+
+function ConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  tone,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  tone: 'primary' | 'danger';
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-[440px] rounded-xl border border-border-subtle bg-surface-container-lowest p-5 shadow-[0_30px_80px_rgba(0,0,0,0.5)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start gap-3">
+          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${
+            tone === 'danger'
+              ? 'border-status-error/35 bg-status-error/10 text-status-error'
+              : 'border-primary/35 bg-primary/10 text-primary'
+          }`}>
+            {tone === 'danger' ? <AlertTriangle size={18} /> : <Settings size={18} />}
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-[15px] font-semibold text-on-surface">{title}</h3>
+            <p className="mt-1.5 text-[12px] leading-5 text-on-surface-variant">{message}</p>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="flex h-9 items-center rounded-lg border border-border-subtle px-4 text-[12px] text-on-surface-variant transition-colors hover:text-on-surface disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className={`flex h-9 items-center gap-2 rounded-lg border px-4 text-[12px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+              tone === 'danger'
+                ? 'border-status-error bg-status-error/90 text-white hover:bg-status-error'
+                : 'border-primary bg-primary text-on-primary hover:bg-primary-fixed-dim'
+            }`}
+          >
+            {busy && <Loader2 size={14} className="animate-spin" />}
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsInput({
+  label,
+  value,
+  onChange,
+  disabled,
+  hint,
+  error,
+  integer,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  disabled: boolean;
+  hint?: string;
+  error?: string | null;
+  integer?: boolean;
+}) {
+  const invalid = Boolean(error);
+  return (
+    <label className="block">
+      <span className={labelClass}>{label}</span>
+      <input
+        value={value}
+        onChange={(event) => {
+          // Digits only for integer fields; digits + one dot for decimals.
+          const cleaned = integer
+            ? event.target.value.replace(/[^\d]/g, '')
+            : event.target.value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1');
+          onChange(cleaned);
+        }}
+        disabled={disabled}
+        inputMode={integer ? 'numeric' : 'decimal'}
+        aria-invalid={invalid}
+        className={`${fieldClass} ${invalid ? 'border-status-error/70 focus:border-status-error' : ''}`}
+      />
+      {invalid ? (
+        <span className="mt-1 block text-[10px] text-status-error">{error}</span>
+      ) : hint ? (
+        <span className="mt-1 block text-[10px] text-on-surface-variant/70">{hint}</span>
+      ) : null}
+    </label>
+  );
+}
+
+function SettingsTextInput({
+  label,
+  value,
+  onChange,
+  disabled,
+  placeholder,
+  maxLength,
+  error,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  disabled: boolean;
+  placeholder: string;
+  maxLength?: number;
+  error?: string | null;
+}) {
+  const invalid = Boolean(error);
+  return (
+    <label className="block">
+      <span className={labelClass}>
+        {label}
+        {maxLength != null && (
+          <span className={`ml-auto font-mono-sm text-[10px] ${invalid ? 'text-status-error' : 'text-on-surface-variant/60'}`}>
+            {value.length}/{maxLength}
+          </span>
+        )}
+      </span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
+        placeholder={placeholder}
+        aria-invalid={invalid}
+        className={`${fieldClass} ${invalid ? 'border-status-error/70 focus:border-status-error' : ''}`}
+      />
+      {invalid && <span className="mt-1 block text-[10px] text-status-error">{error}</span>}
+    </label>
   );
 }
 
@@ -1201,6 +1590,9 @@ function VersionConfigGrid({ version, languageName }: { version: FunctionVersion
       <TinyDetail label="Network access" value={version.enableNetwork ? 'Enabled' : 'Disabled'} />
       <TinyDetail label="Created" value={formatDateTime(version.createdAt)} />
       <TinyDetail label="Updated" value={formatDateTime(version.updatedAt)} />
+      <div className="md:col-span-2 xl:col-span-4">
+        <TinyDetail label="Version note" value={version.note?.trim() || 'None'} />
+      </div>
     </div>
   );
 }
@@ -1216,42 +1608,35 @@ function TinyDetail({ label, value, mono }: { label: string; value: string; mono
   );
 }
 
-function SelectedMetadata({ selected, nextVersion }: { selected: FunctionDefinitionDTO; nextVersion: number }) {
+function SelectedMetadata({
+  selected,
+  languages,
+  languageId,
+  onLanguageChange,
+}: {
+  selected: FunctionDefinitionDTO;
+  languages: FunctionLanguageDTO[];
+  languageId: string;
+  onLanguageChange: (value: string) => void;
+}) {
+  const sortedLanguages = [...languages].sort((a, b) => a.name.localeCompare(b.name));
   return (
-    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px]">
+    <div className="grid gap-3 lg:grid-cols-3">
       <ReadOnlyMeta label="Namespace" value={selected.namespace} />
       <ReadOnlyMeta label="Name" value={selected.name} />
-      <ReadOnlyMeta label="Version" value={`v${nextVersion}`} />
-      <div className="lg:col-span-3">
-        <span className={labelClass}>Description</span>
-        <div className="min-h-[42px] rounded-lg border border-border-subtle bg-surface-container-lowest px-3 py-2 text-[12px] leading-[18px] text-on-surface-variant">
-          {selected.description || 'No description.'}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function EmptyFunctionState({ onCreate }: { onCreate: () => void }) {
-  return (
-    <div className="flex h-full w-full flex-1 items-center justify-center bg-[radial-gradient(ellipse_at_50%_20%,rgba(242,121,90,0.1),transparent_38%),linear-gradient(180deg,#081421,#050b13)] p-6 text-center">
-      <div className="max-w-[420px]">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl border border-primary/35 bg-primary/10 text-primary">
-          <FileCode2 size={22} />
-        </div>
-        <h2 className="mt-4 text-[18px] font-semibold text-on-surface">Create a function runtime</h2>
-        <p className="mt-2 text-[12px] leading-5 text-on-surface-variant">
-          Add code that workflows can call with a function resource URI. Functions read JSON from stdin and write JSON to stdout.
-        </p>
-        <button
-          type="button"
-          onClick={onCreate}
-          className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg border border-primary bg-primary px-4 text-[12px] font-semibold text-on-primary transition-colors hover:bg-primary-fixed-dim"
+      <label>
+        <span className={labelClass}>Language</span>
+        <select
+          value={languageId}
+          onChange={(event) => onLanguageChange(event.target.value)}
+          className={selectFieldClass}
         >
-          <Plus size={14} />
-          New Function
-        </button>
-      </div>
+          <option value="">Select language</option>
+          {sortedLanguages.map((language) => (
+            <option key={language.id} value={language.id}>{language.name}</option>
+          ))}
+        </select>
+      </label>
     </div>
   );
 }
@@ -1291,7 +1676,7 @@ function MetaInput({
         onChange={(event) => onChange?.(event.target.value)}
         placeholder={placeholder}
         readOnly={readOnly}
-        className={`${fieldClass} ${readOnly ? 'text-on-surface-variant' : ''}`}
+        className={`${fieldClass} ${readOnly ? 'cursor-not-allowed text-on-surface-variant' : ''}`}
       />
     </label>
   );
@@ -1301,7 +1686,10 @@ function ReadOnlyMeta({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <span className={labelClass}>{label}</span>
-      <div className="flex h-9 items-center rounded-lg border border-border-subtle bg-surface-container-lowest px-3 font-mono-sm text-[12px] text-on-surface">
+      <div
+        className="flex h-9 cursor-not-allowed items-center rounded-lg border border-border-subtle bg-surface-container-lowest px-3 font-mono-sm text-[12px] text-on-surface-variant"
+        title={`${label} can't be changed here`}
+      >
         {value}
       </div>
     </div>

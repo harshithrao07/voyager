@@ -92,6 +92,10 @@ public class FunctionVersion {
     @Column(name = "enable_network", nullable = false)
     private boolean enableNetwork;
 
+    // Optional changelog message describing what changed in this version.
+    @Column(name = "note", columnDefinition = "TEXT")
+    private String note;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
     private FunctionVersionStatus status = FunctionVersionStatus.AVAILABLE;

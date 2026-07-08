@@ -1,12 +1,17 @@
 import { useState } from 'react';
-import { Loader2, Play } from 'lucide-react';
-import { testInvokeFunction, type FunctionInvocationDTO, type FunctionVersionDTO } from '../../api';
+import { CheckCircle2, Loader2, Play, PlayCircle, Plus, Trash2 } from 'lucide-react';
+import { executeFunctionCode, type FunctionRunResult, type FunctionVersionDTO } from '../../api';
 
 type Props = {
-  functionId: string;
   versions: FunctionVersionDTO[];
   activeVersion: number | null;
-  onInvoked: () => void;
+};
+
+type TestCase = {
+  id: string;
+  name: string;
+  input: string;
+  checked: boolean;
 };
 
 const statusTone: Record<string, string> = {
@@ -15,103 +20,305 @@ const statusTone: Record<string, string> = {
   RUNNING: 'border-status-info/40 bg-status-info/10 text-status-info',
 };
 
-export function FunctionTestPanel({ functionId, versions, activeVersion, onInvoked }: Props) {
-  const [versionChoice, setVersionChoice] = useState('active');
-  const [inputText, setInputText] = useState('{\n  "amount": 100\n}');
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<FunctionInvocationDTO | null>(null);
+function newCase(index: number): TestCase {
+  return {
+    id: crypto.randomUUID(),
+    name: `Case ${index}`,
+    input: '{\n  "amount": 100\n}',
+    checked: true,
+  };
+}
 
-  const run = async () => {
-    if (running) return;
+export function FunctionTestPanel({ versions, activeVersion }: Props) {
+  const [versionChoice, setVersionChoice] = useState('active');
+  const [cases, setCases] = useState<TestCase[]>(() => [newCase(1)]);
+  const [activeCaseId, setActiveCaseId] = useState(cases[0]?.id || '');
+  const [runningCaseId, setRunningCaseId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, FunctionRunResult>>({});
+  const [resultVersions, setResultVersions] = useState<Record<string, number>>({});
+
+  const runnableVersions = versions.filter((version) => version.status === 'AVAILABLE');
+  const selectedVersion = versionChoice === 'active'
+    ? runnableVersions.find((version) => version.version === activeVersion)
+    : runnableVersions.find((version) => version.version === Number(versionChoice));
+  const activeCase = cases.find((testCase) => testCase.id === activeCaseId) || cases[0];
+  const checkedCases = cases.filter((testCase) => testCase.checked);
+  const running = runningCaseId !== null;
+
+  const updateCase = (id: string, patch: Partial<TestCase>) => {
+    setCases((current) => current.map((testCase) => (
+      testCase.id === id ? { ...testCase, ...patch } : testCase
+    )));
+  };
+
+  const addCase = () => {
+    const next = newCase(cases.length + 1);
+    setCases((current) => [...current, next]);
+    setActiveCaseId(next.id);
+  };
+
+  const removeCase = (id: string) => {
+    if (cases.length <= 1) return;
+    setCases((current) => current.filter((testCase) => testCase.id !== id));
+    setResults((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setResultVersions((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    if (activeCaseId === id) {
+      const nextCase = cases.find((testCase) => testCase.id !== id);
+      setActiveCaseId(nextCase?.id || '');
+    }
+  };
+
+  const validateSelectedVersion = () => {
+    if (!selectedVersion) {
+      throw new Error('Select an available version before checking tests.');
+    }
+    if (selectedVersion.sourceMode === 'SINGLE_FILE' && !selectedVersion.sourceCode?.trim()) {
+      throw new Error(`v${selectedVersion.version} does not have source code to check.`);
+    }
+    if (selectedVersion.sourceMode === 'MULTI_FILE' && !selectedVersion.additionalFilesBase64?.trim()) {
+      throw new Error(`v${selectedVersion.version} does not have a file bundle to check.`);
+    }
+    return selectedVersion;
+  };
+
+  const runCase = async (testCase: TestCase, version: FunctionVersionDTO) => {
     let input: unknown = {};
-    const trimmed = inputText.trim();
+    const trimmed = testCase.input.trim();
     if (trimmed) {
       try {
         input = JSON.parse(trimmed);
       } catch {
-        setError('Input must be valid JSON.');
-        return;
+        throw new Error(`${testCase.name}: input must be valid JSON.`);
       }
     }
-    setRunning(true);
-    setError(null);
+    setRunningCaseId(testCase.id);
+    const runResult = await executeFunctionCode({
+      languageId: version.languageId,
+      sourceMode: version.sourceMode,
+      sourceCode: version.sourceMode === 'SINGLE_FILE' ? version.sourceCode : undefined,
+      additionalFilesBase64: version.sourceMode === 'MULTI_FILE' ? version.additionalFilesBase64 : undefined,
+      compilerOptions: version.compilerOptions,
+      commandLineArguments: version.commandLineArguments,
+      cpuTimeLimitSeconds: version.cpuTimeLimitSeconds,
+      wallTimeLimitSeconds: version.wallTimeLimitSeconds,
+      memoryLimitKb: version.memoryLimitKb,
+      maxFileSizeKb: version.maxFileSizeKb,
+      maxOutputBytes: version.maxOutputBytes,
+      enableNetwork: version.enableNetwork,
+      input,
+    });
+    setResults((current) => ({ ...current, [testCase.id]: runResult }));
+    setResultVersions((current) => ({ ...current, [testCase.id]: version.version }));
+  };
+
+  const runCases = async (list: TestCase[], emptyMessage: string) => {
+    if (running) return;
     try {
-      const invocation = await testInvokeFunction(functionId, {
-        version: versionChoice === 'active' ? undefined : Number(versionChoice),
-        input,
-      });
-      setResult(invocation);
-      onInvoked();
+      setError(null);
+      const version = validateSelectedVersion();
+      if (list.length === 0) {
+        throw new Error(emptyMessage);
+      }
+      for (const testCase of list) {
+        await runCase(testCase, version);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setRunning(false);
+      setRunningCaseId(null);
     }
   };
 
+  const runAll = () => runCases(cases, 'Add at least one test case.');
+  const runChecked = () => runCases(checkedCases, 'Check at least one test case.');
+  const runSingle = (testCase: TestCase) => {
+    setActiveCaseId(testCase.id);
+    return runCases([testCase], 'Add at least one test case.');
+  };
+
+  const activeResult = activeCase ? results[activeCase.id] : null;
+  const activeResultVersion = activeCase ? resultVersions[activeCase.id] : null;
+
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <div>
-        <div className="mb-2 flex items-center justify-between">
-          <span className="font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant/70">Input JSON</span>
-          <select
-            value={versionChoice}
-            onChange={(event) => setVersionChoice(event.target.value)}
-            className="h-7 rounded-md border border-border-subtle bg-surface-container-lowest px-2 font-mono-sm text-[11px] text-on-surface outline-none focus:border-primary/50"
+    <div className="space-y-4">
+      <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="min-w-0 flex-1">
+            <span className="mb-1.5 block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant/70">Version</span>
+            <select
+              value={versionChoice}
+              onChange={(event) => setVersionChoice(event.target.value)}
+              className="h-9 w-full rounded-lg border border-border-subtle bg-surface-container-lowest px-3 font-mono-sm text-[12px] text-on-surface outline-none focus:border-primary/50"
+            >
+              <option value="active">Current{activeVersion ? ` (v${activeVersion})` : ''}</option>
+              {runnableVersions.map((version) => (
+                <option key={version.id} value={version.version}>
+                  v{version.version}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={runChecked}
+            disabled={running}
+            className="flex h-9 items-center justify-center gap-2 rounded-lg border border-border-subtle px-4 text-[12px] font-semibold text-on-surface-variant transition-colors hover:border-primary/45 hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
+            title="Run only the checked test cases"
           >
-            <option value="active">Active{activeVersion ? ` (v${activeVersion})` : ''}</option>
-            {versions.map((version) => (
-              <option key={version.id} value={version.version}>
-                v{version.version}
-              </option>
-            ))}
-          </select>
+            <Play size={14} />
+            Run selected
+          </button>
+          <button
+            type="button"
+            onClick={runAll}
+            disabled={running}
+            className="flex h-9 items-center justify-center gap-2 rounded-lg border border-primary bg-primary px-4 text-[12px] font-semibold text-on-primary transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
+            title="Run every test case"
+          >
+            {running ? <Loader2 size={15} className="animate-spin" /> : <PlayCircle size={15} />}
+            Run all
+          </button>
         </div>
-        <textarea
-          value={inputText}
-          onChange={(event) => setInputText(event.target.value)}
-          spellCheck={false}
-          className="min-h-[220px] w-full resize-y rounded-lg border border-border-subtle bg-surface-container-lowest p-3 font-mono-sm text-[12px] leading-relaxed text-on-surface outline-none transition-colors focus:border-primary/50"
-        />
-        <button
-          type="button"
-          onClick={run}
-          disabled={running}
-          className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-primary bg-primary px-4 font-body-sm text-body-sm font-medium text-on-primary transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {running ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
-          Run test
-        </button>
         {error && <p className="mt-2 font-mono-sm text-[11px] text-status-error">{error}</p>}
       </div>
 
-      <div>
-        <span className="mb-2 block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant/70">Result</span>
-        {!result ? (
-          <div className="flex min-h-[220px] items-center justify-center rounded-lg border border-dashed border-border-subtle text-body-sm text-on-surface-variant/70">
-            Run the function to see output
+      <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+        <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-3">
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-[13px] font-semibold text-on-surface">Test cases</span>
+            <button
+              type="button"
+              onClick={addCase}
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] text-primary hover:bg-primary/10"
+            >
+              <Plus size={13} />
+              Add
+            </button>
           </div>
-        ) : (
-          <div className="space-y-3 rounded-lg border border-border-subtle bg-surface-container-lowest p-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className={`rounded-full border px-2.5 py-0.5 font-mono-sm text-[10px] uppercase tracking-[0.06em] ${statusTone[result.status] || statusTone.RUNNING}`}>
-                {result.status}
-              </span>
-              <span className="font-mono-sm text-[11px] text-on-surface-variant">v{result.version}</span>
-              {result.timeSeconds != null && <Meta label={`${result.timeSeconds}s`} />}
-              {result.memoryKb != null && <Meta label={`${result.memoryKb} KB`} />}
-              {result.exitCode != null && <Meta label={`exit ${result.exitCode}`} />}
+          <div className="space-y-2">
+            {cases.map((testCase) => {
+              const active = activeCase?.id === testCase.id;
+              const result = results[testCase.id];
+              return (
+                <div
+                  key={testCase.id}
+                  className={`flex items-center gap-2 rounded-lg border p-2.5 transition-colors ${
+                    active
+                      ? 'border-primary/55 bg-primary/10'
+                      : 'border-border-subtle bg-surface-container-lowest/50 hover:border-primary/35'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={testCase.checked}
+                    onChange={(event) => updateCase(testCase.id, { checked: event.target.checked })}
+                    className="h-4 w-4 rounded border-border-subtle bg-surface-container text-primary focus:ring-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setActiveCaseId(testCase.id)}
+                    className="min-w-0 flex-1 truncate text-left text-[12px] font-semibold text-on-surface"
+                  >
+                    {testCase.name}
+                  </button>
+                  {runningCaseId === testCase.id ? (
+                    <Loader2 size={13} className="animate-spin text-primary" />
+                  ) : result?.status === 'SUCCEEDED' ? (
+                    <CheckCircle2 size={13} className="text-secondary" />
+                  ) : result?.status === 'FAILED' ? (
+                    <CheckCircle2 size={13} className="text-status-error" />
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => runSingle(testCase)}
+                    disabled={running}
+                    title="Run this case"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border-subtle text-on-surface-variant transition-colors hover:border-primary/45 hover:text-primary disabled:opacity-40"
+                  >
+                    <Play size={12} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {activeCase && (
+            <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <input
+                  value={activeCase.name}
+                  onChange={(event) => updateCase(activeCase.id, { name: event.target.value })}
+                  className="h-8 min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-container-lowest px-2 text-[12px] font-semibold text-on-surface outline-none focus:border-primary/50"
+                />
+                <button
+                  type="button"
+                  onClick={() => runSingle(activeCase)}
+                  disabled={running}
+                  className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] font-semibold text-primary transition-colors hover:bg-primary/10 disabled:opacity-40"
+                  title="Run this case"
+                >
+                  {runningCaseId === activeCase.id ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
+                  Run
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeCase(activeCase.id)}
+                  disabled={cases.length <= 1}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border-subtle text-on-surface-variant hover:border-status-error/45 hover:text-status-error disabled:opacity-40"
+                  title="Remove test case"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              <span className="mb-2 block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant/70">Input JSON</span>
+              <textarea
+                value={activeCase.input}
+                onChange={(event) => updateCase(activeCase.id, { input: event.target.value })}
+                spellCheck={false}
+                className="min-h-[220px] w-full resize-y rounded-lg border border-border-subtle bg-surface-container-lowest p-3 font-mono-sm text-[12px] leading-relaxed text-on-surface outline-none transition-colors focus:border-primary/50"
+              />
             </div>
-            {result.errorName && (
-              <Block title="Error" tone="error" body={`${result.errorName}${result.errorMessage ? `: ${result.errorMessage}` : ''}`} />
+          )}
+
+          <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-4">
+            <span className="mb-2 block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant/70">Result</span>
+            {!activeResult ? (
+              <div className="flex min-h-[220px] items-center justify-center rounded-lg border border-dashed border-border-subtle text-body-sm text-on-surface-variant/70">
+                Select cases and check them to see output
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full border px-2.5 py-0.5 font-mono-sm text-[10px] uppercase tracking-[0.06em] ${statusTone[activeResult.status] || statusTone.RUNNING}`}>
+                    {activeResult.status}
+                  </span>
+                  {activeResultVersion != null && <Meta label={`v${activeResultVersion}`} />}
+                  {activeResult.timeSeconds != null && <Meta label={`${activeResult.timeSeconds}s`} />}
+                  {activeResult.memoryKb != null && <Meta label={`${activeResult.memoryKb} KB`} />}
+                  {activeResult.exitCode != null && <Meta label={`exit ${activeResult.exitCode}`} />}
+                </div>
+                {activeResult.errorName && (
+                  <Block title="Error" tone="error" body={`${activeResult.errorName}${activeResult.errorMessage ? `: ${activeResult.errorMessage}` : ''}`} />
+                )}
+                {activeResult.output != null && <Block title="Output" tone="ok" body={JSON.stringify(activeResult.output, null, 2)} />}
+                {activeResult.stdout && <Block title="stdout" body={activeResult.stdout} />}
+                {activeResult.stderr && <Block title="stderr" tone="error" body={activeResult.stderr} />}
+                {activeResult.compileOutput && <Block title="compile output" tone="error" body={activeResult.compileOutput} />}
+              </div>
             )}
-            {result.output != null && <Block title="Output" tone="ok" body={JSON.stringify(result.output, null, 2)} />}
-            {result.stdout && <Block title="stdout" body={result.stdout} />}
-            {result.stderr && <Block title="stderr" tone="error" body={result.stderr} />}
-            {result.compileOutput && <Block title="compile output" tone="error" body={result.compileOutput} />}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

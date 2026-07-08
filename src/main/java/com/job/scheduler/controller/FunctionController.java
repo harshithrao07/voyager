@@ -9,6 +9,7 @@ import com.job.scheduler.dto.FunctionRunResultDTO;
 import com.job.scheduler.dto.FunctionTestInvocationRequestDTO;
 import com.job.scheduler.dto.FunctionVersionRequestDTO;
 import com.job.scheduler.dto.FunctionVersionResponseDTO;
+import com.job.scheduler.dto.FunctionVersionSettingsRequestDTO;
 import com.job.scheduler.dto.Judge0RuntimeInfoDTO;
 import com.job.scheduler.service.FunctionInvocationService;
 import com.job.scheduler.service.FunctionRegistryService;
@@ -19,12 +20,14 @@ import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -65,8 +68,12 @@ public class FunctionController {
     }
 
     @GetMapping
-    public ResponseEntity<List<FunctionDefinitionResponseDTO>> getFunctions() {
-        return ResponseEntity.ok(functionRegistryService.getFunctions());
+    public ResponseEntity<List<FunctionDefinitionResponseDTO>> getFunctions(
+            @RequestParam(defaultValue = "false") boolean includeArchived
+    ) {
+        return ResponseEntity.ok(
+                functionRegistryService.getFunctions(includeArchived)
+        );
     }
 
     @GetMapping("/{functionId}")
@@ -84,6 +91,15 @@ public class FunctionController {
         return ResponseEntity.ok(
                 functionRegistryService.updateFunction(functionId, request)
         );
+    }
+
+    @DeleteMapping("/{functionId}")
+    public ResponseEntity<FunctionDefinitionResponseDTO> deleteFunction(
+            @PathVariable UUID functionId
+    ) {
+        return ResponseEntity.ok(functionRegistryService.archiveFunction(
+                functionId
+        ));
     }
 
     @PostMapping("/{functionId}/versions")
@@ -110,6 +126,21 @@ public class FunctionController {
     ) {
         return ResponseEntity.ok(
                 functionRegistryService.activateVersion(functionId, version)
+        );
+    }
+
+    @PutMapping("/{functionId}/versions/{version}/settings")
+    public ResponseEntity<FunctionVersionResponseDTO> updateVersionSettings(
+            @PathVariable UUID functionId,
+            @PathVariable @Min(1) int version,
+            @Valid @RequestBody FunctionVersionSettingsRequestDTO request
+    ) {
+        return ResponseEntity.ok(
+                functionRegistryService.updateVersionSettings(
+                        functionId,
+                        version,
+                        request
+                )
         );
     }
 

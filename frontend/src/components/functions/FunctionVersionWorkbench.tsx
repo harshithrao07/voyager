@@ -106,7 +106,7 @@ function toNumber(value: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function languageToMonaco(languageName: string | undefined) {
+export function languageToMonaco(languageName: string | undefined) {
   const name = (languageName || '').toLowerCase();
   if (name.includes('python')) return 'python';
   if (name.includes('javascript') || name.includes('node') || name.includes('typescript')) return 'javascript';
@@ -121,7 +121,7 @@ function languageToMonaco(languageName: string | undefined) {
   return 'plaintext';
 }
 
-function fileLanguage(path: string, selectedLanguage: string | undefined) {
+export function fileLanguage(path: string, selectedLanguage: string | undefined) {
   if (path.endsWith('.json')) return 'json';
   if (path.endsWith('.ts') || path.endsWith('.tsx')) return 'typescript';
   if (path.endsWith('.js') || path.endsWith('.jsx')) return 'javascript';
@@ -610,6 +610,11 @@ fi
 printf '%s\\n' "$payload"
 `;
   }
+  if (languageName && !name.includes('python')) {
+    return `# ${STARTER_SOURCE_MARKER} to your function through stdin.
+# Write JSON to stdout so the next workflow state can consume it.
+`;
+  }
   return `import json
 import sys
 
@@ -822,6 +827,7 @@ export function FunctionVersionWorkbench({
   const [fileSize, setFileSize] = useState('');
   const [outputBytes, setOutputBytes] = useState('');
   const [enableNetwork, setEnableNetwork] = useState(false);
+  const [note, setNote] = useState('');
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [activeCaseId, setActiveCaseId] = useState('');
   const [runningCaseId, setRunningCaseId] = useState<string | null>(null);
@@ -837,11 +843,9 @@ export function FunctionVersionWorkbench({
   const [pendingEditNodeId, setPendingEditNodeId] = useState('');
   const [fileTreeHeight, setFileTreeHeight] = useState(320);
 
-  const sortedLanguages = useMemo(() => {
-    const modern = languages.filter((language) => isModernLanguage(language.name));
-    const pool = modern.length > 0 ? modern : languages;
-    return [...pool].sort((a, b) => a.name.localeCompare(b.name));
-  }, [languages]);
+  const sortedLanguages = useMemo(() => (
+    [...languages].sort((a, b) => a.name.localeCompare(b.name))
+  ), [languages]);
   const selectedLanguage = sortedLanguages.find((language) => String(language.id) === languageId);
   const activeFile = files.find((file) => file.path === activePath) || files[0];
   const activeCase = testCases.find((testCase) => testCase.id === activeCaseId) || testCases[0];
@@ -1241,6 +1245,7 @@ export function FunctionVersionWorkbench({
       maxFileSizeKb: useDefaults ? undefined : toNumber(fileSize),
       maxOutputBytes: useDefaults ? undefined : toNumber(outputBytes),
       enableNetwork: useDefaults ? undefined : enableNetwork,
+      note: note.trim() || undefined,
     };
   };
 
@@ -1388,6 +1393,7 @@ export function FunctionVersionWorkbench({
   };
 
   const showSplitEditor = sourceMode === 'MULTI_FILE' && splitEditorOpen && Boolean(splitFile);
+  const showDescription = Boolean(onDescriptionChange) || description !== undefined;
   const filesPanelDisabled = sourceMode !== 'MULTI_FILE';
   const editorSectionClass = editorFullscreen
     ? 'function-workbench-fullscreen function-workbench-dock fixed inset-0 z-[120] h-screen min-h-0 overflow-hidden rounded-none border-0 bg-surface-container-lowest shadow-2xl shadow-primary/20'
@@ -1961,22 +1967,12 @@ export function FunctionVersionWorkbench({
           )}
           <button
             type="button"
-            disabled
-            className="hidden h-8 items-center gap-1.5 rounded-lg border border-border-subtle px-3 text-[12px] text-on-surface-variant opacity-60 lg:flex"
-            title="Publish the version before running tests"
-          >
-            <Play size={13} />
-            Run test
-          </button>
-          <button
-            type="button"
             onClick={publish}
             disabled={!canPublishVersion || publishing}
             className="flex h-8 items-center gap-1.5 rounded-lg border border-primary bg-primary px-3 text-[12px] font-semibold text-on-primary shadow-[0_12px_32px_rgba(242,121,90,0.22)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
           >
             {publishing ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
             {publishLabel}
-            <ChevronDown size={13} />
           </button>
         </div>
       </div>
@@ -1992,8 +1988,10 @@ export function FunctionVersionWorkbench({
       >
         <section className="rounded-lg border border-border-subtle bg-surface-container-lowest/60 p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.018)]">
           {metadata}
-          <div className={`mt-3 grid gap-3 ${onDescriptionChange
-              ? 'lg:grid-cols-[minmax(0,1fr)_178px_176px]'
+          <div className={`mt-3 grid gap-3 ${showDescription
+              ? controlledLanguage
+                ? 'lg:grid-cols-[minmax(0,1fr)_178px_176px]'
+                : 'lg:grid-cols-[196px_minmax(0,1fr)_178px_176px]'
               : controlledLanguage
                 ? 'lg:grid-cols-[178px_176px]'
                 : 'lg:grid-cols-[196px_178px_176px]'
@@ -2009,15 +2007,24 @@ export function FunctionVersionWorkbench({
                 </select>
               </div>
             )}
-            {onDescriptionChange && (
+            {showDescription && (
               <div>
                 <span className={labelClass}>Description</span>
-                <input
-                  value={description || ''}
-                  onChange={(event) => onDescriptionChange(event.target.value)}
-                  placeholder="What this function does"
-                  className={controlClass}
-                />
+                {onDescriptionChange ? (
+                  <input
+                    value={description || ''}
+                    onChange={(event) => onDescriptionChange(event.target.value)}
+                    placeholder="What this function does"
+                    className={controlClass}
+                  />
+                ) : (
+                  <div
+                    className={`${controlClass} flex cursor-not-allowed items-center truncate text-on-surface-variant`}
+                    title="Description is managed on the function, not per version"
+                  >
+                    {description ? description : 'No description'}
+                  </div>
+                )}
               </div>
             )}
             <div>
@@ -2038,6 +2045,19 @@ export function FunctionVersionWorkbench({
                 <ChevronDown size={13} />
               </button>
             </div>
+          </div>
+          <div className="mt-3">
+            <span className={labelClass}>
+              Version note
+              <span className="text-on-surface-variant/60">(optional)</span>
+            </span>
+            <input
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              maxLength={2000}
+              placeholder="Summarize what changed in this version"
+              className={controlClass}
+            />
           </div>
           <div className="mt-3 flex items-start gap-2 rounded-lg border border-secondary/25 bg-secondary/10 px-3 py-2 text-[11px] leading-5 text-on-surface-variant">
             <Info size={14} className="mt-0.5 shrink-0 text-secondary" />
@@ -2216,54 +2236,66 @@ function ExecutionSettingsModal({
         </div>
 
         <div className="space-y-3">
-          <label className="flex items-center justify-between rounded-lg border border-border-subtle bg-surface-container-lowest p-3">
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-surface-container-lowest p-3">
             <span>
               <span className="block text-[12px] font-semibold text-on-surface">Use workspace defaults</span>
-              <span className="mt-0.5 block text-[11px] text-on-surface-variant">When enabled, settings below are ignored.</span>
+              <span className="mt-0.5 block text-[11px] text-on-surface-variant">When on, the settings below are ignored and workspace defaults apply.</span>
             </span>
-            <input
-              type="checkbox"
-              checked={useDefaults}
-              onChange={(event) => setUseDefaults(event.target.checked)}
-              className="h-5 w-10 rounded-full border-border-subtle bg-surface-container text-primary focus:ring-primary"
-            />
-          </label>
-
-          <div className="rounded-lg border border-border-subtle bg-surface-container-lowest p-3">
-            <div className="mb-3 flex items-center gap-2 text-[12px] font-semibold text-on-surface">
-              <Braces size={14} />
-              Resource limits
-            </div>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-              <SettingInput label="CPU time (s)" value={cpu} onChange={setCpu} disabled={useDefaults} />
-              <SettingInput label="Wall time (s)" value={wall} onChange={setWall} disabled={useDefaults} />
-              <SettingInput label="Memory (KB)" value={memory} onChange={setMemory} disabled={useDefaults} />
-              <SettingInput label="Max file size (KB)" value={fileSize} onChange={setFileSize} disabled={useDefaults} />
-              <SettingInput label="Max output (bytes)" value={outputBytes} onChange={setOutputBytes} disabled={useDefaults} />
-            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={useDefaults}
+              onClick={() => setUseDefaults(!useDefaults)}
+              title={useDefaults ? 'Using workspace defaults' : 'Using custom settings'}
+              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                useDefaults ? 'bg-primary' : 'bg-surface-container-high border border-border-subtle'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                  useDefaults ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
           </div>
 
-          <div className="grid gap-3">
-            <SettingText label="Compiler options" value={compilerOptions} onChange={setCompilerOptions} placeholder="-O2 -pipe" disabled={useDefaults} />
-            <SettingText label="Command-line arguments" value={commandLineArguments} onChange={setCommandLineArguments} placeholder="--fast-mode" disabled={useDefaults} />
-          </div>
+          <div className={`space-y-3 transition-opacity ${useDefaults ? 'pointer-events-none opacity-40' : 'opacity-100'}`} aria-hidden={useDefaults}>
+            <div className="rounded-lg border border-border-subtle bg-surface-container-lowest p-3">
+              <div className="mb-3 flex items-center gap-2 text-[12px] font-semibold text-on-surface">
+                <Braces size={14} />
+                Resource limits
+              </div>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+                <SettingInput label="CPU time (s)" value={cpu} onChange={setCpu} disabled={useDefaults} />
+                <SettingInput label="Wall time (s)" value={wall} onChange={setWall} disabled={useDefaults} />
+                <SettingInput label="Memory (KB)" value={memory} onChange={setMemory} disabled={useDefaults} />
+                <SettingInput label="Max file size (KB)" value={fileSize} onChange={setFileSize} disabled={useDefaults} />
+                <SettingInput label="Max output (bytes)" value={outputBytes} onChange={setOutputBytes} disabled={useDefaults} />
+              </div>
+            </div>
 
-          <label className="flex items-center justify-between rounded-lg border border-border-subtle bg-surface-container-lowest p-3">
-            <span className="flex items-center gap-2">
-              <Network size={14} className="text-on-surface-variant" />
-              <span>
-                <span className="block text-[12px] font-semibold text-on-surface">Network access</span>
-                <span className="mt-0.5 block text-[11px] text-on-surface-variant">Allow outbound network connections during execution.</span>
+            <div className="grid gap-3">
+              <SettingText label="Compiler options" value={compilerOptions} onChange={setCompilerOptions} placeholder="-O2 -pipe" disabled={useDefaults} />
+              <SettingText label="Command-line arguments" value={commandLineArguments} onChange={setCommandLineArguments} placeholder="--fast-mode" disabled={useDefaults} />
+            </div>
+
+            <label className="flex items-center justify-between rounded-lg border border-border-subtle bg-surface-container-lowest p-3">
+              <span className="flex items-center gap-2">
+                <Network size={14} className="text-on-surface-variant" />
+                <span>
+                  <span className="block text-[12px] font-semibold text-on-surface">Network access</span>
+                  <span className="mt-0.5 block text-[11px] text-on-surface-variant">Allow outbound network connections during execution.</span>
+                </span>
               </span>
-            </span>
-            <input
-              type="checkbox"
-              checked={enableNetwork}
-              disabled={useDefaults}
-              onChange={(event) => setEnableNetwork(event.target.checked)}
-              className="h-5 w-5 rounded border-border-subtle bg-surface-container text-primary focus:ring-primary disabled:opacity-50"
-            />
-          </label>
+              <input
+                type="checkbox"
+                checked={enableNetwork}
+                disabled={useDefaults}
+                onChange={(event) => setEnableNetwork(event.target.checked)}
+                className="h-5 w-5 rounded border-border-subtle bg-surface-container text-primary focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
+              />
+            </label>
+          </div>
 
           <details className="rounded-lg border border-border-subtle bg-surface-container-lowest p-3">
             <summary className="flex items-center gap-2 text-[12px] font-semibold text-on-surface">
@@ -2299,7 +2331,7 @@ function SettingInput({ label, value, onChange, disabled }: { label: string; val
         onChange={(event) => onChange(event.target.value)}
         disabled={disabled}
         inputMode="decimal"
-        className="h-8 w-full rounded-md border border-border-subtle bg-surface-container-low px-2 font-mono-sm text-[11px] text-on-surface outline-none focus:border-primary/50 disabled:opacity-45"
+        className="h-8 w-full rounded-md border border-border-subtle bg-surface-container-low px-2 font-mono-sm text-[11px] text-on-surface outline-none focus:border-primary/50 disabled:cursor-not-allowed disabled:opacity-45"
       />
     </label>
   );
@@ -2329,7 +2361,7 @@ function SettingText({
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
         disabled={disabled}
-        className="h-9 rounded-DEFAULT border border-primary/30 bg-surface-container px-3 font-mono-sm text-[11px] text-on-surface outline-none placeholder:text-on-surface-variant/45 focus:border-primary/60 disabled:opacity-45"
+        className="h-9 rounded-DEFAULT border border-primary/30 bg-surface-container px-3 font-mono-sm text-[11px] text-on-surface outline-none placeholder:text-on-surface-variant/45 focus:border-primary/60 disabled:cursor-not-allowed disabled:opacity-45"
       />
     </label>
   );
