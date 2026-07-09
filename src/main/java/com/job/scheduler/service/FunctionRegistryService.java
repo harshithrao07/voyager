@@ -181,6 +181,112 @@ public class FunctionRegistryService {
         return toResponse(saved);
     }
 
+    @Transactional
+    public FunctionVersionResponseDTO updateVersion(
+            UUID functionId,
+            int version,
+            FunctionVersionRequestDTO request
+    ) {
+        FunctionDefinition function = findFunction(functionId);
+        ensureFunctionCanChangeVersions(function);
+        FunctionVersion functionVersion = findVersion(function, version);
+        // Only drafts are mutable: published versions stay immutable so workflows
+        // pinned to them and the invocation history keep matching their code.
+        if (functionVersion.getStatus() != FunctionVersionStatus.DRAFT) {
+            throw new IllegalStateException(
+                    "Only draft versions can be edited in place"
+            );
+        }
+        validateVersionRequest(request, FunctionVersionStatus.DRAFT);
+
+        functionVersion.setSourceMode(sourceMode(request));
+        functionVersion.setLanguageId(request.languageId());
+        functionVersion.setSourceCode(blankToNull(request.sourceCode()));
+        functionVersion.setAdditionalFilesBase64(blankToNull(
+                request.additionalFilesBase64()
+        ));
+        functionVersion.setCompilerOptions(blankToNull(request.compilerOptions()));
+        functionVersion.setCommandLineArguments(blankToNull(
+                request.commandLineArguments()
+        ));
+        functionVersion.setCpuTimeLimitSeconds(defaulted(
+                request.cpuTimeLimitSeconds(),
+                defaultCpuTimeLimitSeconds
+        ));
+        functionVersion.setWallTimeLimitSeconds(defaulted(
+                request.wallTimeLimitSeconds(),
+                defaultWallTimeLimitSeconds
+        ));
+        functionVersion.setMemoryLimitKb(defaulted(
+                request.memoryLimitKb(),
+                defaultMemoryLimitKb
+        ));
+        functionVersion.setMaxFileSizeKb(defaulted(
+                request.maxFileSizeKb(),
+                defaultMaxFileSizeKb
+        ));
+        functionVersion.setMaxOutputBytes(defaulted(
+                request.maxOutputBytes(),
+                defaultMaxOutputBytes
+        ));
+        functionVersion.setEnableNetwork(Boolean.TRUE.equals(
+                request.enableNetwork()
+        ));
+        functionVersion.setNote(blankToNull(request.note()));
+        functionVersion.setTestCases(serializeTestCases(request.testCases()));
+        return toResponse(versionRepository.save(functionVersion));
+    }
+
+    // In-place update of a version's metadata: note, execution settings, and
+    // saved test cases. Code, language, source mode, and status are deliberately
+    // ignored so this can never change what the version runs — those changes
+    // must go through a new version instead.
+    @Transactional
+    public FunctionVersionResponseDTO updateVersionMetadata(
+            UUID functionId,
+            int version,
+            FunctionVersionRequestDTO request
+    ) {
+        FunctionDefinition function = findFunction(functionId);
+        ensureFunctionCanChangeVersions(function);
+        FunctionVersion functionVersion = findVersion(function, version);
+        if (functionVersion.getStatus() == FunctionVersionStatus.ARCHIVED) {
+            throw new IllegalStateException(
+                    "Archived function versions cannot be changed"
+            );
+        }
+        functionVersion.setCompilerOptions(blankToNull(request.compilerOptions()));
+        functionVersion.setCommandLineArguments(blankToNull(
+                request.commandLineArguments()
+        ));
+        functionVersion.setCpuTimeLimitSeconds(defaulted(
+                request.cpuTimeLimitSeconds(),
+                defaultCpuTimeLimitSeconds
+        ));
+        functionVersion.setWallTimeLimitSeconds(defaulted(
+                request.wallTimeLimitSeconds(),
+                defaultWallTimeLimitSeconds
+        ));
+        functionVersion.setMemoryLimitKb(defaulted(
+                request.memoryLimitKb(),
+                defaultMemoryLimitKb
+        ));
+        functionVersion.setMaxFileSizeKb(defaulted(
+                request.maxFileSizeKb(),
+                defaultMaxFileSizeKb
+        ));
+        functionVersion.setMaxOutputBytes(defaulted(
+                request.maxOutputBytes(),
+                defaultMaxOutputBytes
+        ));
+        functionVersion.setEnableNetwork(Boolean.TRUE.equals(
+                request.enableNetwork()
+        ));
+        functionVersion.setNote(blankToNull(request.note()));
+        functionVersion.setTestCases(serializeTestCases(request.testCases()));
+        return toResponse(versionRepository.save(functionVersion));
+    }
+
     public List<FunctionVersionResponseDTO> getVersions(UUID functionId) {
         FunctionDefinition function = findFunction(functionId);
         return versionRepository.findByFunctionDefinitionOrderByVersionDesc(function)
@@ -435,10 +541,45 @@ public class FunctionRegistryService {
         if (testCases == null || testCases.isEmpty()) {
             return null;
         }
+        validateTestCases(testCases);
         try {
             return TEST_CASE_MAPPER.writeValueAsString(testCases);
         } catch (Exception e) {
             throw new IllegalArgumentException("Invalid test cases", e);
+        }
+    }
+
+    private void validateTestCases(List<FunctionTestCaseDTO> testCases) {
+        for (FunctionTestCaseDTO testCase : testCases) {
+            String caseName = blankToNull(testCase.name());
+            String label = caseName == null ? "Test case" : caseName;
+            requireJson(label, "input", testCase.input(), false);
+            requireJson(label, "expected output", testCase.expectedOutput(), true);
+        }
+    }
+
+    private void requireJson(
+            String caseName,
+            String fieldName,
+            String value,
+            boolean allowBlank
+    ) {
+        String normalized = blankToNull(value);
+        if (normalized == null) {
+            if (allowBlank) {
+                return;
+            }
+            throw new IllegalArgumentException(
+                    caseName + ": " + fieldName + " must be valid JSON"
+            );
+        }
+        try {
+            TEST_CASE_MAPPER.readTree(normalized);
+        } catch (Exception e) {
+            throw new IllegalArgumentException(
+                    caseName + ": " + fieldName + " must be valid JSON",
+                    e
+            );
         }
     }
 

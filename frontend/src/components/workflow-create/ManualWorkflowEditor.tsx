@@ -1,7 +1,9 @@
 import Editor from '@monaco-editor/react';
+import { useMemo, useState } from 'react';
 import { AlertCircle, Loader2, Save } from 'lucide-react';
 import type { WorkflowPriorityDTO } from '../../api';
 import type { DefinitionStatus, WorkflowPreview } from './types';
+import { AslGraphViewer } from '../AslGraphViewer';
 import { WorkflowPreviewPanel } from './WorkflowPreviewPanel';
 import { WorkflowMetadataForm } from './WorkflowMetadataForm';
 
@@ -58,6 +60,17 @@ export function ManualWorkflowEditor({
   monoFieldClass,
   reserveTopControlsSpace,
 }: Props) {
+  const [selectedStateName, setSelectedStateName] = useState('');
+
+  const parsedDefinition = useMemo(() => {
+    if (!definitionStatus.valid) return null;
+    try {
+      return JSON.parse(definitionText);
+    } catch {
+      return null;
+    }
+  }, [definitionText, definitionStatus.valid]);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-transparent">
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -91,6 +104,26 @@ export function ManualWorkflowEditor({
                 padding: { top: 16, bottom: 16 },
               }}
             />
+          </div>
+
+          <div className="flex h-14 shrink-0 items-center justify-between border-y border-border-subtle bg-surface-base px-6">
+            <div className="flex items-center gap-2 font-mono-sm text-[13px] text-on-surface">
+              <span className="material-symbols-outlined text-[18px]">account_tree</span>
+              state machine
+            </div>
+          </div>
+          <div className="min-h-0 flex-1">
+            {parsedDefinition ? (
+              <AslGraphViewer
+                definition={parsedDefinition}
+                selectedStateName={selectedStateName}
+                onStateSelect={setSelectedStateName}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center bg-surface-lowest px-6 text-center font-mono-sm text-[12px] text-on-surface-variant">
+                Fix the definition JSON to render the state machine diagram.
+              </div>
+            )}
           </div>
         </main>
 

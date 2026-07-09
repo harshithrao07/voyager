@@ -16,6 +16,7 @@ import {
   Layers3,
   Loader2,
   Network,
+  Pencil,
   Plus,
   Power,
   RefreshCw,
@@ -35,11 +36,14 @@ import {
   listFunctions,
   publishFunctionVersion,
   updateFunctionDefinition,
+  updateFunctionVersion,
+  updateFunctionVersionMetadata,
   updateFunctionVersionSettings,
   type FunctionDefinitionDTO,
   type FunctionLanguageDTO,
   type FunctionTestCase,
   type FunctionVersionDTO,
+  type FunctionVersionRequest,
   type FunctionVersionSettingsRequest,
 } from '../api';
 import { FunctionCodeViewer } from '../components/functions/FunctionCodeViewer';
@@ -153,6 +157,11 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
   const [showVersionWorkbench, setShowVersionWorkbench] = useState(false);
   const [newVersionLanguageId, setNewVersionLanguageId] = useState('');
   const [newVersionTestCases, setNewVersionTestCases] = useState<FunctionTestCase[]>([]);
+  // When set, the workbench is editing this version rather than creating a
+  // fresh one. Drafts are edited in place; for published versions, metadata
+  // (note/settings/test cases) saves in place while code or language changes
+  // fork a new version.
+  const [editingVersion, setEditingVersion] = useState<FunctionVersionDTO | null>(null);
   const invocationsRefreshKey = 0;
   const [busy, setBusy] = useState(false);
 
@@ -223,19 +232,60 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
     openFunction(id);
   };
 
-  const handleFunctionCreated = async (functionId: string) => {
-    await reloadFunctions();
+  const handleFunctionCreated = (functionId: string) => {
     setCreating(false);
     setSelectedId(functionId);
     openFunction(functionId);
+    reloadFunctions().catch((err: Error) => setError(err.message));
   };
 
-  const handleVersionCreated = async () => {
+  const handleVersionCreated = () => {
     setShowVersionWorkbench(false);
+    setEditingVersion(null);
     setActiveTab('overview');
     if (selectedId) {
-      await Promise.all([reloadVersions(selectedId), reloadFunctions()]);
+      Promise.all([reloadVersions(selectedId), reloadFunctions()])
+        .catch((err: Error) => setError(err.message));
     }
+  };
+
+  const openEditVersion = (version: FunctionVersionDTO) => {
+    setNewVersionLanguageId(String(version.languageId));
+    setNewVersionTestCases(version.testCases ?? []);
+    setEditingVersion(version);
+    setShowVersionWorkbench(true);
+  };
+
+  // Persist an edit and close the workbench. Note, execution settings, and
+  // test cases save onto the edited version in place; code or language changes
+  // fork a new version instead (drafts are the exception: fully mutable).
+  const saveEditedVersion = async (
+    request: FunctionVersionRequest,
+    codeChanged: boolean,
+    publish: boolean,
+  ) => {
+    if (!selectedId || !editingVersion) throw new Error('No version is being edited.');
+    const languageChanged = request.languageId !== editingVersion.languageId;
+    if (editingVersion.status === 'DRAFT') {
+      await updateFunctionVersion(selectedId, editingVersion.version, { ...request, status: 'DRAFT' });
+      if (publish) {
+        await publishFunctionVersion(selectedId, editingVersion.version);
+        await activateFunctionVersion(selectedId, editingVersion.version);
+      }
+    } else if (codeChanged || languageChanged) {
+      if (publish) {
+        const created = await createFunctionVersion(selectedId, { ...request, status: 'AVAILABLE' });
+        await activateFunctionVersion(selectedId, created.version);
+      } else {
+        await createFunctionVersion(selectedId, { ...request, status: 'DRAFT' });
+      }
+    } else {
+      await updateFunctionVersionMetadata(selectedId, editingVersion.version, request);
+      if (publish && selected?.activeVersion !== editingVersion.version) {
+        await activateFunctionVersion(selectedId, editingVersion.version);
+      }
+    }
+    await handleVersionCreated();
   };
 
   const activate = async (version: number) => {
@@ -304,6 +354,36 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
     }
   };
 
+  const saveVersionTestCases = async (
+    version: FunctionVersionDTO,
+    testCases: FunctionTestCase[],
+  ) => {
+    if (!selectedId) throw new Error('No function is selected.');
+    if (busy) throw new Error('Another function action is already in progress.');
+    setBusy(true);
+    try {
+      await updateFunctionVersionMetadata(selectedId, version.version, {
+        sourceMode: version.sourceMode,
+        languageId: version.languageId,
+        sourceCode: version.sourceCode,
+        additionalFilesBase64: version.additionalFilesBase64,
+        compilerOptions: version.compilerOptions,
+        commandLineArguments: version.commandLineArguments,
+        cpuTimeLimitSeconds: version.cpuTimeLimitSeconds,
+        wallTimeLimitSeconds: version.wallTimeLimitSeconds,
+        memoryLimitKb: version.memoryLimitKb,
+        maxFileSizeKb: version.maxFileSizeKb,
+        maxOutputBytes: version.maxOutputBytes,
+        enableNetwork: version.enableNetwork,
+        note: version.note,
+        testCases,
+      });
+      await reloadVersions(selectedId);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center gap-2 bg-[#06101b] text-[12px] text-on-surface-variant">
@@ -330,11 +410,26 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
         />
       ) : selected && showVersionWorkbench ? (
         <FunctionVersionWorkbench
-          resourceLabel={functionResource(selected, nextVersionNumber)}
+          key={editingVersion ? `edit-${editingVersion.id}` : 'new-version'}
+          resourceLabel={functionResource(selected, editingVersion?.status === 'DRAFT' ? editingVersion.version : nextVersionNumber)}
           languages={languages}
           languageId={newVersionLanguageId}
           onLanguageChange={setNewVersionLanguageId}
           initialTestCases={newVersionTestCases}
+          initialSourceMode={editingVersion?.sourceMode}
+          initialSourceCode={editingVersion?.sourceCode}
+          initialFiles={editingVersion && editingVersion.sourceMode === 'MULTI_FILE' ? editingVersion.files : undefined}
+          initialSettings={editingVersion ? {
+            compilerOptions: editingVersion.compilerOptions,
+            commandLineArguments: editingVersion.commandLineArguments,
+            cpuTimeLimitSeconds: editingVersion.cpuTimeLimitSeconds,
+            wallTimeLimitSeconds: editingVersion.wallTimeLimitSeconds,
+            memoryLimitKb: editingVersion.memoryLimitKb,
+            maxFileSizeKb: editingVersion.maxFileSizeKb,
+            maxOutputBytes: editingVersion.maxOutputBytes,
+            enableNetwork: editingVersion.enableNetwork,
+          } : undefined}
+          initialNote={editingVersion?.note}
           description={selected.description || ''}
           metadata={(
             <SelectedMetadata
@@ -342,18 +437,30 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
               languages={languages}
               languageId={newVersionLanguageId}
               onLanguageChange={setNewVersionLanguageId}
+              editingVersion={editingVersion}
+              nextVersionNumber={nextVersionNumber}
             />
           )}
-          onCancel={() => setShowVersionWorkbench(false)}
-          onSaveDraft={async (request) => {
-            await createFunctionVersion(selected.id, request);
-            await handleVersionCreated();
+          onCancel={() => {
+            setShowVersionWorkbench(false);
+            setEditingVersion(null);
           }}
-          publishLabel="Publish version"
-          onPublish={async (request) => {
-            await createFunctionVersion(selected.id, request);
-            await handleVersionCreated();
-          }}
+          saveDraftLabel={editingVersion
+            ? (editingVersion.status === 'DRAFT' ? 'Update draft' : 'Save changes')
+            : 'Save draft'}
+          onSaveDraft={editingVersion
+            ? (request, meta) => saveEditedVersion(request, meta.codeChanged, false)
+            : async (request) => {
+                await createFunctionVersion(selected.id, request);
+                await handleVersionCreated();
+              }}
+          publishLabel={editingVersion ? 'Publish & activate' : 'Publish version'}
+          onPublish={editingVersion
+            ? (request, meta) => saveEditedVersion(request, meta.codeChanged, true)
+            : async (request) => {
+                await createFunctionVersion(selected.id, request);
+                await handleVersionCreated();
+              }}
         />
       ) : selected ? (
         <FunctionDetail
@@ -374,8 +481,10 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
             const base = sorted.find((version) => version.version === selected.activeVersion) || sorted[0];
             setNewVersionLanguageId(base ? String(base.languageId) : '');
             setNewVersionTestCases(base?.testCases ?? []);
+            setEditingVersion(null);
             setShowVersionWorkbench(true);
           }}
+          onEditVersion={openEditVersion}
           onActivate={activate}
           onPublishDraft={publishDraft}
           onToggleStatus={() => toggleStatus(selected)}
@@ -388,6 +497,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
               <FunctionTestPanel
                 versions={versions}
                 activeVersion={selected.activeVersion}
+                onSaveTestCases={saveVersionTestCases}
               />
             )
           )}
@@ -617,6 +727,7 @@ function FunctionDetail({
   busy,
   onBack,
   onNewVersion,
+  onEditVersion,
   onActivate,
   onPublishDraft,
   onToggleStatus,
@@ -634,6 +745,7 @@ function FunctionDetail({
   busy: boolean;
   onBack: () => void;
   onNewVersion: () => void;
+  onEditVersion: (version: FunctionVersionDTO) => void;
   onActivate: (version: number) => void;
   onPublishDraft: (version: number) => void;
   onToggleStatus: () => void;
@@ -817,6 +929,7 @@ function FunctionDetail({
                 onActivate={onActivate}
                 onPublishDraft={onPublishDraft}
                 onNewVersion={onNewVersion}
+                onEditVersion={onEditVersion}
               />
             )}
             {activeTab === 'test' && testPanel}
@@ -963,6 +1076,7 @@ function VersionHistoryPanel({
   onActivate,
   onPublishDraft,
   onNewVersion,
+  onEditVersion,
 }: {
   versions: FunctionVersionDTO[];
   activeVersion: number | null;
@@ -972,6 +1086,7 @@ function VersionHistoryPanel({
   onActivate: (version: number) => void;
   onPublishDraft: (version: number) => void;
   onNewVersion: () => void;
+  onEditVersion: (version: FunctionVersionDTO) => void;
 }) {
   const preferredVersion = activeVersion != null && versions.some((version) => version.version === activeVersion)
     ? activeVersion
@@ -1063,6 +1178,7 @@ function VersionHistoryPanel({
         busy={busy}
         onActivate={onActivate}
         onPublishDraft={onPublishDraft}
+        onEditVersion={onEditVersion}
         emptyMessage="Choose a version to inspect its code and execution settings."
       />
     </div>
@@ -1077,6 +1193,7 @@ function VersionInspector({
   busy,
   onActivate,
   onPublishDraft,
+  onEditVersion,
   emptyMessage,
 }: {
   title: string;
@@ -1086,6 +1203,7 @@ function VersionInspector({
   busy: boolean;
   onActivate: (version: number) => void;
   onPublishDraft: (version: number) => void;
+  onEditVersion: (version: FunctionVersionDTO) => void;
   emptyMessage: string;
 }) {
   const files = useMemo(() => versionSourceFiles(version), [version]);
@@ -1108,6 +1226,18 @@ function VersionInspector({
         </div>
         {version && (
           <div className="flex shrink-0 items-center gap-2">
+            {version.status !== 'ARCHIVED' && (
+              <button
+                type="button"
+                onClick={() => onEditVersion(version)}
+                disabled={busy}
+                className="flex h-8 items-center gap-1.5 rounded-lg border border-border-subtle px-3 text-[12px] text-on-surface-variant transition-colors hover:border-primary/45 hover:text-on-surface disabled:opacity-50"
+                title={version.status === 'DRAFT' ? 'Edit this draft in place' : 'Edit as a new draft, then publish & activate'}
+              >
+                <Pencil size={13} />
+                {version.status === 'DRAFT' ? 'Edit draft' : 'Edit'}
+              </button>
+            )}
             {!isActive && version.status === 'DRAFT' && (
               <button
                 type="button"
@@ -1710,30 +1840,49 @@ function SelectedMetadata({
   languages,
   languageId,
   onLanguageChange,
+  editingVersion,
+  nextVersionNumber,
 }: {
   selected: FunctionDefinitionDTO;
   languages: FunctionLanguageDTO[];
   languageId: string;
   onLanguageChange: (value: string) => void;
+  editingVersion?: FunctionVersionDTO | null;
+  nextVersionNumber?: number;
 }) {
   const sortedLanguages = [...languages].sort((a, b) => a.name.localeCompare(b.name));
+  const editBanner = (() => {
+    if (!editingVersion) return null;
+    if (editingVersion.status === 'DRAFT') {
+      return `Editing draft v${editingVersion.version} in place. Changes overwrite this draft until you publish it.`;
+    }
+    return `Editing v${editingVersion.version}. Note, execution settings, and test cases save onto v${editingVersion.version} in place. Changing the code or language creates a new version${nextVersionNumber ? ` (v${nextVersionNumber})` : ''} instead.`;
+  })();
   return (
-    <div className="grid gap-3 lg:grid-cols-3">
-      <ReadOnlyMeta label="Namespace" value={selected.namespace} />
-      <ReadOnlyMeta label="Name" value={selected.name} />
-      <label>
-        <span className={labelClass}>Language</span>
-        <select
-          value={languageId}
-          onChange={(event) => onLanguageChange(event.target.value)}
-          className={selectFieldClass}
-        >
-          <option value="">Select language</option>
-          {sortedLanguages.map((language) => (
-            <option key={language.id} value={language.id}>{language.name}</option>
-          ))}
-        </select>
-      </label>
+    <div className="space-y-3">
+      {editBanner && (
+        <div className="flex items-start gap-2 rounded-lg border border-primary/35 bg-primary/10 px-3 py-2 text-[12px] leading-5 text-primary">
+          <Pencil size={13} className="mt-0.5 shrink-0" />
+          <span>{editBanner}</span>
+        </div>
+      )}
+      <div className="grid gap-3 lg:grid-cols-3">
+        <ReadOnlyMeta label="Namespace" value={selected.namespace} />
+        <ReadOnlyMeta label="Name" value={selected.name} />
+        <label>
+          <span className={labelClass}>Language</span>
+          <select
+            value={languageId}
+            onChange={(event) => onLanguageChange(event.target.value)}
+            className={selectFieldClass}
+          >
+            <option value="">Select language</option>
+            {sortedLanguages.map((language) => (
+              <option key={language.id} value={language.id}>{language.name}</option>
+            ))}
+          </select>
+        </label>
+      </div>
     </div>
   );
 }

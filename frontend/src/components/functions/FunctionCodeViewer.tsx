@@ -138,7 +138,7 @@ export function FunctionCodeViewer({ files, languageName, emptyMessage = 'Source
     };
   }, [fullscreen]);
 
-  if (!activeFile || !activeFile.content) {
+  if (!activeFile) {
     return (
       <div className="flex min-h-[260px] items-center justify-center rounded-lg border border-border-subtle bg-surface-lowest/70 px-4 text-center text-[12px] text-on-surface-variant">
         {emptyMessage}
@@ -191,7 +191,7 @@ export function FunctionCodeViewer({ files, languageName, emptyMessage = 'Source
             theme="vs-dark"
             path={activeFile.path}
             language={fileLanguage(activeFile.path, languageName)}
-            value={activeFile.content}
+            value={activeFile.content ?? ''}
             options={{
               readOnly: true,
               domReadOnly: true,

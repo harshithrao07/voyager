@@ -1,5 +1,7 @@
 package com.job.scheduler.service;
 
+import com.job.scheduler.dto.FunctionTestCaseDTO;
+import com.job.scheduler.dto.FunctionVersionRequestDTO;
 import com.job.scheduler.dto.FunctionVersionSettingsRequestDTO;
 import com.job.scheduler.entity.FunctionDefinition;
 import com.job.scheduler.entity.FunctionVersion;
@@ -191,6 +193,200 @@ class FunctionRegistryServiceTest {
         assertThatThrownBy(() -> service.publishVersion(function.getId(), 1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("sourceCode is required");
+    }
+
+    @Test
+    void updateVersionEditsDraftInPlaceIncludingTestCases() {
+        FunctionDefinition function = function(FunctionStatus.ENABLED);
+        FunctionVersion version = version(function);
+        version.setStatus(FunctionVersionStatus.DRAFT);
+        when(functionRepository.findById(function.getId()))
+                .thenReturn(Optional.of(function));
+        when(versionRepository.findByFunctionDefinitionAndVersion(function, 1))
+                .thenReturn(Optional.of(version));
+        when(versionRepository.save(any(FunctionVersion.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = service.updateVersion(
+                function.getId(),
+                1,
+                new FunctionVersionRequestDTO(
+                        FunctionSourceMode.SINGLE_FILE,
+                        71,
+                        "print('edited')",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        List.of(new FunctionTestCaseDTO("Case 1", "{}", "{}", "")),
+                        null
+                )
+        );
+
+        assertThat(response.sourceCode()).isEqualTo("print('edited')");
+        assertThat(response.status()).isEqualTo(FunctionVersionStatus.DRAFT);
+        assertThat(response.testCases()).hasSize(1);
+        assertThat(response.testCases().get(0).name()).isEqualTo("Case 1");
+        assertThat(version.getSourceCode()).isEqualTo("print('edited')");
+        assertThat(version.getStatus()).isEqualTo(FunctionVersionStatus.DRAFT);
+        verify(versionRepository).save(version);
+    }
+
+    @Test
+    void updateVersionMetadataUpdatesNoteSettingsAndTestCasesButNeverCode() {
+        FunctionDefinition function = function(FunctionStatus.ENABLED);
+        FunctionVersion version = version(function);
+        version.setStatus(FunctionVersionStatus.AVAILABLE);
+        when(functionRepository.findById(function.getId()))
+                .thenReturn(Optional.of(function));
+        when(versionRepository.findByFunctionDefinitionAndVersion(function, 1))
+                .thenReturn(Optional.of(version));
+        when(versionRepository.save(any(FunctionVersion.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = service.updateVersionMetadata(
+                function.getId(),
+                1,
+                new FunctionVersionRequestDTO(
+                        FunctionSourceMode.SINGLE_FILE,
+                        71,
+                        "print('should be ignored')",
+                        null,
+                        "-O2",
+                        "--fast",
+                        3.5,
+                        12.0,
+                        262144,
+                        2048,
+                        8192,
+                        true,
+                        "tightened limits",
+                        List.of(new FunctionTestCaseDTO("Case 1", "{}", "{}", "")),
+                        null
+                )
+        );
+
+        assertThat(response.note()).isEqualTo("tightened limits");
+        assertThat(response.cpuTimeLimitSeconds()).isEqualTo(3.5);
+        assertThat(response.enableNetwork()).isTrue();
+        assertThat(response.testCases()).hasSize(1);
+        assertThat(response.status()).isEqualTo(FunctionVersionStatus.AVAILABLE);
+        // Code and language must be untouched by a metadata update.
+        assertThat(version.getSourceCode()).isEqualTo("print('{}')");
+        assertThat(version.getLanguageId()).isEqualTo(71);
+        verify(versionRepository).save(version);
+    }
+
+    @Test
+    void updateVersionMetadataRejectsNonJsonTestCaseFields() {
+        FunctionDefinition function = function(FunctionStatus.ENABLED);
+        FunctionVersion version = version(function);
+        version.setStatus(FunctionVersionStatus.AVAILABLE);
+        when(functionRepository.findById(function.getId()))
+                .thenReturn(Optional.of(function));
+        when(versionRepository.findByFunctionDefinitionAndVersion(function, 1))
+                .thenReturn(Optional.of(version));
+
+        assertThatThrownBy(() -> service.updateVersionMetadata(
+                function.getId(),
+                1,
+                versionRequestWithTestCase("not json", "{}")
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("input must be valid JSON");
+
+        assertThatThrownBy(() -> service.updateVersionMetadata(
+                function.getId(),
+                1,
+                versionRequestWithTestCase("{}", "not json")
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("expected output must be valid JSON");
+    }
+
+    @Test
+    void updateVersionMetadataRejectsArchivedVersions() {
+        FunctionDefinition function = function(FunctionStatus.ENABLED);
+        FunctionVersion version = version(function);
+        version.setStatus(FunctionVersionStatus.ARCHIVED);
+        when(functionRepository.findById(function.getId()))
+                .thenReturn(Optional.of(function));
+        when(versionRepository.findByFunctionDefinitionAndVersion(function, 1))
+                .thenReturn(Optional.of(version));
+
+        assertThatThrownBy(() -> service.updateVersionMetadata(
+                function.getId(),
+                1,
+                new FunctionVersionRequestDTO(
+                        FunctionSourceMode.SINGLE_FILE,
+                        71,
+                        null,
+                        null, null, null, null, null, null, null, null, null,
+                        "note",
+                        null,
+                        null
+                )
+        )).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Archived function versions cannot be changed");
+    }
+
+    @Test
+    void updateVersionRejectsNonDraftVersions() {
+        FunctionDefinition function = function(FunctionStatus.ENABLED);
+        FunctionVersion version = version(function);
+        version.setStatus(FunctionVersionStatus.AVAILABLE);
+        when(functionRepository.findById(function.getId()))
+                .thenReturn(Optional.of(function));
+        when(versionRepository.findByFunctionDefinitionAndVersion(function, 1))
+                .thenReturn(Optional.of(version));
+
+        assertThatThrownBy(() -> service.updateVersion(
+                function.getId(),
+                1,
+                new FunctionVersionRequestDTO(
+                        FunctionSourceMode.SINGLE_FILE,
+                        71,
+                        "print('edited')",
+                        null, null, null, null, null, null, null, null, null, null,
+                        null,
+                        null
+                )
+        )).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Only draft versions can be edited in place");
+    }
+
+    private FunctionVersionRequestDTO versionRequestWithTestCase(
+            String input,
+            String expectedOutput
+    ) {
+        return new FunctionVersionRequestDTO(
+                FunctionSourceMode.SINGLE_FILE,
+                71,
+                "print('ignored')",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                List.of(new FunctionTestCaseDTO(
+                        "Case 1",
+                        input,
+                        expectedOutput,
+                        ""
+                )),
+                null
+        );
     }
 
     private FunctionDefinition function(FunctionStatus status) {

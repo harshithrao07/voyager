@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Loader2, Play, PlayCircle, Plus, RotateCcw, Trash2, XCircle } from 'lucide-react';
-import { executeFunctionCode, type FunctionRunResult, type FunctionVersionDTO } from '../../api';
+import { CheckCircle2, Loader2, Play, PlayCircle, Plus, RotateCcw, Save, Trash2, XCircle } from 'lucide-react';
+import { executeFunctionCode, type FunctionRunResult, type FunctionTestCase, type FunctionVersionDTO } from '../../api';
 
 type Props = {
   versions: FunctionVersionDTO[];
   activeVersion: number | null;
+  onSaveTestCases?: (version: FunctionVersionDTO, testCases: FunctionTestCase[]) => Promise<void>;
 };
 
 type TestCase = {
@@ -12,6 +13,7 @@ type TestCase = {
   name: string;
   input: string;
   expectedOutput: string;
+  expectedError: string;
   checked: boolean;
 };
 
@@ -29,6 +31,7 @@ function newCase(index: number): TestCase {
     name: `Case ${index}`,
     input: '{\n  "amount": 100\n}',
     expectedOutput: '',
+    expectedError: '',
     checked: true,
   };
 }
@@ -43,11 +46,43 @@ function seedCasesFromVersion(version?: FunctionVersionDTO): TestCase[] {
     name: testCase.name?.trim() || `Case ${index + 1}`,
     input: testCase.input ?? '',
     expectedOutput: testCase.expectedOutput ?? '',
+    expectedError: testCase.expectedError ?? '',
     checked: true,
   }));
 }
 
-export function FunctionTestPanel({ versions, activeVersion }: Props) {
+function toSavedTestCases(cases: TestCase[]): FunctionTestCase[] {
+  return cases.map((testCase, index) => ({
+    name: testCase.name.trim() || `Case ${index + 1}`,
+    input: testCase.input,
+    expectedOutput: testCase.expectedOutput,
+    expectedError: testCase.expectedError,
+  }));
+}
+
+function testCaseSignature(cases: TestCase[]) {
+  return JSON.stringify(toSavedTestCases(cases));
+}
+
+function requireJsonField(testCase: TestCase, field: 'input' | 'expectedOutput', label: string, allowBlank = false) {
+  const value = testCase[field].trim();
+  if (!value) {
+    if (allowBlank) return;
+    throw new Error(`${testCase.name || 'Test case'}: ${label} must be valid JSON.`);
+  }
+  try {
+    JSON.parse(value);
+  } catch {
+    throw new Error(`${testCase.name || 'Test case'}: ${label} must be valid JSON.`);
+  }
+}
+
+function validateTestCaseJson(testCase: TestCase) {
+  requireJsonField(testCase, 'input', 'input');
+  requireJsonField(testCase, 'expectedOutput', 'expected output', true);
+}
+
+export function FunctionTestPanel({ versions, activeVersion, onSaveTestCases }: Props) {
   const [versionChoice, setVersionChoice] = useState('active');
 
   const runnableVersions = versions.filter((version) => version.status === 'AVAILABLE');
@@ -60,8 +95,11 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
   const [activeCaseId, setActiveCaseId] = useState(() => cases[0]?.id || '');
   const [runningCaseId, setRunningCaseId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [savedMessage, setSavedMessage] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [results, setResults] = useState<Record<string, FunctionRunResult>>({});
   const [resultVersions, setResultVersions] = useState<Record<string, number>>({});
+  const [savedSignature, setSavedSignature] = useState(() => testCaseSignature(cases));
 
   // Reload the editor with the selected version's saved cases whenever the
   // chosen version changes. Edits here are for the run only and are not
@@ -73,12 +111,17 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
     setResults({});
     setResultVersions({});
     setError(null);
+    setSavedMessage(null);
+    setSavedSignature(testCaseSignature(seeded));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedVersionNumber]);
 
   const activeCase = cases.find((testCase) => testCase.id === activeCaseId) || cases[0];
   const checkedCases = cases.filter((testCase) => testCase.checked);
   const running = runningCaseId !== null;
+  const currentSignature = testCaseSignature(cases);
+  const hasUnsavedChanges = currentSignature !== savedSignature;
+  const canSaveTests = Boolean(onSaveTestCases && selectedVersion) && !running && !saving && cases.length > 0 && hasUnsavedChanges;
 
   const caseStatus = (testCase: TestCase): CaseStatus => {
     const result = results[testCase.id];
@@ -94,12 +137,14 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
   };
 
   const updateCase = (id: string, patch: Partial<TestCase>) => {
+    setSavedMessage(null);
     setCases((current) => current.map((testCase) => (
       testCase.id === id ? { ...testCase, ...patch } : testCase
     )));
   };
 
   const addCase = () => {
+    setSavedMessage(null);
     const next = newCase(cases.length + 1);
     setCases((current) => [...current, next]);
     setActiveCaseId(next.id);
@@ -112,10 +157,13 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
     setResults({});
     setResultVersions({});
     setError(null);
+    setSavedMessage(null);
+    setSavedSignature(testCaseSignature(seeded));
   };
 
   const removeCase = (id: string) => {
     if (cases.length <= 1) return;
+    setSavedMessage(null);
     setCases((current) => current.filter((testCase) => testCase.id !== id));
     setResults((current) => {
       const next = { ...current };
@@ -147,15 +195,8 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
   };
 
   const runCase = async (testCase: TestCase, version: FunctionVersionDTO) => {
-    let input: unknown = {};
-    const trimmed = testCase.input.trim();
-    if (trimmed) {
-      try {
-        input = JSON.parse(trimmed);
-      } catch {
-        throw new Error(`${testCase.name}: input must be valid JSON.`);
-      }
-    }
+    validateTestCaseJson(testCase);
+    const input = JSON.parse(testCase.input.trim());
     setRunningCaseId(testCase.id);
     const runResult = await executeFunctionCode({
       languageId: version.languageId,
@@ -201,6 +242,32 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
     return runCases([testCase], 'Add at least one test case.');
   };
 
+  const saveTests = async () => {
+    if (!onSaveTestCases || !selectedVersion || saving) return;
+    try {
+      setSaving(true);
+      setError(null);
+      setSavedMessage(null);
+      if (cases.length > 100) {
+        throw new Error('A version may have at most 100 saved test cases.');
+      }
+      cases.forEach((testCase) => {
+        if ((testCase.name || '').length > 200) {
+          throw new Error(`${testCase.name || 'Test case'}: name must be 200 characters or less.`);
+        }
+        validateTestCaseJson(testCase);
+      });
+      const saved = toSavedTestCases(cases);
+      await onSaveTestCases(selectedVersion, saved);
+      setSavedSignature(JSON.stringify(saved));
+      setSavedMessage(`Saved ${saved.length} test ${saved.length === 1 ? 'case' : 'cases'} to v${selectedVersion.version}.`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const activeResult = activeCase ? results[activeCase.id] : null;
   const activeResultVersion = activeCase ? resultVersions[activeCase.id] : null;
 
@@ -225,6 +292,16 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
           </label>
           <button
             type="button"
+            onClick={saveTests}
+            disabled={!canSaveTests}
+            className="flex h-9 items-center justify-center gap-2 rounded-lg border border-border-subtle px-4 text-[12px] font-semibold text-on-surface-variant transition-colors hover:border-primary/45 hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
+            title="Save these test cases to the selected version"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            Save tests
+          </button>
+          <button
+            type="button"
             onClick={runChecked}
             disabled={running}
             className="flex h-9 items-center justify-center gap-2 rounded-lg border border-border-subtle px-4 text-[12px] font-semibold text-on-surface-variant transition-colors hover:border-primary/45 hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
@@ -245,6 +322,7 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
           </button>
         </div>
         {error && <p className="mt-2 font-mono-sm text-[11px] text-status-error">{error}</p>}
+        {savedMessage && <p className="mt-2 font-mono-sm text-[11px] text-secondary">{savedMessage}</p>}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
@@ -358,7 +436,7 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
                 spellCheck={false}
                 className="min-h-[160px] w-full resize-y rounded-lg border border-border-subtle bg-surface-container-lowest p-3 font-mono-sm text-[12px] leading-relaxed text-on-surface outline-none transition-colors focus:border-primary/50"
               />
-              <span className="mb-2 mt-3 block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant/70">Expected output (stdout)</span>
+              <span className="mb-2 mt-3 block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant/70">Expected output JSON</span>
               <textarea
                 value={activeCase.expectedOutput}
                 onChange={(event) => updateCase(activeCase.id, { expectedOutput: event.target.value })}

@@ -470,6 +470,27 @@ export function createFunctionVersion(functionId: string, request: FunctionVersi
   return sendJson<FunctionVersionDTO>(`/app/v1/functions/${functionId}/versions`, 'POST', request);
 }
 
+// Updates a version's note, execution settings, and test cases in place.
+// Code, language, and status are ignored server-side, so this is safe on
+// published versions — it can never change what the version runs.
+export function updateFunctionVersionMetadata(
+  functionId: string,
+  version: number,
+  request: FunctionVersionRequest,
+): Promise<FunctionVersionDTO> {
+  return sendJson<FunctionVersionDTO>(`/app/v1/functions/${functionId}/versions/${version}/metadata`, 'PUT', request);
+}
+
+// Overwrites a DRAFT version in place. The backend rejects non-draft versions
+// so published/active versions stay immutable.
+export function updateFunctionVersion(
+  functionId: string,
+  version: number,
+  request: FunctionVersionRequest,
+): Promise<FunctionVersionDTO> {
+  return sendJson<FunctionVersionDTO>(`/app/v1/functions/${functionId}/versions/${version}`, 'PUT', request);
+}
+
 export function activateFunctionVersion(functionId: string, version: number): Promise<FunctionDefinitionDTO> {
   return sendJson<FunctionDefinitionDTO>(`/app/v1/functions/${functionId}/versions/${version}/activate`, 'POST', {});
 }

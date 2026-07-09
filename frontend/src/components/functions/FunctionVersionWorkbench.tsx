@@ -79,12 +79,35 @@ type FileContextMenu = {
   y: number;
 };
 
+export type WorkbenchInitialSettings = {
+  compilerOptions?: string | null;
+  commandLineArguments?: string | null;
+  cpuTimeLimitSeconds?: number | null;
+  wallTimeLimitSeconds?: number | null;
+  memoryLimitKb?: number | null;
+  maxFileSizeKb?: number | null;
+  maxOutputBytes?: number | null;
+  enableNetwork?: boolean | null;
+};
+
+// Passed alongside the request so the page can decide whether a save needs a
+// new version (code changed) or an in-place metadata update (note/settings/
+// test cases only). Language changes are detected by the page itself.
+export type WorkbenchSaveMeta = {
+  codeChanged: boolean;
+};
+
 type Props = {
   resourceLabel: string;
   languages: FunctionLanguageDTO[];
   languageId?: string;
   onLanguageChange?: (value: string) => void;
   initialTestCases?: FunctionTestCase[];
+  initialSourceMode?: FunctionSourceMode;
+  initialSourceCode?: string | null;
+  initialFiles?: WorkbenchFile[];
+  initialSettings?: WorkbenchInitialSettings;
+  initialNote?: string | null;
   description?: string;
   onDescriptionChange?: (value: string) => void;
   metadata: ReactNode;
@@ -92,8 +115,8 @@ type Props = {
   saveDraftLabel?: string;
   onCancel: () => void;
   saveDraftDisabled?: boolean;
-  onSaveDraft?: (request: FunctionVersionRequest) => Promise<void>;
-  onPublish: (request: FunctionVersionRequest) => Promise<void>;
+  onSaveDraft?: (request: FunctionVersionRequest, meta: WorkbenchSaveMeta) => Promise<void>;
+  onPublish: (request: FunctionVersionRequest, meta: WorkbenchSaveMeta) => Promise<void>;
   publishDisabled?: boolean;
 };
 
@@ -119,6 +142,32 @@ function seedTestCases(saved: FunctionTestCase[] | undefined): TestCase[] {
     expectedOutput: testCase.expectedOutput ?? '',
     expectedError: testCase.expectedError ?? '',
   }));
+}
+
+function requireJsonField(testCase: TestCase, field: 'input' | 'expectedOutput', label: string, allowBlank = false) {
+  const value = testCase[field].trim();
+  if (!value) {
+    if (allowBlank) return;
+    throw new Error(`${testCase.name || 'Test case'}: ${label} must be valid JSON.`);
+  }
+  try {
+    JSON.parse(value);
+  } catch {
+    throw new Error(`${testCase.name || 'Test case'}: ${label} must be valid JSON.`);
+  }
+}
+
+function validateTestCaseJson(testCase: TestCase) {
+  requireJsonField(testCase, 'input', 'input');
+  requireJsonField(testCase, 'expectedOutput', 'expected output', true);
+}
+
+function validateTestCasesJson(testCases: TestCase[]) {
+  testCases.forEach(validateTestCaseJson);
+}
+
+function settingToInput(value: number | null | undefined): string {
+  return value == null ? '' : String(value);
 }
 
 function toNumber(value: string): number | undefined {
@@ -809,6 +858,11 @@ export function FunctionVersionWorkbench({
   languageId: languageIdProp,
   onLanguageChange,
   initialTestCases,
+  initialSourceMode,
+  initialSourceCode,
+  initialFiles,
+  initialSettings,
+  initialNote,
   description,
   onDescriptionChange,
   metadata,
@@ -825,7 +879,7 @@ export function FunctionVersionWorkbench({
   const fileTreeRef = useRef<TreeApi<FileTreeNode> | undefined>(undefined);
   const fileTreeShellRef = useRef<HTMLDivElement | null>(null);
   const [workbenchLayoutModel] = useState(() => Model.fromJson(FUNCTION_WORKBENCH_LAYOUT));
-  const [sourceMode, setSourceMode] = useState<FunctionSourceMode>('SINGLE_FILE');
+  const [sourceMode, setSourceMode] = useState<FunctionSourceMode>(() => initialSourceMode ?? 'SINGLE_FILE');
   const [internalLanguageId, setInternalLanguageId] = useState('');
   const controlledLanguage = languageIdProp !== undefined;
   const languageId = controlledLanguage ? languageIdProp : internalLanguageId;
@@ -836,21 +890,30 @@ export function FunctionVersionWorkbench({
       setInternalLanguageId(value);
     }
   }, [controlledLanguage, onLanguageChange]);
-  const [sourceCode, setSourceCode] = useState(() => starterSource());
-  const [files, setFiles] = useState<WorkbenchFile[]>(() => [{ path: 'main.py', content: starterSource() }]);
+  const hasInitialFiles = Boolean(initialFiles && initialFiles.length > 0);
+  // True when the workbench opened pre-filled from an existing version (edit
+  // flow). In that case we must never regenerate starter code or realign it to
+  // the language, or we would wipe the loaded source.
+  const seededFromExisting = initialSourceCode != null || hasInitialFiles || Boolean(initialSettings);
+  const [sourceCode, setSourceCode] = useState(() => initialSourceCode ?? starterSource());
+  const [files, setFiles] = useState<WorkbenchFile[]>(() => (
+    hasInitialFiles
+      ? initialFiles!.map((file) => ({ path: file.path, content: file.content }))
+      : [{ path: 'main.py', content: starterSource() }]
+  ));
   const [manualDirectories, setManualDirectories] = useState<string[]>([]);
-  const [activePath, setActivePath] = useState('main.py');
+  const [activePath, setActivePath] = useState(() => (hasInitialFiles ? initialFiles![0].path : 'main.py'));
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [useDefaults, setUseDefaults] = useState(true);
-  const [compilerOptions, setCompilerOptions] = useState('');
-  const [commandLineArguments, setCommandLineArguments] = useState('');
-  const [cpu, setCpu] = useState('');
-  const [wall, setWall] = useState('');
-  const [memory, setMemory] = useState('');
-  const [fileSize, setFileSize] = useState('');
-  const [outputBytes, setOutputBytes] = useState('');
-  const [enableNetwork, setEnableNetwork] = useState(false);
-  const [note, setNote] = useState('');
+  const [useDefaults, setUseDefaults] = useState(() => !initialSettings);
+  const [compilerOptions, setCompilerOptions] = useState(() => initialSettings?.compilerOptions ?? '');
+  const [commandLineArguments, setCommandLineArguments] = useState(() => initialSettings?.commandLineArguments ?? '');
+  const [cpu, setCpu] = useState(() => settingToInput(initialSettings?.cpuTimeLimitSeconds));
+  const [wall, setWall] = useState(() => settingToInput(initialSettings?.wallTimeLimitSeconds));
+  const [memory, setMemory] = useState(() => settingToInput(initialSettings?.memoryLimitKb));
+  const [fileSize, setFileSize] = useState(() => settingToInput(initialSettings?.maxFileSizeKb));
+  const [outputBytes, setOutputBytes] = useState(() => settingToInput(initialSettings?.maxOutputBytes));
+  const [enableNetwork, setEnableNetwork] = useState(() => Boolean(initialSettings?.enableNetwork));
+  const [note, setNote] = useState(() => initialNote ?? '');
   const [testCases, setTestCases] = useState<TestCase[]>(() => seedTestCases(initialTestCases));
   const [activeCaseId, setActiveCaseId] = useState('');
   const [runningCaseId, setRunningCaseId] = useState<string | null>(null);
@@ -900,6 +963,25 @@ export function FunctionVersionWorkbench({
       : files.some((file) => file.path.trim() && file.content.trim()));
   const canSaveDraftVersion = Boolean(onSaveDraft) && !drafting && !saveDraftDisabled && Boolean(languageId) && !hasValidationErrors;
 
+  // Whether the source differs from what the workbench was seeded with. Drives
+  // the page's choice between an in-place metadata save and a new version.
+  const codeChanged = useMemo(() => {
+    if (!seededFromExisting) return true;
+    if (sourceMode !== (initialSourceMode ?? 'SINGLE_FILE')) return true;
+    if (sourceMode === 'SINGLE_FILE') {
+      return sourceCode !== (initialSourceCode ?? '');
+    }
+    const normalize = (list: WorkbenchFile[]) => list
+      .map((file) => ({ path: normalizeFilePath(file.path), content: file.content }))
+      .sort((left, right) => left.path.localeCompare(right.path));
+    const current = normalize(files);
+    const initial = normalize(initialFiles ?? []);
+    if (current.length !== initial.length) return true;
+    return current.some((file, index) => (
+      file.path !== initial[index].path || file.content !== initial[index].content
+    ));
+  }, [seededFromExisting, sourceMode, initialSourceMode, sourceCode, initialSourceCode, files, initialFiles]);
+
   useEffect(() => {
     if (languageId || sortedLanguages.length === 0) return;
     const python3 = sortedLanguages.find((language) => {
@@ -913,6 +995,7 @@ export function FunctionVersionWorkbench({
   // Keep untouched starter code aligned with the selected language.
   useEffect(() => {
     if (!selectedLanguage) return;
+    if (seededFromExisting) return; // never overwrite code loaded for editing
     const entry = langMeta(selectedLanguage.name).entry;
     const nextSource = starterSource(selectedLanguage.name);
     setSourceCode((current) => (
@@ -935,7 +1018,7 @@ export function FunctionVersionWorkbench({
       }
       return current;
     });
-  }, [selectedLanguage]);
+  }, [selectedLanguage, seededFromExisting]);
 
   // Multi-file only runs for languages whose sibling files Judge0 actually builds.
   // If the picked language can't, drop back to single-file so the user can't get
@@ -1265,6 +1348,7 @@ export function FunctionVersionWorkbench({
     if (sourceMode === 'MULTI_FILE' && multiFileValidation.errors.length > 0) {
       throw new Error(multiFileValidation.errors[0]);
     }
+    validateTestCasesJson(testCases);
 
     return {
       sourceMode,
@@ -1321,15 +1405,13 @@ export function FunctionVersionWorkbench({
       ? sourceCode.trim().length > 0
       : files.some((file) => file.path.trim() && file.content.trim());
     if (!hasSource) { setError('Add code before running.'); return; }
-    let input: unknown = {};
-    if (testCase.input.trim()) {
-      try {
-        input = JSON.parse(testCase.input);
-      } catch {
-        setError(`${testCase.name}: input is not valid JSON.`);
-        return;
-      }
+    try {
+      validateTestCaseJson(testCase);
+    } catch (err) {
+      setError((err as Error).message);
+      return;
     }
+    const input = JSON.parse(testCase.input.trim());
     setError(null);
     setActiveCaseId(testCase.id);
     setRunningCaseId(testCase.id);
@@ -1386,7 +1468,7 @@ export function FunctionVersionWorkbench({
     setPublishing(true);
     setError(null);
     try {
-      await onPublish(buildRequest());
+      await onPublish(buildRequest(), { codeChanged });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -1407,7 +1489,7 @@ export function FunctionVersionWorkbench({
     setDrafting(true);
     setError(null);
     try {
-      await onSaveDraft({ ...buildRequest(), status: 'DRAFT' });
+      await onSaveDraft({ ...buildRequest(), status: 'DRAFT' }, { codeChanged });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -1914,7 +1996,7 @@ export function FunctionVersionWorkbench({
   ) : (
     <div className="h-full min-h-0 space-y-2 overflow-y-auto p-3">
       <label className="block text-[12px] text-on-surface">
-        Expected output (stdout)
+        Expected output JSON
         <textarea
           value={activeCase.expectedOutput}
           onChange={(event) => updateActiveCase({ expectedOutput: event.target.value })}

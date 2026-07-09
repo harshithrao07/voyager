@@ -121,6 +121,32 @@ public class FunctionController {
         return ResponseEntity.ok(functionRegistryService.getVersions(functionId));
     }
 
+    @PutMapping("/{functionId}/versions/{version}")
+    public ResponseEntity<FunctionVersionResponseDTO> updateVersion(
+            @PathVariable UUID functionId,
+            @PathVariable @Min(1) int version,
+            @Valid @RequestBody FunctionVersionRequestDTO request
+    ) {
+        return ResponseEntity.ok(
+                functionRegistryService.updateVersion(functionId, version, request)
+        );
+    }
+
+    @PutMapping("/{functionId}/versions/{version}/metadata")
+    public ResponseEntity<FunctionVersionResponseDTO> updateVersionMetadata(
+            @PathVariable UUID functionId,
+            @PathVariable @Min(1) int version,
+            @Valid @RequestBody FunctionVersionRequestDTO request
+    ) {
+        return ResponseEntity.ok(
+                functionRegistryService.updateVersionMetadata(
+                        functionId,
+                        version,
+                        request
+                )
+        );
+    }
+
     @PostMapping("/{functionId}/versions/{version}/activate")
     public ResponseEntity<FunctionDefinitionResponseDTO> activateVersion(
             @PathVariable UUID functionId,
