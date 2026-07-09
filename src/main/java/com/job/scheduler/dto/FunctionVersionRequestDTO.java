@@ -2,10 +2,13 @@ package com.job.scheduler.dto;
 
 import com.job.scheduler.enums.FunctionSourceMode;
 import com.job.scheduler.enums.FunctionVersionStatus;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+
+import java.util.List;
 
 public record FunctionVersionRequestDTO(
         FunctionSourceMode sourceMode,
@@ -45,6 +48,10 @@ public record FunctionVersionRequestDTO(
 
         @Size(max = 2_000, message = "note must be at most 2000 characters")
         String note,
+
+        @Valid
+        @Size(max = 100, message = "a version may have at most 100 test cases")
+        List<FunctionTestCaseDTO> testCases,
 
         FunctionVersionStatus status
 ) {

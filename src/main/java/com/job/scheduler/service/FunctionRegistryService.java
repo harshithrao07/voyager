@@ -1,8 +1,11 @@
 package com.job.scheduler.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.job.scheduler.dto.FunctionDefinitionRequestDTO;
 import com.job.scheduler.dto.FunctionDefinitionResponseDTO;
 import com.job.scheduler.dto.FunctionSourceFileDTO;
+import com.job.scheduler.dto.FunctionTestCaseDTO;
 import com.job.scheduler.dto.FunctionVersionRequestDTO;
 import com.job.scheduler.dto.FunctionVersionResponseDTO;
 import com.job.scheduler.dto.FunctionVersionSettingsRequestDTO;
@@ -24,9 +27,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -38,9 +39,14 @@ public class FunctionRegistryService {
             "Function does not exist";
     private static final String FUNCTION_VERSION_NOT_FOUND_MESSAGE =
             "Function version does not exist";
+    private static final ObjectMapper TEST_CASE_MAPPER = new ObjectMapper();
+    private static final TypeReference<List<FunctionTestCaseDTO>> TEST_CASE_LIST_TYPE =
+            new TypeReference<>() {
+            };
 
     private final FunctionDefinitionRepository functionRepository;
     private final FunctionVersionRepository versionRepository;
+    private final FunctionRuntimePolicy runtimePolicy;
 
     @Value("${scheduler.judge0.default-cpu-time-limit-seconds:2.0}")
     private double defaultCpuTimeLimitSeconds;
@@ -56,11 +62,6 @@ public class FunctionRegistryService {
 
     @Value("${scheduler.judge0.default-max-output-bytes:65536}")
     private int defaultMaxOutputBytes;
-
-    // Comma-separated Judge0 language ids permitted for new versions. Blank means
-    // no allowlist (any language the Judge0 image provides is accepted).
-    @Value("${scheduler.judge0.allowed-language-ids:}")
-    private String allowedLanguageIdsProperty;
 
     @Transactional
     public FunctionDefinitionResponseDTO createFunction(
@@ -168,6 +169,7 @@ public class FunctionRegistryService {
         ));
         version.setEnableNetwork(Boolean.TRUE.equals(request.enableNetwork()));
         version.setNote(blankToNull(request.note()));
+        version.setTestCases(serializeTestCases(request.testCases()));
         version.setStatus(status);
 
         FunctionVersion saved = versionRepository.save(version);
@@ -185,6 +187,32 @@ public class FunctionRegistryService {
                 .stream()
                 .map(this::toResponse)
                 .toList();
+    }
+
+    @Transactional
+    public FunctionVersionResponseDTO publishVersion(
+            UUID functionId,
+            int version
+    ) {
+        FunctionDefinition function = findFunction(functionId);
+        ensureFunctionCanChangeVersions(function);
+        FunctionVersion functionVersion = findVersion(function, version);
+        if (functionVersion.getStatus() == FunctionVersionStatus.AVAILABLE) {
+            return toResponse(functionVersion);
+        }
+        if (functionVersion.getStatus() != FunctionVersionStatus.DRAFT) {
+            throw new IllegalStateException(
+                    "Function version cannot be published: " + version
+            );
+        }
+        validateVersionReady(functionVersion);
+        functionVersion.setStatus(FunctionVersionStatus.AVAILABLE);
+        FunctionVersion saved = versionRepository.save(functionVersion);
+        if (function.getActiveVersion() == null) {
+            function.setActiveVersion(saved.getVersion());
+            functionRepository.save(function);
+        }
+        return toResponse(saved);
     }
 
     @Transactional
@@ -298,6 +326,7 @@ public class FunctionRegistryService {
                 version.getMaxOutputBytes(),
                 version.isEnableNetwork(),
                 version.getNote(),
+                deserializeTestCases(version.getTestCases()),
                 version.getStatus(),
                 version.getCreatedAt(),
                 version.getUpdatedAt()
@@ -318,7 +347,7 @@ public class FunctionRegistryService {
             FunctionVersionRequestDTO request,
             FunctionVersionStatus status
     ) {
-        assertLanguageAllowed(request.languageId());
+        runtimePolicy.assertLanguageSupported(request.languageId());
         FunctionSourceMode mode = sourceMode(request);
         if (status != FunctionVersionStatus.DRAFT) {
             if (mode == FunctionSourceMode.SINGLE_FILE
@@ -348,6 +377,22 @@ public class FunctionRegistryService {
         }
     }
 
+    private void validateVersionReady(FunctionVersion version) {
+        runtimePolicy.assertLanguageSupported(version.getLanguageId());
+        if (version.getSourceMode() == FunctionSourceMode.SINGLE_FILE
+                && blankToNull(version.getSourceCode()) == null) {
+            throw new IllegalArgumentException(
+                    "sourceCode is required for SINGLE_FILE functions"
+            );
+        }
+        if (version.getSourceMode() == FunctionSourceMode.MULTI_FILE
+                && blankToNull(version.getAdditionalFilesBase64()) == null) {
+            throw new IllegalArgumentException(
+                    "additionalFilesBase64 is required for MULTI_FILE functions"
+            );
+        }
+    }
+
     private void ensureFunctionCanChangeVersions(FunctionDefinition function) {
         if (function.getStatus() == FunctionStatus.ARCHIVED) {
             throw new IllegalStateException(
@@ -368,36 +413,6 @@ public class FunctionRegistryService {
         return status;
     }
 
-    private void assertLanguageAllowed(Integer languageId) {
-        Set<Integer> allowed = allowedLanguageIds();
-        if (!allowed.isEmpty() && !allowed.contains(languageId)) {
-            throw new IllegalArgumentException(
-                    "Language " + languageId
-                            + " is not allowed. Allowed language ids: " + allowed
-            );
-        }
-    }
-
-    private Set<Integer> allowedLanguageIds() {
-        Set<Integer> ids = new LinkedHashSet<>();
-        if (allowedLanguageIdsProperty == null
-                || allowedLanguageIdsProperty.isBlank()) {
-            return ids;
-        }
-        for (String token : allowedLanguageIdsProperty.split(",")) {
-            String trimmed = token.trim();
-            if (trimmed.isEmpty()) {
-                continue;
-            }
-            try {
-                ids.add(Integer.valueOf(trimmed));
-            } catch (NumberFormatException ignored) {
-                // Skip malformed entries so one typo doesn't disable execution.
-            }
-        }
-        return ids;
-    }
-
     private FunctionSourceMode sourceMode(FunctionVersionRequestDTO request) {
         return request.sourceMode() == null
                 ? FunctionSourceMode.SINGLE_FILE
@@ -414,6 +429,29 @@ public class FunctionRegistryService {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private String serializeTestCases(List<FunctionTestCaseDTO> testCases) {
+        if (testCases == null || testCases.isEmpty()) {
+            return null;
+        }
+        try {
+            return TEST_CASE_MAPPER.writeValueAsString(testCases);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid test cases", e);
+        }
+    }
+
+    private List<FunctionTestCaseDTO> deserializeTestCases(String testCases) {
+        String normalized = blankToNull(testCases);
+        if (normalized == null) {
+            return List.of();
+        }
+        try {
+            return TEST_CASE_MAPPER.readValue(normalized, TEST_CASE_LIST_TYPE);
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 
     private List<FunctionSourceFileDTO> sourceFiles(String additionalFilesBase64) {

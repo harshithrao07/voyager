@@ -33,10 +33,12 @@ import {
   listFunctionLanguages,
   listFunctionVersions,
   listFunctions,
+  publishFunctionVersion,
   updateFunctionDefinition,
   updateFunctionVersionSettings,
   type FunctionDefinitionDTO,
   type FunctionLanguageDTO,
+  type FunctionTestCase,
   type FunctionVersionDTO,
   type FunctionVersionSettingsRequest,
 } from '../api';
@@ -150,6 +152,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const [showVersionWorkbench, setShowVersionWorkbench] = useState(false);
   const [newVersionLanguageId, setNewVersionLanguageId] = useState('');
+  const [newVersionTestCases, setNewVersionTestCases] = useState<FunctionTestCase[]>([]);
   const invocationsRefreshKey = 0;
   const [busy, setBusy] = useState(false);
 
@@ -246,6 +249,17 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
     }
   };
 
+  const publishDraft = async (version: number) => {
+    if (!selectedId || busy) return;
+    setBusy(true);
+    try {
+      await publishFunctionVersion(selectedId, version);
+      await Promise.all([reloadVersions(selectedId), reloadFunctions()]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const toggleStatus = async (fn: FunctionDefinitionDTO) => {
     if (busy) return;
     setBusy(true);
@@ -320,6 +334,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
           languages={languages}
           languageId={newVersionLanguageId}
           onLanguageChange={setNewVersionLanguageId}
+          initialTestCases={newVersionTestCases}
           description={selected.description || ''}
           metadata={(
             <SelectedMetadata
@@ -358,9 +373,11 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
             const sorted = [...versions].sort((left, right) => right.version - left.version);
             const base = sorted.find((version) => version.version === selected.activeVersion) || sorted[0];
             setNewVersionLanguageId(base ? String(base.languageId) : '');
+            setNewVersionTestCases(base?.testCases ?? []);
             setShowVersionWorkbench(true);
           }}
           onActivate={activate}
+          onPublishDraft={publishDraft}
           onToggleStatus={() => toggleStatus(selected)}
           onArchive={archiveSelected}
           onUpdateVersionSettings={updateVersionSettings}
@@ -533,8 +550,8 @@ function FunctionCreateWorkbench({
   const validDefinition = slug.test(namespace) && slug.test(name);
   const metadata = (
     <div className="grid gap-3 lg:grid-cols-3">
-      <MetaInput label="Namespace" value={namespace} onChange={setNamespace} placeholder="notifications" />
-      <MetaInput label="Name" value={name} onChange={setName} placeholder="send-email" />
+      <MetaInput label="Namespace" value={namespace} onChange={setNamespace} placeholder="billing" />
+      <MetaInput label="Name" value={name} onChange={setName} placeholder="calculate-tax" />
       <label>
         <span className={labelClass}>Language</span>
         <select
@@ -601,6 +618,7 @@ function FunctionDetail({
   onBack,
   onNewVersion,
   onActivate,
+  onPublishDraft,
   onToggleStatus,
   onArchive,
   onUpdateVersionSettings,
@@ -617,13 +635,21 @@ function FunctionDetail({
   onBack: () => void;
   onNewVersion: () => void;
   onActivate: (version: number) => void;
+  onPublishDraft: (version: number) => void;
   onToggleStatus: () => void;
   onArchive: () => void;
   onUpdateVersionSettings: (version: number, request: FunctionVersionSettingsRequest) => Promise<void>;
   testPanel: ReactNode;
   invocationsPanel: ReactNode;
 }) {
-  const sortedVersions = [...versions].sort((left, right) => right.version - left.version);
+  const sortedVersions = [...versions].sort((left, right) => {
+    const leftActive = left.version === selected.activeVersion;
+    const rightActive = right.version === selected.activeVersion;
+    if (leftActive !== rightActive) {
+      return leftActive ? -1 : 1;
+    }
+    return right.version - left.version;
+  });
   const activeVersion = sortedVersions.find((version) => version.version === selected.activeVersion) || null;
   const latestVersion = sortedVersions[0] || null;
   const availableCount = versions.filter((version) => version.status === 'AVAILABLE').length;
@@ -789,6 +815,7 @@ function FunctionDetail({
                 loading={versionsLoading}
                 busy={busy}
                 onActivate={onActivate}
+                onPublishDraft={onPublishDraft}
                 onNewVersion={onNewVersion}
               />
             )}
@@ -934,6 +961,7 @@ function VersionHistoryPanel({
   loading,
   busy,
   onActivate,
+  onPublishDraft,
   onNewVersion,
 }: {
   versions: FunctionVersionDTO[];
@@ -942,6 +970,7 @@ function VersionHistoryPanel({
   loading: boolean;
   busy: boolean;
   onActivate: (version: number) => void;
+  onPublishDraft: (version: number) => void;
   onNewVersion: () => void;
 }) {
   const preferredVersion = activeVersion != null && versions.some((version) => version.version === activeVersion)
@@ -1015,6 +1044,11 @@ function VersionHistoryPanel({
                   <div className="mt-2 space-y-1 text-[11px] text-on-surface-variant">
                     <div className="truncate">{languageName(version.languageId)}</div>
                     <div>{version.sourceMode === 'MULTI_FILE' ? 'Multi-file' : 'Single file'} - {formatUpdated(version.updatedAt).replace('Updated ', '')}</div>
+                    {version.note?.trim() && (
+                      <div className="line-clamp-2 whitespace-pre-wrap text-on-surface-variant/80" title={version.note}>
+                        {version.note.trim()}
+                      </div>
+                    )}
                   </div>
                 </button>
               );
@@ -1028,6 +1062,7 @@ function VersionHistoryPanel({
         languageName={languageName}
         busy={busy}
         onActivate={onActivate}
+        onPublishDraft={onPublishDraft}
         emptyMessage="Choose a version to inspect its code and execution settings."
       />
     </div>
@@ -1041,6 +1076,7 @@ function VersionInspector({
   languageName,
   busy,
   onActivate,
+  onPublishDraft,
   emptyMessage,
 }: {
   title: string;
@@ -1049,6 +1085,7 @@ function VersionInspector({
   languageName: (id: number) => string;
   busy: boolean;
   onActivate: (version: number) => void;
+  onPublishDraft: (version: number) => void;
   emptyMessage: string;
 }) {
   const files = useMemo(() => versionSourceFiles(version), [version]);
@@ -1069,16 +1106,31 @@ function VersionInspector({
             </p>
           )}
         </div>
-        {version && !isActive && version.status === 'AVAILABLE' && (
-          <button
-            type="button"
-            onClick={() => onActivate(version.version)}
-            disabled={busy}
-            className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] text-primary hover:bg-primary/10 disabled:opacity-50"
-          >
-            <Power size={13} />
-            Activate
-          </button>
+        {version && (
+          <div className="flex shrink-0 items-center gap-2">
+            {!isActive && version.status === 'DRAFT' && (
+              <button
+                type="button"
+                onClick={() => onPublishDraft(version.version)}
+                disabled={busy}
+                className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] text-primary hover:bg-primary/10 disabled:opacity-50"
+              >
+                <CheckCircle2 size={13} />
+                Publish draft
+              </button>
+            )}
+            {!isActive && version.status === 'AVAILABLE' && (
+              <button
+                type="button"
+                onClick={() => onActivate(version.version)}
+                disabled={busy}
+                className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] text-primary hover:bg-primary/10 disabled:opacity-50"
+              >
+                <Power size={13} />
+                Activate
+              </button>
+            )}
+          </div>
         )}
       </div>
       {!version ? (
@@ -1086,6 +1138,7 @@ function VersionInspector({
       ) : (
         <div className="space-y-4">
           <FunctionCodeViewer files={files} languageName={languageName(version.languageId)} />
+          <VersionTestCasesCard testCases={version.testCases} />
           <VersionConfigGrid version={version} languageName={languageName} />
         </div>
       )}
@@ -1568,6 +1621,50 @@ function StatusChip({ label, tone }: { label: string; tone: 'ok' | 'info' | 'mut
     <span className={`rounded-md border px-1.5 py-0.5 font-mono-sm text-[9px] uppercase tracking-[0.06em] ${toneClass}`}>
       {label}
     </span>
+  );
+}
+
+function VersionTestCasesCard({ testCases }: { testCases: FunctionTestCase[] }) {
+  const cases = testCases ?? [];
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <Sparkles size={15} className="text-primary" />
+        <h4 className="text-[13px] font-semibold text-on-surface">Saved test cases</h4>
+        <span className="rounded-md border border-border-subtle px-1.5 py-0.5 font-mono-sm text-[10px] text-on-surface-variant">{cases.length}</span>
+      </div>
+      {cases.length === 0 ? (
+        <p className="text-[12px] text-on-surface-variant">
+          No test cases saved with this version. Add them in the workbench when you create a version.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {cases.map((testCase, index) => (
+            <div key={index} className="rounded-lg border border-border-subtle bg-surface-container-lowest px-3 py-2">
+              <div className="mb-2 text-[12px] font-semibold text-on-surface">{testCase.name?.trim() || `Case ${index + 1}`}</div>
+              <div className="grid gap-2 md:grid-cols-2">
+                <TestCaseField label="Input (stdin)" value={testCase.input} />
+                <TestCaseField label="Expected output" value={testCase.expectedOutput} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TestCaseField({ label, value }: { label: string; value: string }) {
+  const trimmed = value?.trim();
+  return (
+    <div className="min-w-0">
+      <div className="mb-1 font-mono-sm text-[9px] uppercase tracking-[0.07em] text-on-surface-variant">{label}</div>
+      {trimmed ? (
+        <pre className="max-h-32 overflow-auto rounded-md border border-border-subtle bg-surface-base p-2 font-mono-sm text-[11px] leading-relaxed text-on-surface">{trimmed}</pre>
+      ) : (
+        <div className="rounded-md border border-dashed border-border-subtle px-2 py-2 text-[11px] text-on-surface-variant/70">Empty</div>
+      )}
+    </div>
   );
 }
 

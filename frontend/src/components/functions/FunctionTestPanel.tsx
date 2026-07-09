@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { CheckCircle2, Loader2, Play, PlayCircle, Plus, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { CheckCircle2, Loader2, Play, PlayCircle, Plus, RotateCcw, Trash2, XCircle } from 'lucide-react';
 import { executeFunctionCode, type FunctionRunResult, type FunctionVersionDTO } from '../../api';
 
 type Props = {
@@ -11,8 +11,11 @@ type TestCase = {
   id: string;
   name: string;
   input: string;
+  expectedOutput: string;
   checked: boolean;
 };
+
+type CaseStatus = 'pass' | 'fail' | 'none';
 
 const statusTone: Record<string, string> = {
   SUCCEEDED: 'border-secondary/40 bg-secondary/10 text-secondary',
@@ -25,26 +28,70 @@ function newCase(index: number): TestCase {
     id: crypto.randomUUID(),
     name: `Case ${index}`,
     input: '{\n  "amount": 100\n}',
+    expectedOutput: '',
     checked: true,
   };
 }
 
+// Load the cases saved with a version into the editor. Falls back to a single
+// blank case when the version has none, so the panel is always runnable.
+function seedCasesFromVersion(version?: FunctionVersionDTO): TestCase[] {
+  const saved = version?.testCases ?? [];
+  if (saved.length === 0) return [newCase(1)];
+  return saved.map((testCase, index) => ({
+    id: crypto.randomUUID(),
+    name: testCase.name?.trim() || `Case ${index + 1}`,
+    input: testCase.input ?? '',
+    expectedOutput: testCase.expectedOutput ?? '',
+    checked: true,
+  }));
+}
+
 export function FunctionTestPanel({ versions, activeVersion }: Props) {
   const [versionChoice, setVersionChoice] = useState('active');
-  const [cases, setCases] = useState<TestCase[]>(() => [newCase(1)]);
-  const [activeCaseId, setActiveCaseId] = useState(cases[0]?.id || '');
-  const [runningCaseId, setRunningCaseId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [results, setResults] = useState<Record<string, FunctionRunResult>>({});
-  const [resultVersions, setResultVersions] = useState<Record<string, number>>({});
 
   const runnableVersions = versions.filter((version) => version.status === 'AVAILABLE');
   const selectedVersion = versionChoice === 'active'
     ? runnableVersions.find((version) => version.version === activeVersion)
     : runnableVersions.find((version) => version.version === Number(versionChoice));
+  const selectedVersionNumber = selectedVersion?.version ?? null;
+
+  const [cases, setCases] = useState<TestCase[]>(() => seedCasesFromVersion(selectedVersion));
+  const [activeCaseId, setActiveCaseId] = useState(() => cases[0]?.id || '');
+  const [runningCaseId, setRunningCaseId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, FunctionRunResult>>({});
+  const [resultVersions, setResultVersions] = useState<Record<string, number>>({});
+
+  // Reload the editor with the selected version's saved cases whenever the
+  // chosen version changes. Edits here are for the run only and are not
+  // persisted, so switching versions discards them by design.
+  useEffect(() => {
+    const seeded = seedCasesFromVersion(selectedVersion);
+    setCases(seeded);
+    setActiveCaseId(seeded[0]?.id || '');
+    setResults({});
+    setResultVersions({});
+    setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVersionNumber]);
+
   const activeCase = cases.find((testCase) => testCase.id === activeCaseId) || cases[0];
   const checkedCases = cases.filter((testCase) => testCase.checked);
   const running = runningCaseId !== null;
+
+  const caseStatus = (testCase: TestCase): CaseStatus => {
+    const result = results[testCase.id];
+    if (!result) return 'none';
+    if (result.status !== 'SUCCEEDED') return 'fail';
+    const expected = testCase.expectedOutput.trim();
+    if (!expected) return 'pass';
+    try {
+      return JSON.stringify(JSON.parse(expected)) === JSON.stringify(result.output ?? null) ? 'pass' : 'fail';
+    } catch {
+      return (result.stdout || '').trim() === expected ? 'pass' : 'fail';
+    }
+  };
 
   const updateCase = (id: string, patch: Partial<TestCase>) => {
     setCases((current) => current.map((testCase) => (
@@ -56,6 +103,15 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
     const next = newCase(cases.length + 1);
     setCases((current) => [...current, next]);
     setActiveCaseId(next.id);
+  };
+
+  const resetToSaved = () => {
+    const seeded = seedCasesFromVersion(selectedVersion);
+    setCases(seeded);
+    setActiveCaseId(seeded[0]?.id || '');
+    setResults({});
+    setResultVersions({});
+    setError(null);
   };
 
   const removeCase = (id: string) => {
@@ -193,21 +249,35 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
 
       <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
         <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-3">
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between gap-2">
             <span className="text-[13px] font-semibold text-on-surface">Test cases</span>
-            <button
-              type="button"
-              onClick={addCase}
-              className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] text-primary hover:bg-primary/10"
-            >
-              <Plus size={13} />
-              Add
-            </button>
+            <div className="flex items-center gap-1.5">
+              {(selectedVersion?.testCases?.length ?? 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={resetToSaved}
+                  disabled={running}
+                  className="flex h-8 items-center gap-1.5 rounded-lg border border-border-subtle px-3 text-[12px] text-on-surface-variant transition-colors hover:border-primary/45 hover:text-on-surface disabled:opacity-40"
+                  title="Discard edits and reload the cases saved with this version"
+                >
+                  <RotateCcw size={13} />
+                  Reset to saved
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={addCase}
+                className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] text-primary hover:bg-primary/10"
+              >
+                <Plus size={13} />
+                Add
+              </button>
+            </div>
           </div>
           <div className="space-y-2">
             {cases.map((testCase) => {
               const active = activeCase?.id === testCase.id;
-              const result = results[testCase.id];
+              const status = caseStatus(testCase);
               return (
                 <div
                   key={testCase.id}
@@ -232,10 +302,10 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
                   </button>
                   {runningCaseId === testCase.id ? (
                     <Loader2 size={13} className="animate-spin text-primary" />
-                  ) : result?.status === 'SUCCEEDED' ? (
+                  ) : status === 'pass' ? (
                     <CheckCircle2 size={13} className="text-secondary" />
-                  ) : result?.status === 'FAILED' ? (
-                    <CheckCircle2 size={13} className="text-status-error" />
+                  ) : status === 'fail' ? (
+                    <XCircle size={13} className="text-status-error" />
                   ) : null}
                   <button
                     type="button"
@@ -286,7 +356,15 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
                 value={activeCase.input}
                 onChange={(event) => updateCase(activeCase.id, { input: event.target.value })}
                 spellCheck={false}
-                className="min-h-[220px] w-full resize-y rounded-lg border border-border-subtle bg-surface-container-lowest p-3 font-mono-sm text-[12px] leading-relaxed text-on-surface outline-none transition-colors focus:border-primary/50"
+                className="min-h-[160px] w-full resize-y rounded-lg border border-border-subtle bg-surface-container-lowest p-3 font-mono-sm text-[12px] leading-relaxed text-on-surface outline-none transition-colors focus:border-primary/50"
+              />
+              <span className="mb-2 mt-3 block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant/70">Expected output (stdout)</span>
+              <textarea
+                value={activeCase.expectedOutput}
+                onChange={(event) => updateCase(activeCase.id, { expectedOutput: event.target.value })}
+                spellCheck={false}
+                placeholder="Leave blank to just check it runs"
+                className="min-h-[90px] w-full resize-y rounded-lg border border-border-subtle bg-surface-container-lowest p-3 font-mono-sm text-[12px] leading-relaxed text-secondary outline-none transition-colors placeholder:text-on-surface-variant/40 focus:border-primary/50"
               />
             </div>
           )}
@@ -300,6 +378,15 @@ export function FunctionTestPanel({ versions, activeVersion }: Props) {
             ) : (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
+                  {activeCase && caseStatus(activeCase) !== 'none' && (
+                    <span className={`rounded-full border px-2.5 py-0.5 font-mono-sm text-[10px] uppercase tracking-[0.06em] ${
+                      caseStatus(activeCase) === 'pass'
+                        ? 'border-status-success/40 bg-status-success/10 text-status-success'
+                        : 'border-status-error/40 bg-status-error/10 text-status-error'
+                    }`}>
+                      {caseStatus(activeCase) === 'pass' ? 'Pass' : 'Fail'}
+                    </span>
+                  )}
                   <span className={`rounded-full border px-2.5 py-0.5 font-mono-sm text-[10px] uppercase tracking-[0.06em] ${statusTone[activeResult.status] || statusTone.RUNNING}`}>
                     {activeResult.status}
                   </span>

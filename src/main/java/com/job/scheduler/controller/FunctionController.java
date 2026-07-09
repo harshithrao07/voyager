@@ -13,7 +13,7 @@ import com.job.scheduler.dto.FunctionVersionSettingsRequestDTO;
 import com.job.scheduler.dto.Judge0RuntimeInfoDTO;
 import com.job.scheduler.service.FunctionInvocationService;
 import com.job.scheduler.service.FunctionRegistryService;
-import com.job.scheduler.service.Judge0Client;
+import com.job.scheduler.service.FunctionRuntimePolicy;
 import com.job.scheduler.service.Judge0RuntimeService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
@@ -40,12 +40,14 @@ import java.util.UUID;
 public class FunctionController {
     private final FunctionRegistryService functionRegistryService;
     private final FunctionInvocationService functionInvocationService;
-    private final Judge0Client judge0Client;
+    private final FunctionRuntimePolicy functionRuntimePolicy;
     private final Judge0RuntimeService judge0RuntimeService;
 
     @GetMapping("/languages")
     public ResponseEntity<List<FunctionLanguageDTO>> getLanguages() {
-        return ResponseEntity.ok(judge0Client.listLanguages());
+        return ResponseEntity.ok(
+                functionRuntimePolicy.supportedSelectableLanguages()
+        );
     }
 
     @GetMapping("/runtime")
@@ -126,6 +128,16 @@ public class FunctionController {
     ) {
         return ResponseEntity.ok(
                 functionRegistryService.activateVersion(functionId, version)
+        );
+    }
+
+    @PostMapping("/{functionId}/versions/{version}/publish")
+    public ResponseEntity<FunctionVersionResponseDTO> publishVersion(
+            @PathVariable UUID functionId,
+            @PathVariable @Min(1) int version
+    ) {
+        return ResponseEntity.ok(
+                functionRegistryService.publishVersion(functionId, version)
         );
     }
 

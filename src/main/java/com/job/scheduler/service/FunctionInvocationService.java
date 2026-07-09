@@ -38,6 +38,7 @@ public class FunctionInvocationService {
     private final FunctionInvocationRepository invocationRepository;
     private final Judge0Client judge0Client;
     private final Judge0MultiFileSupport multiFileSupport;
+    private final FunctionRuntimePolicy runtimePolicy;
     private final ObjectMapper objectMapper;
 
     @Value("${scheduler.judge0.poll-interval-ms:500}")
@@ -77,19 +78,22 @@ public class FunctionInvocationService {
                 ? request.memoryLimitKb()
                 : defaultMemoryLimitKb;
         try {
+            runtimePolicy.assertLanguageSupported(request.languageId());
             int submissionLanguageId = request.languageId();
             String sourceCode = mode == FunctionSourceMode.SINGLE_FILE ? blankToNull(request.sourceCode()) : null;
             String additionalFiles = mode == FunctionSourceMode.MULTI_FILE ? blankToNull(request.additionalFilesBase64()) : null;
             String compilerOptions = blankToNull(request.compilerOptions());
             String commandLineArguments = blankToNull(request.commandLineArguments());
             if (mode == FunctionSourceMode.MULTI_FILE) {
-                // Rewrite to a Judge0 "Multi-file program" with generated compile/run
-                // scripts; the language-specific behaviour is baked into the archive.
-                additionalFiles = multiFileSupport.buildArchive(
+                // Route the bundle to the right Judge0 strategy (native language
+                // box vs. multi-file box) for the version's language.
+                Judge0MultiFileSupport.MultiFileSubmission mf = multiFileSupport.plan(
                         request.languageId(), additionalFiles, compilerOptions, commandLineArguments);
-                submissionLanguageId = Judge0MultiFileSupport.MULTI_FILE_LANGUAGE_ID;
-                compilerOptions = null;
-                commandLineArguments = null;
+                submissionLanguageId = mf.languageId();
+                sourceCode = mf.sourceCode();
+                additionalFiles = mf.additionalFilesBase64();
+                compilerOptions = mf.compilerOptions();
+                commandLineArguments = mf.commandLineArguments();
             }
             Judge0SubmissionRequest submission = new Judge0SubmissionRequest(
                     submissionLanguageId,
@@ -148,6 +152,11 @@ public class FunctionInvocationService {
         } catch (TaskResourceException exception) {
             return new FunctionRunResultDTO(FunctionInvocationStatus.FAILED, null, null, null, null,
                     exception.getMessage(), null, null, null, exception.error(),
+                    exception.getMessage(), null, null);
+        } catch (IllegalArgumentException exception) {
+            return new FunctionRunResultDTO(FunctionInvocationStatus.FAILED, null, null, null, null,
+                    exception.getMessage(), null, null, null,
+                    TaskResourceErrors.FUNCTION_RUNTIME_ERROR,
                     exception.getMessage(), null, null);
         } catch (RuntimeException exception) {
             // Judge0 outages / rejected submissions / malformed responses must not
@@ -365,13 +374,14 @@ public class FunctionInvocationService {
         String compilerOptions = version.getCompilerOptions();
         String commandLineArguments = version.getCommandLineArguments();
         if (multiFile) {
-            // Submit as a Judge0 "Multi-file program" with generated compile/run
-            // scripts for the version's language.
-            additionalFiles = multiFileSupport.buildArchive(
+            // Route the bundle to the right Judge0 strategy for the version's language.
+            Judge0MultiFileSupport.MultiFileSubmission mf = multiFileSupport.plan(
                     languageId, additionalFiles, compilerOptions, commandLineArguments);
-            languageId = Judge0MultiFileSupport.MULTI_FILE_LANGUAGE_ID;
-            compilerOptions = null;
-            commandLineArguments = null;
+            languageId = mf.languageId();
+            sourceCode = mf.sourceCode();
+            additionalFiles = mf.additionalFilesBase64();
+            compilerOptions = mf.compilerOptions();
+            commandLineArguments = mf.commandLineArguments();
         }
         return new Judge0SubmissionRequest(
                 languageId,

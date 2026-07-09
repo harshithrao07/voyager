@@ -19,10 +19,14 @@ import java.util.List;
 @RequiredArgsConstructor
 public class Judge0RuntimeService {
     private final Judge0Client judge0Client;
+    private final FunctionRuntimePolicy runtimePolicy;
 
     public Judge0RuntimeInfoDTO runtimeInfo() {
         try {
-            List<FunctionLanguageDTO> languages = judge0Client.listLanguages();
+            List<FunctionLanguageDTO> languages =
+                    runtimePolicy.supportedLanguages(
+                            judge0Client.listSelectableLanguages()
+                    );
             int statuses = judge0Client.countStatuses();
             Judge0Client.WorkerStats workers = judge0Client.workerStats();
             Judge0LimitsDTO limits = judge0Client.configInfo();

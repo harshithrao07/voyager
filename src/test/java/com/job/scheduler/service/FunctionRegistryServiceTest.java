@@ -32,11 +32,18 @@ class FunctionRegistryServiceTest {
     @Mock
     private FunctionVersionRepository versionRepository;
 
+    @Mock
+    private FunctionRuntimePolicy runtimePolicy;
+
     private FunctionRegistryService service;
 
     @BeforeEach
     void setUp() {
-        service = new FunctionRegistryService(functionRepository, versionRepository);
+        service = new FunctionRegistryService(
+                functionRepository,
+                versionRepository,
+                runtimePolicy
+        );
     }
 
     @Test
@@ -123,6 +130,67 @@ class FunctionRegistryServiceTest {
                 )
         )).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Archived functions cannot be changed");
+    }
+
+    @Test
+    void publishVersionMarksDraftAvailableAndSetsActiveWhenMissing() {
+        FunctionDefinition function = function(FunctionStatus.ENABLED);
+        function.setActiveVersion(null);
+        FunctionVersion version = version(function);
+        version.setVersion(2);
+        version.setStatus(FunctionVersionStatus.DRAFT);
+        when(functionRepository.findById(function.getId()))
+                .thenReturn(Optional.of(function));
+        when(versionRepository.findByFunctionDefinitionAndVersion(function, 2))
+                .thenReturn(Optional.of(version));
+        when(versionRepository.save(any(FunctionVersion.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(functionRepository.save(any(FunctionDefinition.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = service.publishVersion(function.getId(), 2);
+
+        assertThat(response.status()).isEqualTo(FunctionVersionStatus.AVAILABLE);
+        assertThat(version.getStatus()).isEqualTo(FunctionVersionStatus.AVAILABLE);
+        assertThat(function.getActiveVersion()).isEqualTo(2);
+        verify(runtimePolicy).assertLanguageSupported(71);
+        verify(versionRepository).save(version);
+        verify(functionRepository).save(function);
+    }
+
+    @Test
+    void publishVersionDoesNotReplaceExistingActiveVersion() {
+        FunctionDefinition function = function(FunctionStatus.ENABLED);
+        FunctionVersion version = version(function);
+        version.setVersion(2);
+        version.setStatus(FunctionVersionStatus.DRAFT);
+        when(functionRepository.findById(function.getId()))
+                .thenReturn(Optional.of(function));
+        when(versionRepository.findByFunctionDefinitionAndVersion(function, 2))
+                .thenReturn(Optional.of(version));
+        when(versionRepository.save(any(FunctionVersion.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.publishVersion(function.getId(), 2);
+
+        assertThat(function.getActiveVersion()).isEqualTo(1);
+        assertThat(version.getStatus()).isEqualTo(FunctionVersionStatus.AVAILABLE);
+    }
+
+    @Test
+    void publishVersionRejectsIncompleteSingleFileDraft() {
+        FunctionDefinition function = function(FunctionStatus.ENABLED);
+        FunctionVersion version = version(function);
+        version.setStatus(FunctionVersionStatus.DRAFT);
+        version.setSourceCode(null);
+        when(functionRepository.findById(function.getId()))
+                .thenReturn(Optional.of(function));
+        when(versionRepository.findByFunctionDefinitionAndVersion(function, 1))
+                .thenReturn(Optional.of(version));
+
+        assertThatThrownBy(() -> service.publishVersion(function.getId(), 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sourceCode is required");
     }
 
     private FunctionDefinition function(FunctionStatus status) {

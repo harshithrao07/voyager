@@ -47,6 +47,9 @@ class FunctionInvocationServiceTest {
     @Mock
     private Judge0MultiFileSupport multiFileSupport;
 
+    @Mock
+    private FunctionRuntimePolicy runtimePolicy;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private FunctionInvocationService service;
     private FunctionDefinition function;
@@ -59,6 +62,7 @@ class FunctionInvocationServiceTest {
                 invocationRepository,
                 judge0Client,
                 multiFileSupport,
+                runtimePolicy,
                 objectMapper
         );
         ReflectionTestUtils.setField(service, "pollIntervalMs", 1L);
@@ -305,6 +309,22 @@ class FunctionInvocationServiceTest {
         assertThat(result.status()).isEqualTo(FunctionInvocationStatus.FAILED);
         assertThat(result.errorName()).isEqualTo(TaskResourceErrors.FUNCTION_RUNTIME_ERROR);
         assertThat(result.stderr()).isEqualTo("boom");
+    }
+
+    @Test
+    void runRejectsUnsupportedRuntimeBeforeSubmitting() {
+        org.mockito.Mockito.doThrow(new IllegalArgumentException(
+                "Language 99 is not supported for Voyager functions"
+        )).when(runtimePolicy).assertLanguageSupported(99);
+
+        FunctionRunResultDTO result = service.run(new FunctionRunRequestDTO(
+                99, FunctionSourceMode.SINGLE_FILE, "print('{}')", null, null, null,
+                null, null, null, null, 4096, false, objectMapper.createObjectNode()));
+
+        assertThat(result.status()).isEqualTo(FunctionInvocationStatus.FAILED);
+        assertThat(result.errorName()).isEqualTo(TaskResourceErrors.FUNCTION_RUNTIME_ERROR);
+        assertThat(result.errorMessage()).contains("not supported");
+        org.mockito.Mockito.verifyNoInteractions(judge0Client);
     }
 
     private FunctionDefinition function() {

@@ -35,6 +35,7 @@ import type {
   FunctionRunRequest,
   FunctionRunResult,
   FunctionSourceMode,
+  FunctionTestCase,
   FunctionVersionRequest,
 } from '../../api';
 
@@ -83,6 +84,7 @@ type Props = {
   languages: FunctionLanguageDTO[];
   languageId?: string;
   onLanguageChange?: (value: string) => void;
+  initialTestCases?: FunctionTestCase[];
   description?: string;
   onDescriptionChange?: (value: string) => void;
   metadata: ReactNode;
@@ -99,6 +101,25 @@ const controlClass =
   'h-9 w-full rounded-lg border border-border-subtle bg-surface-container-lowest px-3 text-[12px] text-on-surface outline-none transition-colors placeholder:text-on-surface-variant/45 focus:border-primary/60';
 const selectControlClass = `${controlClass} py-0 leading-[34px]`;
 const labelClass = 'mb-1.5 flex items-center gap-1.5 text-[11px] text-on-surface-variant';
+
+let testCaseIdCounter = 0;
+function nextTestCaseId() {
+  testCaseIdCounter += 1;
+  return `case-${Date.now()}-${testCaseIdCounter}`;
+}
+
+// Saved test cases carry no client id (it is a local editor key), so mint a
+// fresh one for each when seeding the workbench from an existing version.
+function seedTestCases(saved: FunctionTestCase[] | undefined): TestCase[] {
+  if (!saved || saved.length === 0) return [];
+  return saved.map((testCase, index) => ({
+    id: nextTestCaseId(),
+    name: testCase.name?.trim() || `Case ${index + 1}`,
+    input: testCase.input ?? '',
+    expectedOutput: testCase.expectedOutput ?? '',
+    expectedError: testCase.expectedError ?? '',
+  }));
+}
 
 function toNumber(value: string): number | undefined {
   if (value.trim() === '') return undefined;
@@ -610,6 +631,20 @@ fi
 printf '%s\\n' "$payload"
 `;
   }
+  if (name.includes('rust')) {
+    return `use std::io::{self, Read};
+
+fn main() {
+    // ${STARTER_SOURCE_MARKER} to your function through stdin.
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input).ok();
+    let payload = if input.trim().is_empty() { "{}".to_string() } else { input };
+
+    // Write JSON to stdout so the next workflow state can consume it.
+    print!("{}", payload);
+}
+`;
+  }
   if (languageName && !name.includes('python')) {
     return `# ${STARTER_SOURCE_MARKER} to your function through stdin.
 # Write JSON to stdout so the next workflow state can consume it.
@@ -636,19 +671,6 @@ if __name__ == "__main__":
 
 function isStarterSource(value: string) {
   return value.includes(STARTER_SOURCE_MARKER);
-}
-
-// Restrict the language dropdown to modern, popular languages rather than the
-// full Judge0 catalogue (which includes many legacy/esoteric runtimes).
-const MODERN_LANGUAGE_KEYWORDS = [
-  'python', 'javascript', 'typescript', 'java', 'kotlin', 'c++', 'c#', 'go',
-  'rust', 'ruby', 'php', 'swift', 'bash',
-];
-
-export function isModernLanguage(name: string): boolean {
-  const value = name.toLowerCase();
-  if (MODERN_LANGUAGE_KEYWORDS.some((keyword) => value.includes(keyword))) return true;
-  return value.startsWith('c (') || value === 'c';
 }
 
 function crcTable() {
@@ -786,6 +808,7 @@ export function FunctionVersionWorkbench({
   languages,
   languageId: languageIdProp,
   onLanguageChange,
+  initialTestCases,
   description,
   onDescriptionChange,
   metadata,
@@ -828,7 +851,7 @@ export function FunctionVersionWorkbench({
   const [outputBytes, setOutputBytes] = useState('');
   const [enableNetwork, setEnableNetwork] = useState(false);
   const [note, setNote] = useState('');
-  const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const [testCases, setTestCases] = useState<TestCase[]>(() => seedTestCases(initialTestCases));
   const [activeCaseId, setActiveCaseId] = useState('');
   const [runningCaseId, setRunningCaseId] = useState<string | null>(null);
   const [runResults, setRunResults] = useState<Record<string, FunctionRunResult>>({});
@@ -913,6 +936,17 @@ export function FunctionVersionWorkbench({
       return current;
     });
   }, [selectedLanguage]);
+
+  // Multi-file only runs for languages whose sibling files Judge0 actually builds.
+  // If the picked language can't, drop back to single-file so the user can't get
+  // stuck on an unusable combination.
+  const multiFileAllowed = Boolean(selectedLanguage?.multiFileSupported);
+  useEffect(() => {
+    if (sourceMode === 'MULTI_FILE' && selectedLanguage && !selectedLanguage.multiFileSupported) {
+      switchSourceMode('SINGLE_FILE');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLanguage, sourceMode]);
 
   // Keep the active file valid after a rename/removal.
   useEffect(() => {
@@ -1205,7 +1239,7 @@ export function FunctionVersionWorkbench({
   };
 
   const addCase = () => {
-    const id = `case-${Date.now()}`;
+    const id = nextTestCaseId();
     const next = {
       id,
       name: `Case ${testCases.length + 1}`,
@@ -1246,6 +1280,12 @@ export function FunctionVersionWorkbench({
       maxOutputBytes: useDefaults ? undefined : toNumber(outputBytes),
       enableNetwork: useDefaults ? undefined : enableNetwork,
       note: note.trim() || undefined,
+      testCases: testCases.map((testCase) => ({
+        name: testCase.name.trim() || 'Untitled case',
+        input: testCase.input,
+        expectedOutput: testCase.expectedOutput,
+        expectedError: testCase.expectedError,
+      })),
     };
   };
 
@@ -2029,10 +2069,21 @@ export function FunctionVersionWorkbench({
             )}
             <div>
               <span className={labelClass}>Source mode</span>
-              <select value={sourceMode} onChange={(event) => switchSourceMode(event.target.value as FunctionSourceMode)} className={selectControlClass}>
+              <select
+                value={sourceMode}
+                onChange={(event) => switchSourceMode(event.target.value as FunctionSourceMode)}
+                className={selectControlClass}
+              >
                 <option value="SINGLE_FILE">Single file</option>
-                <option value="MULTI_FILE">Multi-file</option>
+                <option value="MULTI_FILE" disabled={!multiFileAllowed}>
+                  {multiFileAllowed ? 'Multi-file' : 'Multi-file (unavailable)'}
+                </option>
               </select>
+              {selectedLanguage && !multiFileAllowed && (
+                <span className="mt-1 block text-[10px] text-on-surface-variant/70">
+                  Multi-file isn't available for {selectedLanguage.name.replace(/\s*\(.*\)$/, '')}.
+                </span>
+              )}
             </div>
             <div className="flex items-end">
               <button

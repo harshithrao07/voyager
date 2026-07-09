@@ -13,12 +13,15 @@ import static org.mockito.Mockito.when;
 
 class Judge0RuntimeServiceTest {
     private final Judge0Client judge0Client = mock(Judge0Client.class);
-    private final Judge0RuntimeService service = new Judge0RuntimeService(judge0Client);
+    private final FunctionRuntimePolicy runtimePolicy =
+            new FunctionRuntimePolicy(judge0Client);
+    private final Judge0RuntimeService service =
+            new Judge0RuntimeService(judge0Client, runtimePolicy);
 
     @Test
     void aggregatesRuntimeInfoWhenReachable() {
-        when(judge0Client.listLanguages())
-                .thenReturn(List.of(new FunctionLanguageDTO(71, "Python (3.8.1)")));
+        when(judge0Client.listSelectableLanguages())
+                .thenReturn(List.of(new FunctionLanguageDTO(71, "Python (3.8.1)", true)));
         when(judge0Client.countStatuses()).thenReturn(14);
         when(judge0Client.workerStats())
                 .thenReturn(new Judge0Client.WorkerStats(2, 1));
@@ -40,7 +43,7 @@ class Judge0RuntimeServiceTest {
 
     @Test
     void returnsUnreachableWhenJudge0Fails() {
-        when(judge0Client.listLanguages())
+        when(judge0Client.listSelectableLanguages())
                 .thenThrow(new IllegalStateException("Judge0 returned invalid JSON"));
 
         Judge0RuntimeInfoDTO info = service.runtimeInfo();

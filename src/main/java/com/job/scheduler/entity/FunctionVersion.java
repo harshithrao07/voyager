@@ -96,6 +96,11 @@ public class FunctionVersion {
     @Column(name = "note", columnDefinition = "TEXT")
     private String note;
 
+    // Author-defined test cases, stored as a JSON array of FunctionTestCaseDTO.
+    // Null when the version was saved without any test cases.
+    @Column(name = "test_cases", columnDefinition = "TEXT")
+    private String testCases;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
     private FunctionVersionStatus status = FunctionVersionStatus.AVAILABLE;

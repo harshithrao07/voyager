@@ -252,6 +252,7 @@ export function getWorkflow(request: GetWorkflowRequest): Promise<WorkflowRespon
 export interface FunctionLanguageDTO {
   id: number;
   name: string;
+  multiFileSupported: boolean;
 }
 
 export interface Judge0LimitsDTO {
@@ -339,6 +340,7 @@ export interface FunctionVersionDTO {
   maxOutputBytes: number;
   enableNetwork: boolean;
   note: string | null;
+  testCases: FunctionTestCase[];
   status: FunctionVersionStatus;
   createdAt: string;
   updatedAt: string;
@@ -347,6 +349,13 @@ export interface FunctionVersionDTO {
 export interface FunctionSourceFileDTO {
   path: string;
   content: string;
+}
+
+export interface FunctionTestCase {
+  name: string;
+  input: string;
+  expectedOutput: string;
+  expectedError: string;
 }
 
 export interface FunctionVersionRequest {
@@ -363,6 +372,7 @@ export interface FunctionVersionRequest {
   maxOutputBytes?: number | null;
   enableNetwork?: boolean | null;
   note?: string | null;
+  testCases?: FunctionTestCase[] | null;
   status?: FunctionVersionStatus | null;
 }
 
@@ -462,6 +472,10 @@ export function createFunctionVersion(functionId: string, request: FunctionVersi
 
 export function activateFunctionVersion(functionId: string, version: number): Promise<FunctionDefinitionDTO> {
   return sendJson<FunctionDefinitionDTO>(`/app/v1/functions/${functionId}/versions/${version}/activate`, 'POST', {});
+}
+
+export function publishFunctionVersion(functionId: string, version: number): Promise<FunctionVersionDTO> {
+  return sendJson<FunctionVersionDTO>(`/app/v1/functions/${functionId}/versions/${version}/publish`, 'POST', {});
 }
 
 export function updateFunctionVersionSettings(

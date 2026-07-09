@@ -21,7 +21,7 @@ class Judge0HealthIndicatorTest {
     @Test
     void upWhenLanguagesAndWorkersAvailable() {
         when(judge0Client.listLanguages())
-                .thenReturn(List.of(new FunctionLanguageDTO(71, "Python")));
+                .thenReturn(List.of(new FunctionLanguageDTO(71, "Python", true)));
         when(judge0Client.countStatuses()).thenReturn(14);
         when(judge0Client.workerStats())
                 .thenReturn(new Judge0Client.WorkerStats(2, 1));
@@ -39,7 +39,7 @@ class Judge0HealthIndicatorTest {
     @Test
     void downWhenNoWorkers() {
         when(judge0Client.listLanguages())
-                .thenReturn(List.of(new FunctionLanguageDTO(71, "Python")));
+                .thenReturn(List.of(new FunctionLanguageDTO(71, "Python", true)));
         when(judge0Client.countStatuses()).thenReturn(14);
         when(judge0Client.workerStats())
                 .thenReturn(new Judge0Client.WorkerStats(0, 0));

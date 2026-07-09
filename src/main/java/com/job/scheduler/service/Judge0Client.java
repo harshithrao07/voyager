@@ -15,6 +15,7 @@ import tools.jackson.databind.node.ObjectNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
@@ -57,11 +58,29 @@ public class Judge0Client {
                     && name != null && name.isString()) {
                 languages.add(new FunctionLanguageDTO(
                         id.intValue(),
-                        name.stringValue()
+                        name.stringValue(),
+                        Judge0MultiFileSupport.supportsMultiFile(name.stringValue())
                 ));
             }
         }
         return languages;
+    }
+
+    // Judge0 pseudo-languages that are not real runtimes and must not be offered
+    // as a function language: "Multi-file program" (id 89, used internally by the
+    // multi-file mechanism), "Executable" (raw binary upload), and "Plain Text".
+    private static final Set<String> NON_SELECTABLE_LANGUAGES = Set.of(
+            "Multi-file program", "Executable", "Plain Text"
+    );
+
+    /**
+     * The languages a user may pick for a function version — the raw Judge0 list
+     * minus the pseudo-languages that are not real runtimes.
+     */
+    public List<FunctionLanguageDTO> listSelectableLanguages() {
+        return listLanguages().stream()
+                .filter(language -> !NON_SELECTABLE_LANGUAGES.contains(language.name()))
+                .toList();
     }
 
     /**

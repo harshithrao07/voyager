@@ -27,6 +27,7 @@ public record FunctionVersionResponseDTO(
         int maxOutputBytes,
         boolean enableNetwork,
         String note,
+        List<FunctionTestCaseDTO> testCases,
         FunctionVersionStatus status,
         Instant createdAt,
         Instant updatedAt

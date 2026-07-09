@@ -120,7 +120,7 @@ export function Judge0RuntimePanel() {
         <>
           <div className="mt-5 grid grid-cols-3 gap-3">
             <Stat label="Workers" value={`${info.availableWorkers}/${info.workers}`} hint="available / total" />
-            <Stat label="Languages" value={String(info.languageCount)} hint="runnable" />
+            <Stat label="Runtimes" value={String(info.languageCount)} hint="supported" />
             <Stat label="Statuses" value={String(info.statusCount)} hint="known" />
           </div>
 
@@ -149,7 +149,7 @@ export function Judge0RuntimePanel() {
           {info.languages.length > 0 && (
             <div className="mt-5">
               <div className="mb-2 font-mono-sm text-[10px] uppercase tracking-[0.1em] text-on-surface-variant/70">
-                Available languages
+                Supported runtimes
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {info.languages.slice(0, 24).map((language) => (
