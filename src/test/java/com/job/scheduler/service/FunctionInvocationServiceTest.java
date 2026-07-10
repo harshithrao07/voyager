@@ -17,6 +17,7 @@ import com.job.scheduler.workflow.task.TaskResourceException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -31,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -118,6 +120,42 @@ class FunctionInvocationServiceTest {
         assertThat(response.status()).isEqualTo(FunctionInvocationStatus.SUCCEEDED);
         assertThat(response.output().get("ok").booleanValue()).isTrue();
         assertThat(response.judge0Token()).isEqualTo("token-1");
+    }
+
+    @Test
+    void testInvokePassesVersionNetworkModeToJudge0() throws Exception {
+        version.setEnableNetwork(true);
+        when(functionRegistryService.findFunction(function.getId()))
+                .thenReturn(function);
+        when(functionRegistryService.activeVersion(function)).thenReturn(version);
+        when(judge0Client.createSubmission(any())).thenReturn("token-network");
+        when(judge0Client.getSubmission("token-network")).thenReturn(new Judge0SubmissionResult(
+                "token-network",
+                3,
+                "Accepted",
+                "{\"ok\":true}",
+                "",
+                null,
+                null,
+                0,
+                null,
+                0.01,
+                0.02,
+                12000L
+        ));
+
+        service.testInvoke(
+                function.getId(),
+                new FunctionTestInvocationRequestDTO(
+                        null,
+                        objectMapper.readTree("{\"url\":\"http://example.test\"}")
+                )
+        );
+
+        ArgumentCaptor<Judge0SubmissionRequest> submission =
+                ArgumentCaptor.forClass(Judge0SubmissionRequest.class);
+        verify(judge0Client).createSubmission(submission.capture());
+        assertThat(submission.getValue().enableNetwork()).isTrue();
     }
 
     @Test
@@ -296,6 +334,23 @@ class FunctionInvocationServiceTest {
     }
 
     @Test
+    void runPassesNetworkModeToJudge0Submission() throws Exception {
+        when(judge0Client.createSubmission(any())).thenReturn("run-network");
+        when(judge0Client.getSubmission("run-network")).thenReturn(new Judge0SubmissionResult(
+                "run-network", 3, "Accepted", "{\"ok\":true}", "", null, null,
+                0, null, 0.01, 0.02, 12000L));
+
+        service.run(new FunctionRunRequestDTO(
+                71, FunctionSourceMode.SINGLE_FILE, "print('{}')", null, null, null,
+                null, null, null, null, 4096, true, objectMapper.createObjectNode()));
+
+        ArgumentCaptor<Judge0SubmissionRequest> submission =
+                ArgumentCaptor.forClass(Judge0SubmissionRequest.class);
+        verify(judge0Client).createSubmission(submission.capture());
+        assertThat(submission.getValue().enableNetwork()).isTrue();
+    }
+
+    @Test
     void runMapsRuntimeError() {
         when(judge0Client.createSubmission(any())).thenReturn("run-2");
         when(judge0Client.getSubmission("run-2")).thenReturn(new Judge0SubmissionResult(
@@ -315,7 +370,10 @@ class FunctionInvocationServiceTest {
     void runRejectsUnsupportedRuntimeBeforeSubmitting() {
         org.mockito.Mockito.doThrow(new IllegalArgumentException(
                 "Language 99 is not supported for Voyager functions"
-        )).when(runtimePolicy).assertLanguageSupported(99);
+        )).when(runtimePolicy).assertLanguageSupported(
+                99,
+                FunctionSourceMode.SINGLE_FILE
+        );
 
         FunctionRunResultDTO result = service.run(new FunctionRunRequestDTO(
                 99, FunctionSourceMode.SINGLE_FILE, "print('{}')", null, null, null,

@@ -1,6 +1,7 @@
 package com.job.scheduler.service;
 
 import com.job.scheduler.dto.FunctionLanguageDTO;
+import com.job.scheduler.enums.FunctionSourceMode;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -47,9 +48,19 @@ public class FunctionRuntimePolicy {
     }
 
     public void assertLanguageSupported(Integer languageId) {
+        assertLanguageSupported(languageId, FunctionSourceMode.SINGLE_FILE);
+    }
+
+    public void assertLanguageSupported(
+            Integer languageId,
+            FunctionSourceMode sourceMode
+    ) {
         if (languageId == null) {
             throw new IllegalArgumentException("Function language is required");
         }
+        FunctionSourceMode effectiveMode = sourceMode == null
+                ? FunctionSourceMode.SINGLE_FILE
+                : sourceMode;
         Set<Integer> allowedIds = configuredAllowedLanguageIds();
         if (!allowedIds.isEmpty()) {
             if (!allowedIds.contains(languageId)) {
@@ -59,16 +70,26 @@ public class FunctionRuntimePolicy {
                                 + "Allowed language ids: " + allowedIds
                 );
             }
-            return;
         }
 
-        String languageName = judge0Client.languageName(languageId);
-        if (!isDefaultSupported(languageName)) {
+        String languageName = allowedIds.isEmpty()
+                || effectiveMode == FunctionSourceMode.MULTI_FILE
+                ? judge0Client.languageName(languageId)
+                : null;
+        if (allowedIds.isEmpty() && !isDefaultSupported(languageName)) {
             throw new IllegalArgumentException(
                     "Language " + languageId
                             + " is not supported for Voyager functions. "
                             + "Supported runtimes: "
                             + DEFAULT_RUNTIME_DESCRIPTION
+            );
+        }
+        if (effectiveMode == FunctionSourceMode.MULTI_FILE
+                && !Judge0MultiFileSupport.supportsMultiFile(languageName)) {
+            throw new IllegalArgumentException(
+                    "Language " + languageId
+                            + " is not supported for MULTI_FILE Voyager functions. "
+                            + "Use single-file mode or choose a multi-file supported runtime."
             );
         }
     }

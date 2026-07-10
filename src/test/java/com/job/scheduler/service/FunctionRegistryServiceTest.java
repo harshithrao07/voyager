@@ -155,7 +155,7 @@ class FunctionRegistryServiceTest {
         assertThat(response.status()).isEqualTo(FunctionVersionStatus.AVAILABLE);
         assertThat(version.getStatus()).isEqualTo(FunctionVersionStatus.AVAILABLE);
         assertThat(function.getActiveVersion()).isEqualTo(2);
-        verify(runtimePolicy).assertLanguageSupported(71);
+        verify(runtimePolicy).assertLanguageSupported(71, FunctionSourceMode.SINGLE_FILE);
         verify(versionRepository).save(version);
         verify(functionRepository).save(function);
     }

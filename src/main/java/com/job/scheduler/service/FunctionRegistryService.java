@@ -453,8 +453,8 @@ public class FunctionRegistryService {
             FunctionVersionRequestDTO request,
             FunctionVersionStatus status
     ) {
-        runtimePolicy.assertLanguageSupported(request.languageId());
         FunctionSourceMode mode = sourceMode(request);
+        runtimePolicy.assertLanguageSupported(request.languageId(), mode);
         if (status != FunctionVersionStatus.DRAFT) {
             if (mode == FunctionSourceMode.SINGLE_FILE
                     && blankToNull(request.sourceCode()) == null) {
@@ -484,7 +484,10 @@ public class FunctionRegistryService {
     }
 
     private void validateVersionReady(FunctionVersion version) {
-        runtimePolicy.assertLanguageSupported(version.getLanguageId());
+        runtimePolicy.assertLanguageSupported(
+                version.getLanguageId(),
+                version.getSourceMode()
+        );
         if (version.getSourceMode() == FunctionSourceMode.SINGLE_FILE
                 && blankToNull(version.getSourceCode()) == null) {
             throw new IllegalArgumentException(

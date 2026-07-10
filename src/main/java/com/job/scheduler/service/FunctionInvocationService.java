@@ -78,7 +78,7 @@ public class FunctionInvocationService {
                 ? request.memoryLimitKb()
                 : defaultMemoryLimitKb;
         try {
-            runtimePolicy.assertLanguageSupported(request.languageId());
+            runtimePolicy.assertLanguageSupported(request.languageId(), mode);
             int submissionLanguageId = request.languageId();
             String sourceCode = mode == FunctionSourceMode.SINGLE_FILE ? blankToNull(request.sourceCode()) : null;
             String additionalFiles = mode == FunctionSourceMode.MULTI_FILE ? blankToNull(request.additionalFilesBase64()) : null;
@@ -369,6 +369,7 @@ public class FunctionInvocationService {
     ) {
         boolean multiFile = version.getSourceMode() == FunctionSourceMode.MULTI_FILE;
         int languageId = version.getLanguageId();
+        runtimePolicy.assertLanguageSupported(languageId, version.getSourceMode());
         String sourceCode = multiFile ? null : version.getSourceCode();
         String additionalFiles = multiFile ? version.getAdditionalFilesBase64() : null;
         String compilerOptions = version.getCompilerOptions();

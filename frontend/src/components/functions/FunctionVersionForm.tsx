@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import {
   createFunctionVersion,
@@ -42,12 +42,22 @@ export function FunctionVersionForm({ functionId, languages, onCreated, onCancel
   const [error, setError] = useState<string | null>(null);
 
   const sortedLanguages = useMemo(
-    () => [...languages].sort((a, b) => a.name.localeCompare(b.name)),
-    [languages],
+    () => [...languages]
+      .filter((language) => sourceMode === 'SINGLE_FILE' || language.multiFileSupported)
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [languages, sourceMode],
   );
+  const selectedLanguage = languages.find((language) => String(language.id) === languageId);
+
+  useEffect(() => {
+    if (sourceMode === 'MULTI_FILE' && selectedLanguage && !selectedLanguage.multiFileSupported) {
+      setLanguageId('');
+    }
+  }, [selectedLanguage, sourceMode]);
 
   const canSave =
     languageId !== '' &&
+    (sourceMode === 'SINGLE_FILE' || Boolean(selectedLanguage?.multiFileSupported)) &&
     (sourceMode === 'SINGLE_FILE' ? sourceCode.trim() !== '' : additionalFilesBase64.trim() !== '');
 
   const submit = async () => {
@@ -114,7 +124,9 @@ export function FunctionVersionForm({ functionId, languages, onCreated, onCancel
             className={field}
           >
             <option value="SINGLE_FILE">Single file</option>
-            <option value="MULTI_FILE">Multi file (zip)</option>
+            <option value="MULTI_FILE" disabled={!languages.some((language) => language.multiFileSupported)}>
+              Multi file (zip)
+            </option>
           </select>
         </div>
       </div>

@@ -1,6 +1,7 @@
 package com.job.scheduler.service;
 
 import com.job.scheduler.dto.FunctionLanguageDTO;
+import com.job.scheduler.enums.FunctionSourceMode;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -49,6 +50,23 @@ class FunctionRuntimePolicyTest {
         assertThatThrownBy(() -> policy.assertLanguageSupported(89))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Supported runtimes");
+    }
+
+    @Test
+    void multiFilePolicyRequiresLanguageWithMultiFileRecipe() {
+        when(judge0Client.languageName(71))
+                .thenReturn("Python (3.8.1)");
+        when(judge0Client.languageName(60))
+                .thenReturn("Go (1.13.5)");
+
+        policy.assertLanguageSupported(71, FunctionSourceMode.MULTI_FILE);
+
+        assertThatThrownBy(() -> policy.assertLanguageSupported(
+                60,
+                FunctionSourceMode.MULTI_FILE
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("MULTI_FILE");
     }
 
     @Test

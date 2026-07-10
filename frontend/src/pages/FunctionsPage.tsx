@@ -41,6 +41,7 @@ import {
   updateFunctionVersionSettings,
   type FunctionDefinitionDTO,
   type FunctionLanguageDTO,
+  type FunctionSourceMode,
   type FunctionTestCase,
   type FunctionVersionDTO,
   type FunctionVersionRequest,
@@ -70,6 +71,12 @@ function FunctionMetric({ label, value, tone }: { label: string; value: string |
 
 function functionResource(fn: Pick<FunctionDefinitionDTO, 'namespace' | 'name'>, version?: number | null) {
   return `function://${fn.namespace || 'namespace'}/${fn.name || 'name'}${version ? `@v${version}` : '@latest'}`;
+}
+
+function languagesForSourceMode(languages: FunctionLanguageDTO[], sourceMode: FunctionSourceMode) {
+  return sourceMode === 'MULTI_FILE'
+    ? languages.filter((language) => language.multiFileSupported)
+    : languages;
 }
 
 function formatUpdated(value: string) {
@@ -156,6 +163,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const [showVersionWorkbench, setShowVersionWorkbench] = useState(false);
   const [newVersionLanguageId, setNewVersionLanguageId] = useState('');
+  const [newVersionSourceMode, setNewVersionSourceMode] = useState<FunctionSourceMode>('SINGLE_FILE');
   const [newVersionTestCases, setNewVersionTestCases] = useState<FunctionTestCase[]>([]);
   // When set, the workbench is editing this version rather than creating a
   // fresh one. Drafts are edited in place; for published versions, metadata
@@ -242,6 +250,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
   const handleVersionCreated = () => {
     setShowVersionWorkbench(false);
     setEditingVersion(null);
+    setNewVersionSourceMode('SINGLE_FILE');
     setActiveTab('overview');
     if (selectedId) {
       Promise.all([reloadVersions(selectedId), reloadFunctions()])
@@ -251,6 +260,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
 
   const openEditVersion = (version: FunctionVersionDTO) => {
     setNewVersionLanguageId(String(version.languageId));
+    setNewVersionSourceMode(version.sourceMode);
     setNewVersionTestCases(version.testCases ?? []);
     setEditingVersion(version);
     setShowVersionWorkbench(true);
@@ -417,6 +427,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
           onLanguageChange={setNewVersionLanguageId}
           initialTestCases={newVersionTestCases}
           initialSourceMode={editingVersion?.sourceMode}
+          onSourceModeChange={setNewVersionSourceMode}
           initialSourceCode={editingVersion?.sourceCode}
           initialFiles={editingVersion && editingVersion.sourceMode === 'MULTI_FILE' ? editingVersion.files : undefined}
           initialSettings={editingVersion ? {
@@ -434,7 +445,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
           metadata={(
             <SelectedMetadata
               selected={selected}
-              languages={languages}
+              languages={languagesForSourceMode(languages, newVersionSourceMode)}
               languageId={newVersionLanguageId}
               onLanguageChange={setNewVersionLanguageId}
               editingVersion={editingVersion}
@@ -444,6 +455,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
           onCancel={() => {
             setShowVersionWorkbench(false);
             setEditingVersion(null);
+            setNewVersionSourceMode('SINGLE_FILE');
           }}
           saveDraftLabel={editingVersion
             ? (editingVersion.status === 'DRAFT' ? 'Update draft' : 'Save changes')
@@ -480,6 +492,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
             const sorted = [...versions].sort((left, right) => right.version - left.version);
             const base = sorted.find((version) => version.version === selected.activeVersion) || sorted[0];
             setNewVersionLanguageId(base ? String(base.languageId) : '');
+            setNewVersionSourceMode(base?.sourceMode ?? 'SINGLE_FILE');
             setNewVersionTestCases(base?.testCases ?? []);
             setEditingVersion(null);
             setShowVersionWorkbench(true);
@@ -655,8 +668,10 @@ function FunctionCreateWorkbench({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [languageId, setLanguageId] = useState('');
+  const [sourceMode, setSourceMode] = useState<FunctionSourceMode>('SINGLE_FILE');
 
-  const sortedLanguages = [...languages].sort((a, b) => a.name.localeCompare(b.name));
+  const sortedLanguages = [...languagesForSourceMode(languages, sourceMode)]
+    .sort((a, b) => a.name.localeCompare(b.name));
   const validDefinition = slug.test(namespace) && slug.test(name);
   const metadata = (
     <div className="grid gap-3 lg:grid-cols-3">
@@ -695,6 +710,7 @@ function FunctionCreateWorkbench({
       languages={languages}
       languageId={languageId}
       onLanguageChange={setLanguageId}
+      onSourceModeChange={setSourceMode}
       description={description}
       onDescriptionChange={setDescription}
       metadata={metadata}

@@ -104,6 +104,7 @@ type Props = {
   onLanguageChange?: (value: string) => void;
   initialTestCases?: FunctionTestCase[];
   initialSourceMode?: FunctionSourceMode;
+  onSourceModeChange?: (value: FunctionSourceMode) => void;
   initialSourceCode?: string | null;
   initialFiles?: WorkbenchFile[];
   initialSettings?: WorkbenchInitialSettings;
@@ -176,17 +177,47 @@ function toNumber(value: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function isCName(name: string) {
+  return /^c(?:\s|\(|$)/.test(name)
+    && !name.includes('c++')
+    && !name.includes('c#')
+    && !name.includes('csharp')
+    && !name.includes('clojure')
+    && !name.includes('cobol')
+    && !name.includes('common lisp');
+}
+
+function isDName(name: string) {
+  return /^d(?:\s|\(|$)/.test(name) && !name.includes('dart');
+}
+
+function isFSharpName(name: string) {
+  return name.includes('f#') || name.includes('fsharp');
+}
+
+function isVisualBasicName(name: string) {
+  return name.includes('visual basic') || name.includes('vb.net') || name.includes('vb .net');
+}
+
 export function languageToMonaco(languageName: string | undefined) {
   const name = (languageName || '').toLowerCase();
   if (name.includes('python')) return 'python';
-  if (name.includes('javascript') || name.includes('node') || name.includes('typescript')) return 'javascript';
+  if (name.includes('typescript')) return 'typescript';
+  if (name.includes('javascript') || name.includes('node')) return 'javascript';
   if (name.includes('java')) return 'java';
-  if (name.includes('c++') || name.includes('cpp')) return 'cpp';
-  if (name.includes('c#')) return 'csharp';
+  if (name.includes('c++') || name.includes('cpp') || isCName(name) || name.includes('objective-c')) return 'cpp';
+  if (name.includes('c#') || name.includes('csharp')) return 'csharp';
   if (name.includes('go')) return 'go';
   if (name.includes('ruby')) return 'ruby';
   if (name.includes('rust')) return 'rust';
   if (name.includes('php')) return 'php';
+  if (name.includes('kotlin')) return 'kotlin';
+  if (name.includes('swift')) return 'swift';
+  if (name.includes('scala')) return 'scala';
+  if (name.includes('perl')) return 'perl';
+  if (name.includes('lua')) return 'lua';
+  if (name.includes('r ') || name.startsWith('r(') || name.startsWith('r (')) return 'r';
+  if (name.includes('bash') || name.includes('shell')) return 'shell';
   if (name.includes('json')) return 'json';
   return 'plaintext';
 }
@@ -207,6 +238,20 @@ export function fileLanguage(path: string, selectedLanguage: string | undefined)
   if (path.endsWith('.kt')) return 'kotlin';
   if (path.endsWith('.swift')) return 'swift';
   if (path.endsWith('.sh')) return 'shell';
+  if (path.endsWith('.scala')) return 'scala';
+  if (path.endsWith('.pl')) return 'perl';
+  if (path.endsWith('.lua')) return 'lua';
+  if (path.endsWith('.r')) return 'r';
+  if (path.endsWith('.fs') || path.endsWith('.fsx')) return 'fsharp';
+  if (path.endsWith('.vb')) return 'vb';
+  if (path.endsWith('.clj')) return 'clojure';
+  if (path.endsWith('.exs') || path.endsWith('.ex')) return 'elixir';
+  if (path.endsWith('.erl') || path.endsWith('.escript')) return 'erlang';
+  if (path.endsWith('.hs')) return 'haskell';
+  if (path.endsWith('.ml')) return 'ocaml';
+  if (path.endsWith('.m')) return 'objective-c';
+  if (path.endsWith('.pas')) return 'pascal';
+  if (path.endsWith('.f90') || path.endsWith('.f95')) return 'fortran';
   return languageToMonaco(selectedLanguage);
 }
 
@@ -227,6 +272,7 @@ function fileExtension(path: string) {
  */
 function langMeta(languageName: string | undefined): { ext: string; entry: string } {
   const name = (languageName || '').toLowerCase();
+  if (name.includes('assembly') || name.includes('nasm')) return { ext: 'asm', entry: 'main.asm' };
   if (name.includes('python')) return { ext: 'py', entry: 'main.py' };
   if (name.includes('typescript')) return { ext: 'ts', entry: 'main.ts' };
   if (name.includes('javascript') || name.includes('node')) return { ext: 'js', entry: 'main.js' };
@@ -240,7 +286,29 @@ function langMeta(languageName: string | undefined): { ext: string; entry: strin
   if (name.includes('php')) return { ext: 'php', entry: 'main.php' };
   if (name.includes('swift')) return { ext: 'swift', entry: 'main.swift' };
   if (name.includes('bash') || name.includes('shell')) return { ext: 'sh', entry: 'main.sh' };
-  if (name.startsWith('c ') || name === 'c') return { ext: 'c', entry: 'main.c' };
+  if (name.includes('scala')) return { ext: 'scala', entry: 'Main.scala' };
+  if (name.includes('groovy')) return { ext: 'groovy', entry: 'Main.groovy' };
+  if (name.includes('perl')) return { ext: 'pl', entry: 'main.pl' };
+  if (name.includes('lua')) return { ext: 'lua', entry: 'main.lua' };
+  if (name.includes('haskell')) return { ext: 'hs', entry: 'Main.hs' };
+  if (name.includes('dart')) return { ext: 'dart', entry: 'main.dart' };
+  if (name.includes('elixir')) return { ext: 'exs', entry: 'main.exs' };
+  if (name.includes('erlang')) return { ext: 'erl', entry: 'main.erl' };
+  if (name.includes('fortran')) return { ext: 'f90', entry: 'main.f90' };
+  if (name.includes('pascal')) return { ext: 'pas', entry: 'main.pas' };
+  if (name.includes('prolog')) return { ext: 'pl', entry: 'main.pl' };
+  if (name.includes('cobol')) return { ext: 'cob', entry: 'main.cob' };
+  if (name.includes('objective-c')) return { ext: 'm', entry: 'main.m' };
+  if (name.includes('ocaml')) return { ext: 'ml', entry: 'main.ml' };
+  if (name.includes('octave')) return { ext: 'm', entry: 'main.m' };
+  if (name.includes('common lisp')) return { ext: 'lisp', entry: 'main.lisp' };
+  if (name.includes('clojure')) return { ext: 'clj', entry: 'main.clj' };
+  if (isFSharpName(name)) return { ext: 'fs', entry: 'main.fs' };
+  if (isVisualBasicName(name)) return { ext: 'vb', entry: 'Main.vb' };
+  if (name.includes('basic')) return { ext: 'bas', entry: 'main.bas' };
+  if (isDName(name)) return { ext: 'd', entry: 'main.d' };
+  if (isCName(name)) return { ext: 'c', entry: 'main.c' };
+  if (name === 'r' || name.startsWith('r ')) return { ext: 'r', entry: 'main.r' };
   return { ext: 'txt', entry: 'main.txt' };
 }
 
@@ -328,12 +396,13 @@ function uniqueExtensions(values: string[]) {
 function allowedFileExtensions(languageName: string | undefined): string[] {
   const name = (languageName || '').toLowerCase();
   const primary = `.${langMeta(languageName).ext}`;
+  if (name.includes('assembly') || name.includes('nasm')) return uniqueExtensions(['.asm', '.s', ...DATA_FILE_EXTENSIONS]);
   if (name.includes('typescript')) return uniqueExtensions(['.ts', '.js', ...DATA_FILE_EXTENSIONS]);
   if (name.includes('javascript') || name.includes('node')) return uniqueExtensions(['.js', '.mjs', '.cjs', ...DATA_FILE_EXTENSIONS]);
   if (name.includes('java')) return uniqueExtensions(['.java', '.properties', ...DATA_FILE_EXTENSIONS]);
   if (name.includes('kotlin')) return uniqueExtensions(['.kt', '.kts', ...DATA_FILE_EXTENSIONS]);
   if (name.includes('c++') || name.includes('cpp')) return uniqueExtensions(['.cpp', '.cc', '.cxx', '.h', '.hpp', '.hh', ...DATA_FILE_EXTENSIONS]);
-  if (name.startsWith('c ') || name === 'c') return uniqueExtensions(['.c', '.h', ...DATA_FILE_EXTENSIONS]);
+  if (isCName(name)) return uniqueExtensions(['.c', '.h', ...DATA_FILE_EXTENSIONS]);
   if (name.includes('c#') || name.includes('csharp')) return uniqueExtensions(['.cs', ...DATA_FILE_EXTENSIONS]);
   if (name.includes('go') && !name.includes('cobol')) return uniqueExtensions(['.go', '.mod', '.sum', ...DATA_FILE_EXTENSIONS]);
   if (name.includes('rust')) return uniqueExtensions(['.rs', '.toml', ...DATA_FILE_EXTENSIONS]);
@@ -341,6 +410,28 @@ function allowedFileExtensions(languageName: string | undefined): string[] {
   if (name.includes('php')) return uniqueExtensions(['.php', ...DATA_FILE_EXTENSIONS]);
   if (name.includes('swift')) return uniqueExtensions(['.swift', ...DATA_FILE_EXTENSIONS]);
   if (name.includes('bash') || name.includes('shell')) return uniqueExtensions(['.sh', '.bash', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('scala')) return uniqueExtensions(['.scala', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('groovy')) return uniqueExtensions(['.groovy', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('perl')) return uniqueExtensions(['.pl', '.pm', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('lua')) return uniqueExtensions(['.lua', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('haskell')) return uniqueExtensions(['.hs', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('dart')) return uniqueExtensions(['.dart', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('elixir')) return uniqueExtensions(['.ex', '.exs', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('erlang')) return uniqueExtensions(['.erl', '.hrl', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('fortran')) return uniqueExtensions(['.f90', '.f95', '.f03', '.f08', '.f', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('pascal')) return uniqueExtensions(['.pas', '.pp', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('prolog')) return uniqueExtensions(['.pl', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('cobol')) return uniqueExtensions(['.cob', '.cbl', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('objective-c')) return uniqueExtensions(['.m', '.h', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('ocaml')) return uniqueExtensions(['.ml', '.mli', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('octave')) return uniqueExtensions(['.m', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('common lisp')) return uniqueExtensions(['.lisp', '.lsp', '.cl', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('clojure')) return uniqueExtensions(['.clj', '.cljs', ...DATA_FILE_EXTENSIONS]);
+  if (isFSharpName(name)) return uniqueExtensions(['.fs', '.fsx', ...DATA_FILE_EXTENSIONS]);
+  if (isVisualBasicName(name)) return uniqueExtensions(['.vb', ...DATA_FILE_EXTENSIONS]);
+  if (name.includes('basic')) return uniqueExtensions(['.bas', ...DATA_FILE_EXTENSIONS]);
+  if (isDName(name)) return uniqueExtensions(['.d', ...DATA_FILE_EXTENSIONS]);
+  if (name === 'r' || name.startsWith('r ')) return uniqueExtensions(['.r', ...DATA_FILE_EXTENSIONS]);
   return uniqueExtensions([primary, ...DATA_FILE_EXTENSIONS]);
 }
 
@@ -554,7 +645,48 @@ function validateMultiFile(files: WorkbenchFile[], languageName: string | undefi
 
 function starterSource(languageName: string | undefined = 'python'): string {
   const name = languageName.toLowerCase();
-  if (name.includes('javascript') || name.includes('node') || name.includes('typescript')) {
+  if (name.includes('assembly') || name.includes('nasm')) {
+    return `; ${STARTER_SOURCE_MARKER} to your function through stdin.
+; This starter writes a valid JSON object to stdout.
+
+section .data
+    output db "{}", 10
+    length equ $ - output
+
+section .text
+    global _start
+
+_start:
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, output
+    mov rdx, length
+    syscall
+
+    mov rax, 60
+    xor rdi, rdi
+    syscall
+`;
+  }
+  if (name.includes('typescript')) {
+    return `declare const require: (name: string) => any;
+
+const fs = require("fs");
+
+// ${STARTER_SOURCE_MARKER} to your function through stdin.
+// Write JSON to stdout so the next workflow state can consume it.
+const rawInput: string = fs.readFileSync(0, "utf8");
+const payload: unknown = rawInput.trim() ? JSON.parse(rawInput) : {};
+
+const result = {
+  received: payload,
+  ok: true,
+};
+
+process.stdout.write(JSON.stringify(result));
+`;
+  }
+  if (name.includes('javascript') || name.includes('node')) {
     return `const fs = require("fs");
 
 // ${STARTER_SOURCE_MARKER} to your function through stdin.
@@ -568,6 +700,17 @@ const result = {
 };
 
 process.stdout.write(JSON.stringify(result));
+`;
+  }
+  if (name.includes('kotlin')) {
+    return `fun main() {
+    // ${STARTER_SOURCE_MARKER} to your function through stdin.
+    val input = generateSequence(::readLine).joinToString("\\n")
+    val payload = input.ifBlank { "{}" }
+
+    // Write JSON to stdout so the next workflow state can consume it.
+    print(payload)
+}
 `;
   }
   if (name.includes('java')) {
@@ -612,7 +755,7 @@ func main() {
 }
 `;
   }
-  if (name.includes('c++') || name.includes('cpp') || name.startsWith('c ') || name === 'c') {
+  if (name.includes('c++') || name.includes('cpp')) {
     return `#include <iostream>
 #include <sstream>
 #include <string>
@@ -625,6 +768,40 @@ int main() {
 
     // Write JSON to stdout so the next workflow state can consume it.
     std::cout << payload << std::endl;
+    return 0;
+}
+`;
+  }
+  if (isCName(name)) {
+    return `#include <stdio.h>
+#include <stdlib.h>
+
+int main(void) {
+    // ${STARTER_SOURCE_MARKER} to your function through stdin.
+    char *payload = NULL;
+    size_t size = 0;
+    size_t capacity = 0;
+    int ch;
+
+    while ((ch = getchar()) != EOF) {
+        if (size + 1 >= capacity) {
+            capacity = capacity == 0 ? 1024 : capacity * 2;
+            payload = realloc(payload, capacity);
+            if (payload == NULL) {
+                return 1;
+            }
+        }
+        payload[size++] = (char) ch;
+    }
+
+    // Write JSON to stdout so the next workflow state can consume it.
+    if (size == 0) {
+        puts("{}");
+    } else {
+        fwrite(payload, 1, size, stdout);
+    }
+
+    free(payload);
     return 0;
 }
 `;
@@ -646,6 +823,26 @@ public class Program {
 }
 `;
   }
+  if (name.includes('scala')) {
+    return `object Main extends App {
+  // ${STARTER_SOURCE_MARKER} to your function through stdin.
+  val input = scala.io.Source.stdin.mkString
+  val payload = if (input.trim.isEmpty) "{}" else input
+
+  // Write JSON to stdout so the next workflow state can consume it.
+  print(payload)
+}
+`;
+  }
+  if (name.includes('groovy')) {
+    return `// ${STARTER_SOURCE_MARKER} to your function through stdin.
+def input = System.in.getText('UTF-8')
+def payload = input.trim() ? input : '{}'
+
+// Write JSON to stdout so the next workflow state can consume it.
+print(payload)
+`;
+  }
   if (name.includes('ruby')) {
     return `require "json"
 
@@ -665,6 +862,30 @@ $payload = trim($rawInput) === '' ? [] : json_decode($rawInput, true);
 
 // Write JSON to stdout so the next workflow state can consume it.
 echo json_encode(["received" => $payload, "ok" => true]);
+`;
+  }
+  if (name.includes('perl')) {
+    return `use strict;
+use warnings;
+
+# ${STARTER_SOURCE_MARKER} to your function through stdin.
+local $/;
+my $payload = <STDIN>;
+$payload = "{}" unless defined $payload && $payload =~ /\\S/;
+
+# Write JSON to stdout so the next workflow state can consume it.
+print $payload;
+`;
+  }
+  if (name.includes('lua')) {
+    return `-- ${STARTER_SOURCE_MARKER} to your function through stdin.
+local payload = io.read("*a")
+if payload:match("^%s*$") then
+  payload = "{}"
+end
+
+-- Write JSON to stdout so the next workflow state can consume it.
+io.write(payload)
 `;
   }
   if (name.includes('bash') || name.includes('shell')) {
@@ -694,9 +915,315 @@ fn main() {
 }
 `;
   }
-  if (languageName && !name.includes('python')) {
+  if (name.includes('swift')) {
+    return `import Foundation
+
+// ${STARTER_SOURCE_MARKER} to your function through stdin.
+let data = FileHandle.standardInput.readDataToEndOfFile()
+let input = String(data: data, encoding: .utf8) ?? ""
+let payload = input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "{}" : input
+
+// Write JSON to stdout so the next workflow state can consume it.
+print(payload, terminator: "")
+`;
+  }
+  if (name.includes('dart')) {
+    return `import 'dart:convert';
+import 'dart:io';
+
+Future<void> main() async {
+  // ${STARTER_SOURCE_MARKER} to your function through stdin.
+  final input = await stdin.transform(utf8.decoder).join();
+  final payload = input.trim().isEmpty ? '{}' : input;
+
+  // Write JSON to stdout so the next workflow state can consume it.
+  stdout.write(payload);
+}
+`;
+  }
+  if (name.includes('elixir')) {
     return `# ${STARTER_SOURCE_MARKER} to your function through stdin.
+input = IO.read(:stdio, :all)
+payload = if String.trim(input) == "", do: "{}", else: input
+
 # Write JSON to stdout so the next workflow state can consume it.
+IO.write(payload)
+`;
+  }
+  if (name.includes('erlang')) {
+    return `%% ${STARTER_SOURCE_MARKER} to your function through stdin.
+%% Write JSON to stdout so the next workflow state can consume it.
+
+-module(main).
+-export([main/0]).
+
+main() ->
+    Input = read_all(),
+    Payload = case string:trim(Input) of
+        "" -> "{}";
+        _ -> Input
+    end,
+    io:format("~s", [Payload]).
+
+read_all() ->
+    case io:get_line("") of
+        eof -> "";
+        Line -> Line ++ read_all()
+    end.
+`;
+  }
+  if (name.includes('haskell')) {
+    return `import Data.Char (isSpace)
+
+main :: IO ()
+main = do
+  -- ${STARTER_SOURCE_MARKER} to your function through stdin.
+  input <- getContents
+  let payload = if all isSpace input then "{}" else input
+
+  -- Write JSON to stdout so the next workflow state can consume it.
+  putStr payload
+`;
+  }
+  if (name.includes('fortran')) {
+    return `program Main
+  implicit none
+  character(len=65536) :: payload
+  character(len=4096) :: line
+  integer :: ios
+
+  ! ${STARTER_SOURCE_MARKER} to your function through stdin.
+  payload = ''
+  do
+    read(*, '(A)', iostat=ios) line
+    if (ios /= 0) exit
+    payload = trim(payload) // trim(line)
+  end do
+
+  ! Write JSON to stdout so the next workflow state can consume it.
+  if (len_trim(payload) == 0) then
+    print '(A)', '{}'
+  else
+    print '(A)', trim(payload)
+  end if
+end program Main
+`;
+  }
+  if (name.includes('pascal')) {
+    return `program Main;
+
+var
+  lineText: string;
+  payload: string;
+
+begin
+  { ${STARTER_SOURCE_MARKER} to your function through stdin. }
+  payload := '';
+  while not Eof(Input) do
+  begin
+    ReadLn(lineText);
+    payload := payload + lineText;
+  end;
+
+  { Write JSON to stdout so the next workflow state can consume it. }
+  if payload = '' then
+    WriteLn('{}')
+  else
+    WriteLn(payload);
+end.
+`;
+  }
+  if (name.includes('prolog')) {
+    return `:- initialization(main).
+
+main :-
+    % ${STARTER_SOURCE_MARKER} to your function through stdin.
+    read_string(user_input, _, Input),
+    normalize_space(string(Trimmed), Input),
+    ( Trimmed = "" -> Payload = "{}" ; Payload = Input ),
+
+    % Write JSON to stdout so the next workflow state can consume it.
+    write(Payload),
+    halt.
+`;
+  }
+  if (name.includes('cobol')) {
+    return `IDENTIFICATION DIVISION.
+PROGRAM-ID. MAIN.
+
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+01 PAYLOAD PIC X(4096).
+
+PROCEDURE DIVISION.
+    *> ${STARTER_SOURCE_MARKER} to your function through stdin.
+    ACCEPT PAYLOAD
+
+    *> Write JSON to stdout so the next workflow state can consume it.
+    IF PAYLOAD = SPACES
+        DISPLAY "{}"
+    ELSE
+        DISPLAY FUNCTION TRIM(PAYLOAD)
+    END-IF
+    STOP RUN.
+`;
+  }
+  if (name.includes('objective-c')) {
+    return `#import <Foundation/Foundation.h>
+
+int main(int argc, const char * argv[]) {
+    @autoreleasepool {
+        // ${STARTER_SOURCE_MARKER} to your function through stdin.
+        NSData *data = [[NSFileHandle fileHandleWithStandardInput] readDataToEndOfFile];
+        NSString *input = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        NSString *trimmed = [input stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        NSString *payload = [trimmed length] == 0 ? @"{}" : input;
+
+        // Write JSON to stdout so the next workflow state can consume it.
+        printf("%s", [payload UTF8String]);
+    }
+    return 0;
+}
+`;
+  }
+  if (name.includes('ocaml')) {
+    return `let read_all () =
+  let buffer = Buffer.create 1024 in
+  try
+    while true do
+      Buffer.add_string buffer (input_line stdin);
+      Buffer.add_char buffer '\\n'
+    done;
+    ""
+  with End_of_file -> Buffer.contents buffer
+
+let () =
+  (* ${STARTER_SOURCE_MARKER} to your function through stdin. *)
+  let input = read_all () in
+  let payload = if String.trim input = "" then "{}" else input in
+
+  (* Write JSON to stdout so the next workflow state can consume it. *)
+  print_string payload
+`;
+  }
+  if (name.includes('octave')) {
+    return `% ${STARTER_SOURCE_MARKER} to your function through stdin.
+payload = fread(stdin, "*char")';
+if isempty(strtrim(payload))
+  payload = "{}";
+endif
+
+% Write JSON to stdout so the next workflow state can consume it.
+printf("%s", payload);
+`;
+  }
+  if (name.includes('common lisp')) {
+    return `(defun read-all-stdin ()
+  (with-output-to-string (out)
+    (loop for line = (read-line *standard-input* nil nil)
+          while line do (write-string line out))))
+
+;; ${STARTER_SOURCE_MARKER} to your function through stdin.
+(let* ((input (read-all-stdin))
+       (trimmed (string-trim '(#\\Space #\\Tab #\\Newline #\\Return) input))
+       (payload (if (string= trimmed "") "{}" input)))
+  ;; Write JSON to stdout so the next workflow state can consume it.
+  (write-string payload))
+`;
+  }
+  if (name.includes('clojure')) {
+    return `(ns main
+  (:require [clojure.string :as str])
+  (:gen-class))
+
+(defn -main [& args]
+  ;; ${STARTER_SOURCE_MARKER} to your function through stdin.
+  (let [input (slurp *in*)
+        payload (if (str/blank? input) "{}" input)]
+    ;; Write JSON to stdout so the next workflow state can consume it.
+    (print payload)))
+`;
+  }
+  if (isFSharpName(name)) {
+    return `open System
+
+[<EntryPoint>]
+let main argv =
+    // ${STARTER_SOURCE_MARKER} to your function through stdin.
+    let input = Console.In.ReadToEnd()
+    let payload = if String.IsNullOrWhiteSpace(input) then "{}" else input
+
+    // Write JSON to stdout so the next workflow state can consume it.
+    Console.Write(payload)
+    0
+`;
+  }
+  if (isVisualBasicName(name)) {
+    return `Imports System
+
+Public Module Program
+    Public Sub Main()
+        ' ${STARTER_SOURCE_MARKER} to your function through stdin.
+        Dim payload As String = Console.In.ReadToEnd()
+        If String.IsNullOrWhiteSpace(payload) Then
+            payload = "{}"
+        End If
+
+        ' Write JSON to stdout so the next workflow state can consume it.
+        Console.Write(payload)
+    End Sub
+End Module
+`;
+  }
+  if (name.includes('basic')) {
+    return `' ${STARTER_SOURCE_MARKER} to your function through stdin.
+Dim payload As String = ""
+Dim lineText As String
+
+While Not Eof()
+    Line Input lineText
+    payload = payload + lineText
+Wend
+
+' Write JSON to stdout so the next workflow state can consume it.
+If Len(Trim(payload)) = 0 Then
+    payload = "{}"
+End If
+Print payload
+`;
+  }
+  if (isDName(name)) {
+    return `import std.stdio;
+import std.string;
+
+void main() {
+    // ${STARTER_SOURCE_MARKER} to your function through stdin.
+    string payload;
+    foreach (line; stdin.byLineCopy()) {
+        payload ~= line;
+    }
+    if (payload.strip.length == 0) {
+        payload = "{}";
+    }
+
+    // Write JSON to stdout so the next workflow state can consume it.
+    write(payload);
+}
+`;
+  }
+  if (name === 'r' || name.startsWith('r ')) {
+    return `# ${STARTER_SOURCE_MARKER} to your function through stdin.
+input <- paste(readLines(file("stdin"), warn = FALSE), collapse = "\\n")
+payload <- if (nchar(trimws(input)) == 0) "{}" else input
+
+# Write JSON to stdout so the next workflow state can consume it.
+cat(payload)
+`;
+  }
+  if (languageName && !name.includes('python')) {
+    return `// ${STARTER_SOURCE_MARKER} to your function through stdin.
+// Write JSON to stdout so the next workflow state can consume it.
+// Replace this starter with code that prints a JSON value.
 `;
   }
   return `import json
@@ -859,6 +1386,7 @@ export function FunctionVersionWorkbench({
   onLanguageChange,
   initialTestCases,
   initialSourceMode,
+  onSourceModeChange,
   initialSourceCode,
   initialFiles,
   initialSettings,
@@ -932,6 +1460,11 @@ export function FunctionVersionWorkbench({
   const sortedLanguages = useMemo(() => (
     [...languages].sort((a, b) => a.name.localeCompare(b.name))
   ), [languages]);
+  const selectableLanguages = useMemo(() => (
+    sourceMode === 'MULTI_FILE'
+      ? sortedLanguages.filter((language) => language.multiFileSupported)
+      : sortedLanguages
+  ), [sourceMode, sortedLanguages]);
   const selectedLanguage = sortedLanguages.find((language) => String(language.id) === languageId);
   const activeFile = files.find((file) => file.path === activePath) || files[0];
   const activeCase = testCases.find((testCase) => testCase.id === activeCaseId) || testCases[0];
@@ -983,14 +1516,18 @@ export function FunctionVersionWorkbench({
   }, [seededFromExisting, sourceMode, initialSourceMode, sourceCode, initialSourceCode, files, initialFiles]);
 
   useEffect(() => {
-    if (languageId || sortedLanguages.length === 0) return;
-    const python3 = sortedLanguages.find((language) => {
+    if (languageId || selectableLanguages.length === 0) return;
+    const python3 = selectableLanguages.find((language) => {
       const name = language.name.toLowerCase();
       return name.includes('python') && name.includes('3');
     });
-    const python = sortedLanguages.find((language) => language.name.toLowerCase().includes('python'));
-    setLanguageId(String((python3 || python || sortedLanguages[0]).id));
-  }, [languageId, setLanguageId, sortedLanguages]);
+    const python = selectableLanguages.find((language) => language.name.toLowerCase().includes('python'));
+    setLanguageId(String((python3 || python || selectableLanguages[0]).id));
+  }, [languageId, selectableLanguages, setLanguageId]);
+
+  useEffect(() => {
+    onSourceModeChange?.(sourceMode);
+  }, [onSourceModeChange, sourceMode]);
 
   // Keep untouched starter code aligned with the selected language.
   useEffect(() => {
@@ -1296,6 +1833,7 @@ export function FunctionVersionWorkbench({
 
   const switchSourceMode = (nextMode: FunctionSourceMode) => {
     if (nextMode === sourceMode) return;
+    if (nextMode === 'MULTI_FILE' && !multiFileAllowed) return;
     if (nextMode === 'MULTI_FILE') {
       const entryPath = langMeta(selectedLanguage?.name).entry;
       setFiles((current) => {
@@ -2123,7 +2661,7 @@ export function FunctionVersionWorkbench({
                 <span className={labelClass}>Language</span>
                 <select value={languageId} onChange={(event) => setLanguageId(event.target.value)} className={selectControlClass}>
                   <option value="">Select language</option>
-                  {sortedLanguages.map((language) => (
+                  {selectableLanguages.map((language) => (
                     <option key={language.id} value={language.id}>{language.name}</option>
                   ))}
                 </select>
