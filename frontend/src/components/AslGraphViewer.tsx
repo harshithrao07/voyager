@@ -94,7 +94,7 @@ function DataFlowEdge({
     curvature: 0.36,
   });
   const isError = data?.status === 'error';
-  const stroke = isError ? '#f43f5e' : '#3c4350';
+  const stroke = isError ? '#f43f5e' : (typeof data?.color === 'string' ? data.color : '#3c4350');
 
   return (
     <>

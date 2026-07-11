@@ -78,7 +78,6 @@ export function AslReviewPanel({
       />
       <WorkflowPreviewPanel
         preview={workflowPreview}
-        definitionStatus={definitionStatus}
       />
       <div className="relative flex-1 overflow-hidden">
         <Editor

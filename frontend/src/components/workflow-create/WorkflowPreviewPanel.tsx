@@ -1,32 +1,21 @@
-import { AlertTriangle, Braces, CheckCircle2, GitBranch, Route, Timer } from 'lucide-react';
+import { Braces, GitBranch, Route, Timer } from 'lucide-react';
 import type { ReactNode } from 'react';
-import type { DefinitionStatus, WorkflowPreview } from './types';
+import { getStateVisual } from '../../utils/stateVisuals';
+import type { WorkflowPreview } from './types';
 
 export function WorkflowPreviewPanel({
   preview,
-  definitionStatus,
   className = '',
 }: {
   preview: WorkflowPreview;
-  definitionStatus: DefinitionStatus;
   className?: string;
 }) {
-  const statusClass = definitionStatus.valid
-    ? 'border-secondary/35 bg-secondary-container/25 text-secondary-fixed'
-    : 'border-status-error/35 bg-status-error/10 text-status-error';
-
   return (
     <section className={`border-b border-border-subtle bg-surface-base px-4 py-4 ${className}`}>
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="font-mono-sm text-[11px] uppercase text-on-surface-variant">Workflow preview</div>
-          <div className="mt-1 max-w-[260px] truncate font-headline-md text-headline-md text-on-surface">
-            {preview.startAt !== '-' ? preview.startAt : 'No start state'}
-          </div>
-        </div>
-        <div className={`flex h-8 shrink-0 items-center gap-1.5 rounded-DEFAULT border px-2.5 font-mono-sm text-[11px] ${statusClass}`}>
-          {definitionStatus.valid ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-          {definitionStatus.valid ? 'Ready' : 'Fix JSON'}
+      <div>
+        <div className="font-mono-sm text-[11px] uppercase text-on-surface-variant">Workflow preview</div>
+        <div className="mt-1 max-w-[260px] truncate font-headline-md text-headline-md text-on-surface">
+          {preview.startAt !== '-' ? preview.startAt : 'No start state'}
         </div>
       </div>
 
@@ -40,14 +29,18 @@ export function WorkflowPreviewPanel({
       </div>
 
       <div className="mt-4 flex min-h-7 flex-wrap gap-2">
-        {preview.stateTypes.length > 0 ? preview.stateTypes.map((type) => (
-          <span
-            key={type}
-            className="rounded-DEFAULT border border-border-subtle bg-surface-container-low px-2 py-1 font-mono-sm text-[11px] text-on-surface-variant"
-          >
-            {type}
-          </span>
-        )) : (
+        {preview.stateTypes.length > 0 ? preview.stateTypes.map((type) => {
+          const visual = getStateVisual(type);
+          return (
+            <span
+              key={type}
+              className={`flex items-center gap-1 rounded-DEFAULT border px-2 py-1 font-mono-sm text-[11px] ${visual.chipClass}`}
+            >
+              <span className={`material-symbols-outlined text-[13px] ${visual.textClass}`}>{visual.iconName}</span>
+              {type}
+            </span>
+          );
+        }) : (
           <span className="font-mono-sm text-[11px] text-on-surface-variant">No states parsed</span>
         )}
       </div>

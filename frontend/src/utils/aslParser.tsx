@@ -36,6 +36,7 @@ export function aslToReactFlow(asl: any, options: AslToReactFlowOptions = {}): {
     }
 
     const isSelected = options.selectedStateName === stateName;
+    const isStart = asl.StartAt === stateName;
     const stateId = getStateRuntimeId(stateName, index);
     const latency = getStateLatency(stateName, state);
     const retries = nodeStatus === 'error' ? '3r' : '0r';
@@ -60,7 +61,15 @@ export function aslToReactFlow(asl: any, options: AslToReactFlowOptions = {}): {
                 <span className={`material-symbols-outlined ${visual.textClass} text-[14px]`}>{visual.iconName}</span>
                 <span className={`font-mono-sm text-mono-sm font-medium truncate ${nodeStatus === 'error' ? 'text-status-error' : 'text-primary'}`}>{stateName}</span>
               </div>
-              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${visual.dotClass} animate-pulse`}></span>
+              <div className="flex shrink-0 items-center gap-1.5">
+                {isStart && (
+                  <span className="flex items-center gap-0.5 rounded-sm border border-secondary/40 bg-secondary-container/40 px-1 py-px font-mono-sm text-[8px] uppercase tracking-wide text-secondary-fixed">
+                    <span className="material-symbols-outlined text-[10px]">play_arrow</span>
+                    start
+                  </span>
+                )}
+                <span className={`h-1.5 w-1.5 rounded-full ${visual.dotClass} animate-pulse`}></span>
+              </div>
             </div>
             
             <div className="mt-2 flex items-end justify-between gap-2 pl-1">
@@ -98,8 +107,8 @@ export function aslToReactFlow(asl: any, options: AslToReactFlowOptions = {}): {
         source: stateName,
         target: state.Next,
         type: 'dataFlow',
-        data: { status: 'normal' },
-        style: { stroke: '#333333', strokeWidth: 2 }
+        data: { status: 'normal', color: visual.stroke },
+        style: { stroke: visual.stroke, strokeWidth: 2 }
       });
     }
 
@@ -110,8 +119,8 @@ export function aslToReactFlow(asl: any, options: AslToReactFlowOptions = {}): {
           source: stateName,
           target: choice.Next,
           type: 'dataFlow',
-          data: { status: 'normal' },
-          style: { stroke: '#333333', strokeWidth: 2 }
+          data: { status: 'normal', color: visual.stroke },
+          style: { stroke: visual.stroke, strokeWidth: 2 }
         });
       }
     }

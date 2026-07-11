@@ -8,6 +8,8 @@ export type StateVisual = {
   chipClass: string;
   softBgClass: string;
   selectedRingClass: string;
+  /** Concrete stroke colour for SVG edges/marks (Tailwind classes can't reach SVG attributes). */
+  stroke: string;
 };
 
 const stateVisualMap: Record<string, StateVisual> = {
@@ -21,6 +23,7 @@ const stateVisualMap: Record<string, StateVisual> = {
     chipClass: 'border-[#94a3b8]/30 bg-[#94a3b8]/10 text-[#cbd5e1]',
     softBgClass: 'bg-[#94a3b8]/[0.06]',
     selectedRingClass: 'ring-[#94a3b8]/45',
+    stroke: '#94a3b8',
   },
   Task: {
     label: 'TASK',
@@ -32,6 +35,7 @@ const stateVisualMap: Record<string, StateVisual> = {
     chipClass: 'border-status-info/30 bg-status-info/10 text-status-info',
     softBgClass: 'bg-status-info/[0.06]',
     selectedRingClass: 'ring-status-info/45',
+    stroke: '#84d5cd',
   },
   Choice: {
     label: 'CHOICE',
@@ -43,28 +47,31 @@ const stateVisualMap: Record<string, StateVisual> = {
     chipClass: 'border-status-warning/30 bg-status-warning/10 text-status-warning',
     softBgClass: 'bg-status-warning/[0.07]',
     selectedRingClass: 'ring-status-warning/45',
+    stroke: '#f2795a',
   },
   Wait: {
     label: 'WAIT',
     iconName: 'schedule',
-    borderClass: 'border-status-accent',
-    textClass: 'text-status-accent',
-    barClass: 'bg-status-accent',
-    dotClass: 'bg-status-accent',
-    chipClass: 'border-status-accent/30 bg-status-accent/10 text-status-accent',
-    softBgClass: 'bg-status-accent/[0.06]',
-    selectedRingClass: 'ring-status-accent/45',
+    borderClass: 'border-[#c4b5fd]',
+    textClass: 'text-[#c4b5fd]',
+    barClass: 'bg-[#c4b5fd]',
+    dotClass: 'bg-[#c4b5fd]',
+    chipClass: 'border-[#c4b5fd]/30 bg-[#c4b5fd]/10 text-[#c4b5fd]',
+    softBgClass: 'bg-[#c4b5fd]/[0.06]',
+    selectedRingClass: 'ring-[#c4b5fd]/45',
+    stroke: '#c4b5fd',
   },
   Succeed: {
     label: 'SUCCEED',
     iconName: 'check_circle',
-    borderClass: 'border-status-success',
-    textClass: 'text-status-success',
-    barClass: 'bg-status-success',
-    dotClass: 'bg-status-success',
-    chipClass: 'border-status-success/30 bg-status-success/10 text-status-success',
-    softBgClass: 'bg-status-success/[0.06]',
-    selectedRingClass: 'ring-status-success/45',
+    borderClass: 'border-[#4ade80]',
+    textClass: 'text-[#4ade80]',
+    barClass: 'bg-[#4ade80]',
+    dotClass: 'bg-[#4ade80]',
+    chipClass: 'border-[#4ade80]/30 bg-[#4ade80]/10 text-[#4ade80]',
+    softBgClass: 'bg-[#4ade80]/[0.06]',
+    selectedRingClass: 'ring-[#4ade80]/45',
+    stroke: '#4ade80',
   },
   Fail: {
     label: 'FAIL',
@@ -76,6 +83,7 @@ const stateVisualMap: Record<string, StateVisual> = {
     chipClass: 'border-status-error/35 bg-status-error/10 text-status-error',
     softBgClass: 'bg-status-error/[0.08]',
     selectedRingClass: 'ring-status-error/45',
+    stroke: '#ffb4ab',
   },
   Parallel: {
     label: 'PARALLEL',
@@ -87,6 +95,7 @@ const stateVisualMap: Record<string, StateVisual> = {
     chipClass: 'border-[#06b6d4]/35 bg-[#06b6d4]/10 text-[#67e8f9]',
     softBgClass: 'bg-[#06b6d4]/[0.06]',
     selectedRingClass: 'ring-[#06b6d4]/45',
+    stroke: '#22d3ee',
   },
   Map: {
     label: 'MAP',
@@ -98,6 +107,7 @@ const stateVisualMap: Record<string, StateVisual> = {
     chipClass: 'border-[#ec4899]/35 bg-[#ec4899]/10 text-[#f9a8d4]',
     softBgClass: 'bg-[#ec4899]/[0.06]',
     selectedRingClass: 'ring-[#ec4899]/45',
+    stroke: '#ec4899',
   },
 };
 

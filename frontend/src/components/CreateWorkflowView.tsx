@@ -39,12 +39,8 @@ import type {
 } from './workflow-create/types';
 
 const starterDefinition = {
-  StartAt: 'Done',
-  States: {
-    Done: {
-      Type: 'Succeed',
-    },
-  },
+  StartAt: '',
+  States: {},
 };
 
 type Props = {
@@ -256,7 +252,6 @@ export function CreateWorkflowView({
 
   const hasSelectedModel = models.some((model) => model.id === modelId);
   const canGenerate = instruction.trim().length > 0 && !generating && !saving && !accepting && hasSelectedModel;
-  const canSave = name.trim().length > 0 && idempotencyKey.trim().length > 0 && !saving && !generating;
   const definitionStatus = useMemo(() => {
     try {
       parseDefinition(definitionText);
@@ -265,6 +260,11 @@ export function CreateWorkflowView({
       return { valid: false, message: err.message || 'Definition JSON is invalid' };
     }
   }, [definitionText]);
+  const canSave = name.trim().length > 0
+    && idempotencyKey.trim().length > 0
+    && definitionStatus.valid
+    && !saving
+    && !generating;
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -288,7 +288,7 @@ export function CreateWorkflowView({
         typeof state.Type === 'string' ? state.Type : 'Unknown'
       )))].sort();
       return {
-        startAt: typeof definition.StartAt === 'string' ? definition.StartAt : '-',
+        startAt: typeof definition.StartAt === 'string' && definition.StartAt ? definition.StartAt : '-',
         stateCount: states.length,
         terminalCount: states.filter(([, state]) => (
           state?.End || state?.Type === 'Succeed' || state?.Type === 'Fail'
@@ -861,6 +861,11 @@ export function CreateWorkflowView({
   };
 
   const handleSave = async () => {
+    if (!definitionStatus.valid) {
+      setError(definitionStatus.message);
+      return;
+    }
+
     setSaving(true);
     setError(null);
 

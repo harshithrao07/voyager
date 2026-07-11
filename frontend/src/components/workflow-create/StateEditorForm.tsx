@@ -331,7 +331,8 @@ export function StateEditorForm({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className={sectionClass}>
+      <div className={`h-1 shrink-0 ${visual.barClass}`} />
+      <div className={`${sectionClass} ${visual.softBgClass}`}>
         <div className="flex items-center justify-between gap-3">
           <span className={`flex items-center gap-1.5 rounded border px-2 py-1 font-mono-sm text-[10px] ${visual.chipClass}`}>
             <span className="material-symbols-outlined text-[13px]">{visual.iconName}</span>
