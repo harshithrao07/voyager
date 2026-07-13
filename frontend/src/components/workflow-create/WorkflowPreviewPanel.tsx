@@ -14,9 +14,29 @@ export function WorkflowPreviewPanel({
     <section className={`border-b border-border-subtle bg-surface-base px-4 py-4 ${className}`}>
       <div>
         <div className="font-mono-sm text-[11px] uppercase text-on-surface-variant">Workflow preview</div>
-        <div className="mt-1 max-w-[260px] truncate font-headline-md text-headline-md text-on-surface">
-          {preview.startAt !== '-' ? preview.startAt : 'No start state'}
-        </div>
+        {preview.startAt !== '-' ? (
+          <div className="mt-3 flex items-center gap-2.5">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-DEFAULT border border-secondary/35 bg-secondary-container/40 text-secondary-fixed">
+              <span className="material-symbols-outlined text-[19px]">play_arrow</span>
+            </span>
+            <div className="min-w-0">
+              <div className="font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant">Start state</div>
+              <div className="max-w-[210px] truncate font-headline-md text-headline-md leading-tight text-on-surface">
+                {preview.startAt}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-3 flex items-center gap-2.5">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-DEFAULT border border-status-warning/35 bg-status-warning/10 text-status-warning">
+              <span className="material-symbols-outlined text-[19px]">priority_high</span>
+            </span>
+            <div className="min-w-0">
+              <div className="font-mono-sm text-[10px] uppercase tracking-[0.08em] text-status-warning">Start state</div>
+              <div className="font-headline-md text-headline-md leading-tight text-on-surface-variant">Not defined</div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="mt-4 grid grid-cols-3 gap-x-4 gap-y-3">

@@ -10,7 +10,6 @@ export interface WorkflowGenerationResponse {
 }
 
 export type WorkflowStatusDTO = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
-export type WorkflowPriorityDTO = 'HIGH' | 'MEDIUM' | 'LOW';
 export type WorkflowAiStage =
   | 'COLLECTING_WORKFLOW_DETAILS'
   | 'ASL_READY'
@@ -59,7 +58,6 @@ export interface AiModelEnabledRequest {
 
 export interface CreateWorkflowRequest {
   name: string;
-  priority: WorkflowPriorityDTO;
   cronExpression?: string | null;
   timezone?: string | null;
   maxAttempts: number;
@@ -169,7 +167,6 @@ export interface WorkflowResponseDTO {
   version: number;
   name: string;
   status: WorkflowStatusDTO;
-  priority: WorkflowPriorityDTO;
   cronExpression: string | null;
   timezone: string | null;
   nextRunAt: string | null;
@@ -188,6 +185,32 @@ export interface WorkflowPageDTO {
   totalPages: number;
   first: boolean;
   last: boolean;
+}
+
+export type DraftStateTestStatus = 'SUCCEEDED' | 'FAILED' | 'WAITING' | 'TASK_PREVIEW';
+
+export interface DraftStateTestRequest {
+  definition: unknown;
+  stateName: string;
+  input: unknown;
+  variables?: Record<string, unknown>;
+  executeTask?: boolean;
+}
+
+export interface DraftStateTestResponse {
+  status: DraftStateTestStatus;
+  stateName: string;
+  stateType: string;
+  input: unknown;
+  output: unknown;
+  variables: Record<string, unknown>;
+  nextStateName: string | null;
+  taskResource: string | null;
+  taskArguments: unknown;
+  wakeAt: string | null;
+  error: string | null;
+  cause: string | null;
+  durationMs: number;
 }
 
 async function readError(response: Response) {
@@ -247,6 +270,16 @@ export function listWorkflows(request: ListWorkflowsRequest = {}): Promise<Workf
 
 export function getWorkflow(request: GetWorkflowRequest): Promise<WorkflowResponseDTO> {
   return getJson<WorkflowResponseDTO>(`/app/v1/workflows/${request.workflowId}`);
+}
+
+export function testDraftWorkflowState(
+  request: DraftStateTestRequest,
+): Promise<DraftStateTestResponse> {
+  return sendJson<DraftStateTestResponse>(
+    '/app/v1/workflows/draft-tests/state',
+    'POST',
+    request,
+  );
 }
 
 export interface FunctionLanguageDTO {

@@ -15,7 +15,7 @@ class TaskStateExecutorTest {
         var state = objectMapper.readTree("""
                 {
                   "Type": "Task",
-                  "Resource": "scheduler://send-email",
+                  "Resource": "voyager://send-email",
                   "Arguments": {
                     "to": "{% $states.input.email %}",
                     "subject": "Welcome",
@@ -40,7 +40,7 @@ class TaskStateExecutorTest {
                         )
                 );
 
-        assertThat(outcome.resource()).isEqualTo("scheduler://send-email");
+        assertThat(outcome.resource()).isEqualTo("voyager://send-email");
         assertThat(outcome.arguments().get("to").stringValue())
                 .isEqualTo("ada@example.com");
         assertThat(outcome.arguments().get("body").stringValue())

@@ -8,7 +8,6 @@ import com.job.scheduler.entity.WorkflowAiConversation;
 import com.job.scheduler.entity.WorkflowAiMessage;
 import com.job.scheduler.enums.AiModelProviderType;
 import com.job.scheduler.enums.WorkflowAiConversationStage;
-import com.job.scheduler.enums.WorkflowPriority;
 import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.repository.WorkflowAiConversationRepository;
 import com.job.scheduler.repository.WorkflowAiMessageRepository;
@@ -169,7 +168,6 @@ class WorkflowAiConversationServiceTest {
                 0,
                 conversation.getName(),
                 WorkflowStatus.DRAFT,
-                WorkflowPriority.MEDIUM,
                 null,
                 "UTC",
                 null,
@@ -189,7 +187,6 @@ class WorkflowAiConversationServiceTest {
         ArgumentCaptor<CreateWorkflowRequestDTO> requestCaptor =
                 ArgumentCaptor.forClass(CreateWorkflowRequestDTO.class);
         verify(workflowService).createWorkflow(requestCaptor.capture());
-        assertThat(requestCaptor.getValue().priority()).isEqualTo(WorkflowPriority.MEDIUM);
         assertThat(requestCaptor.getValue().definition().path("StartAt").stringValue())
                 .isEqualTo("Done");
     }

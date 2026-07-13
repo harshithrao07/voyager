@@ -8,11 +8,12 @@ import com.job.scheduler.dto.WorkflowExecutionPageDTO;
 import com.job.scheduler.dto.WorkflowExecutionSummaryDTO;
 import com.job.scheduler.dto.WorkflowExecutionCancellationResponseDTO;
 import com.job.scheduler.dto.WorkflowPageDTO;
-import com.job.scheduler.enums.WorkflowPriority;
+import com.job.scheduler.dto.DraftStateTestResponseDTO;
 import com.job.scheduler.enums.WorkflowExecutionStatus;
 import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.exception.ApiExceptionHandler;
 import com.job.scheduler.service.WorkflowExecutionRunner;
+import com.job.scheduler.service.WorkflowDraftTestService;
 import com.job.scheduler.service.WorkflowExecutionInspectionService;
 import com.job.scheduler.service.WorkflowExecutionCancellationService;
 import com.job.scheduler.service.WorkflowService;
@@ -49,6 +50,8 @@ class WorkflowControllerTest {
     @Mock
     private WorkflowExecutionCancellationService
             workflowExecutionCancellationService;
+    @Mock
+    private WorkflowDraftTestService workflowDraftTestService;
 
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
@@ -61,10 +64,55 @@ class WorkflowControllerTest {
                         workflowService,
                         workflowExecutionRunner,
                         workflowExecutionInspectionService,
-                        workflowExecutionCancellationService
+                        workflowExecutionCancellationService,
+                        workflowDraftTestService
                 ))
                 .setControllerAdvice(new ApiExceptionHandler())
                 .build();
+    }
+
+    @Test
+    void testsOneDraftStateWithoutCreatingAWorkflow() throws Exception {
+        var output = objectMapper.createObjectNode().put("shaped", true);
+        when(workflowDraftTestService.testState(any())).thenReturn(
+                new DraftStateTestResponseDTO(
+                        "SUCCEEDED",
+                        "Shape",
+                        "PASS",
+                        objectMapper.createObjectNode(),
+                        output,
+                        objectMapper.createObjectNode(),
+                        "Next",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        2
+                )
+        );
+
+        mockMvc.perform(post("/app/v1/workflows/draft-tests/state")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "definition": {
+                                    "States": {
+                                      "Shape": {
+                                        "Type": "Pass",
+                                        "Next": "Next"
+                                      }
+                                    }
+                                  },
+                                  "stateName": "Shape",
+                                  "input": {"value": 1}
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.stateName").value("Shape"))
+                .andExpect(jsonPath("$.output.shaped").value(true))
+                .andExpect(jsonPath("$.nextStateName").value("Next"));
     }
 
     @Test
@@ -92,7 +140,6 @@ class WorkflowControllerTest {
                 0,
                 "Simple workflow",
                 WorkflowStatus.DRAFT,
-                WorkflowPriority.MEDIUM,
                 null,
                 "UTC",
                 null,
@@ -108,7 +155,6 @@ class WorkflowControllerTest {
                         .content("""
                                 {
                                   "name": "Simple workflow",
-                                  "priority": "MEDIUM",
                                   "maxAttempts": 3,
                                   "idempotencyKey": "workflow-api-1",
                                   "definition": {
@@ -383,7 +429,6 @@ class WorkflowControllerTest {
                                 {
                                   "expectedVersion": 0,
                                   "name": "Updated workflow",
-                                  "priority": "HIGH",
                                   "cronExpression": "0 0 * * * *",
                                   "timezone": "UTC",
                                   "maxAttempts": 5
@@ -431,7 +476,6 @@ class WorkflowControllerTest {
                 0,
                 "Workflow",
                 status,
-                WorkflowPriority.MEDIUM,
                 "0 0 * * * *",
                 "UTC",
                 nextRunAt,

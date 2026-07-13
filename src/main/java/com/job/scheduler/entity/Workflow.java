@@ -1,6 +1,5 @@
 package com.job.scheduler.entity;
 
-import com.job.scheduler.enums.WorkflowPriority;
 import com.job.scheduler.enums.WorkflowStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -51,10 +50,6 @@ public class Workflow {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
     private WorkflowStatus status = WorkflowStatus.DRAFT;
-
-    @Enumerated(EnumType.STRING)
-    @Column(name = "priority", nullable = false)
-    private WorkflowPriority priority = WorkflowPriority.MEDIUM;
 
     @Column(name = "cron_expression")
     private String cronExpression;

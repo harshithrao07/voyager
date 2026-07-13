@@ -30,7 +30,7 @@ class AslCompoundStateDefinitionValidatorTest {
                           "States": {
                             "Email": {
                               "Type": "Task",
-                              "Resource": "scheduler://send-email",
+                              "Resource": "voyager://send-email",
                               "End": true
                             }
                           }
@@ -267,14 +267,14 @@ class AslCompoundStateDefinitionValidatorTest {
                 {
                   "Type": "Map",
                   "ItemReader": {
-                    "Resource": "scheduler://read-orders"
+                    "Resource": "voyager://read-orders"
                   },
                   "Items": "{% $states.input.orders %}",
                   "ItemBatcher": {
                     "MaxItemsPerBatch": 10
                   },
                   "ResultWriter": {
-                    "Resource": "scheduler://write-results"
+                    "Resource": "voyager://write-results"
                   },
                   "ToleratedFailurePercentage": 10.5,
                   "ToleratedFailureCount": 2,

@@ -14,7 +14,10 @@ public class FunctionTaskResource implements TaskResource {
 
     @Override
     public boolean supports(URI resource) {
-        return "function".equals(resource.getScheme());
+        String path = trimSlashes(resource.getPath());
+        return "voyager".equals(resource.getScheme())
+                && path != null
+                && !path.isBlank();
     }
 
     @Override
@@ -41,16 +44,16 @@ public class FunctionTaskResource implements TaskResource {
                 || path == null || path.isBlank()) {
             throw new TaskResourceException(
                     TaskResourceErrors.TASK_FAILED,
-                    "Function Task resource must be function://namespace/name@version"
+                    "Function Task resource must be voyager://namespace/name@version"
             );
         }
 
         String name = path;
         Integer version = null;
-        int versionMarker = path.lastIndexOf('@');
+        int versionMarker = name.lastIndexOf('@');
         if (versionMarker >= 0) {
-            name = path.substring(0, versionMarker);
-            version = parseVersion(path.substring(versionMarker + 1));
+            version = parseVersion(name.substring(versionMarker + 1));
+            name = name.substring(0, versionMarker);
         }
 
         if (name.isBlank()) {

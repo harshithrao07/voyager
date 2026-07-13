@@ -135,7 +135,7 @@ class AslSimpleStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Pass",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "End": true
                         }
                         """),

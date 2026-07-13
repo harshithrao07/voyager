@@ -117,7 +117,7 @@ class AslMachineGraphValidatorTest {
                   "States": {
                     "Task": {
                       "Type": "Task",
-                      "Resource": "scheduler://cleanup",
+                      "Resource": "voyager://cleanup",
                       "Catch": [
                         {
                           "ErrorEquals": ["States.ALL"],

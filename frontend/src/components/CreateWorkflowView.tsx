@@ -8,6 +8,7 @@ import {
   deleteAiModel,
   discoverAiModels,
   getWorkflowAiConversation,
+  listFunctions,
   listAllAiModels,
   listAiModels,
   regenerateWorkflowAiMessage,
@@ -15,11 +16,11 @@ import {
   setAiModelEnabled,
   startWorkflowAiConversation,
   testAiModel,
+  type FunctionDefinitionDTO,
   type WorkflowAiMessageDTO,
   type WorkflowAiConversationSummaryDTO,
   type WorkflowAiResponse,
   type WorkflowAiStage,
-  type WorkflowPriorityDTO,
   type WorkflowResponseDTO,
 } from '../api';
 import { AslReviewPanel } from './workflow-create/AslReviewPanel';
@@ -29,6 +30,9 @@ import { ManualWorkflowEditor } from './workflow-create/ManualWorkflowEditor';
 import { ModelSettingsModal } from './workflow-create/ModelSettingsModal';
 import { WorkflowAiEmptyState } from './workflow-create/WorkflowAiEmptyState';
 import { WorkflowStageStrip } from './workflow-create/WorkflowStageStrip';
+import type { TaskResourceOption } from './workflow-create/StateEditorForm';
+import { collectAslIssues } from '../utils/aslValidation';
+import { validateCron } from '../utils/cronValidation';
 import type {
   AiModel,
   ChatMessage,
@@ -186,6 +190,10 @@ function endpointHost(endpoint: string) {
   }
 }
 
+function functionTaskResource(fn: FunctionDefinitionDTO) {
+  return `voyager://${fn.namespace}/${fn.name}@v${fn.activeVersion}`;
+}
+
 export function CreateWorkflowView({
   onWorkflowCreated,
   onNavigate,
@@ -203,7 +211,6 @@ export function CreateWorkflowView({
   const [chatEntered, setChatEntered] = useState(false);
   const [mode, setMode] = useState<DefinitionMode>('ai');
   const [name, setName] = useState('');
-  const [priority, setPriority] = useState<WorkflowPriorityDTO>('MEDIUM');
   const [maxAttempts, setMaxAttempts] = useState(3);
   const [cronExpression, setCronExpression] = useState('');
   const [timezone, setTimezone] = useState('UTC');
@@ -212,6 +219,7 @@ export function CreateWorkflowView({
   const [previewPrompt, setPreviewPrompt] = useState<string | null>(null);
   const [models, setModels] = useState<AiModel[]>([]);
   const [allModels, setAllModels] = useState<AiModel[]>([]);
+  const [customFunctions, setCustomFunctions] = useState<FunctionDefinitionDTO[]>([]);
   const [modelId, setModelId] = useState('');
   const [modelSearch, setModelSearch] = useState('');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -255,7 +263,7 @@ export function CreateWorkflowView({
   const definitionStatus = useMemo(() => {
     try {
       parseDefinition(definitionText);
-      return { valid: true, message: 'ASL JSON looks ready' };
+      return { valid: true, message: 'Definition JSON is well-formed' };
     } catch (err: any) {
       return { valid: false, message: err.message || 'Definition JSON is invalid' };
     }
@@ -263,8 +271,37 @@ export function CreateWorkflowView({
   const canSave = name.trim().length > 0
     && idempotencyKey.trim().length > 0
     && definitionStatus.valid
+    && validateCron(cronExpression) === null
     && !saving
     && !generating;
+
+  const taskResourceOptions = useMemo<TaskResourceOption[]>(() => (
+    customFunctions
+      .filter((fn) => fn.status === 'ENABLED' && fn.activeVersion !== null)
+      .map((fn) => ({
+        value: functionTaskResource(fn),
+        label: `${fn.namespace}/${fn.name}`,
+        description: `Function v${fn.activeVersion}`,
+      }))
+  ), [customFunctions]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    listFunctions()
+      .then((functions) => {
+        if (!cancelled) {
+          setCustomFunctions(functions);
+        }
+      })
+      .catch((err) => {
+        console.warn('Function registry unavailable for workflow resource picker.', err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -312,6 +349,20 @@ export function CreateWorkflowView({
       };
     }
   }, [definitionText]);
+
+  // Shallow semantic checks (dangling transitions, unreachable states, placeholder
+  // resources). Only runs when the JSON parses; parse errors surface via definitionStatus.
+  const localValidationIssues = useMemo<string[]>(() => {
+    try {
+      return collectAslIssues(parseDefinition(definitionText));
+    } catch {
+      return [];
+    }
+  }, [definitionText]);
+
+  const builderValidationIssues = useMemo<string[]>(() => (
+    [...new Set([...validationIssues, ...localValidationIssues])]
+  ), [validationIssues, localValidationIssues]);
 
   const applyModelLists = (enabledDtos: Parameters<typeof aiModelFromDto>[0][], allDtos: Parameters<typeof aiModelFromDto>[0][]) => {
     const nextModels = enabledDtos.map(aiModelFromDto);
@@ -400,7 +451,6 @@ export function CreateWorkflowView({
               selectModel(conversation.modelConfigId);
             }
             setName(conversation.draftWorkflowPayload?.name || conversation.name || '');
-            setPriority(conversation.draftWorkflowPayload?.priority || 'MEDIUM');
             setMaxAttempts(conversation.draftWorkflowPayload?.maxAttempts ?? 3);
             setCronExpression(conversation.draftWorkflowPayload?.cronExpression || '');
             setTimezone(conversation.draftWorkflowPayload?.timezone || 'UTC');
@@ -423,7 +473,6 @@ export function CreateWorkflowView({
       setConversationId(snapshot.conversationId || null);
       setConversationStage(snapshot.conversationStage || 'COLLECTING_WORKFLOW_DETAILS');
       setName(snapshot.name || '');
-      setPriority(snapshot.priority || 'MEDIUM');
       setMaxAttempts(snapshot.maxAttempts ?? 3);
       setCronExpression(snapshot.cronExpression || '');
       setTimezone(snapshot.timezone || 'UTC');
@@ -455,7 +504,6 @@ export function CreateWorkflowView({
       conversationId,
       conversationStage,
       name,
-      priority,
       maxAttempts,
       cronExpression,
       timezone,
@@ -474,7 +522,6 @@ export function CreateWorkflowView({
     conversationId,
     conversationStage,
     name,
-    priority,
     maxAttempts,
     cronExpression,
     timezone,
@@ -603,7 +650,6 @@ export function CreateWorkflowView({
 
     if (response.draftWorkflowPayload) {
       setName(response.draftWorkflowPayload.name || response.conversationName || name);
-      setPriority(response.draftWorkflowPayload.priority || 'MEDIUM');
       setCronExpression(response.draftWorkflowPayload.cronExpression || '');
       setTimezone(response.draftWorkflowPayload.timezone || 'UTC');
       setMaxAttempts(response.draftWorkflowPayload.maxAttempts ?? 3);
@@ -873,7 +919,6 @@ export function CreateWorkflowView({
       const definition = parseDefinition(definitionText);
       const workflow = await createWorkflow({
         name: name.trim(),
-        priority,
         cronExpression: cronExpression.trim() || null,
         timezone: timezone.trim() || 'UTC',
         maxAttempts,
@@ -1308,7 +1353,7 @@ export function CreateWorkflowView({
   return (
     <div className="relative flex h-full min-h-0 flex-col text-on-surface">
       {messages.length === 0 && (
-        <header className="pointer-events-none absolute right-10 top-2 z-30 flex justify-end">
+        <header className="pointer-events-none absolute right-10 top-1 z-30 flex justify-end">
           <div className="pointer-events-auto">
             {modeSwitch}
           </div>
@@ -1432,14 +1477,12 @@ export function CreateWorkflowView({
           definitionStatus={definitionStatus}
           definitionStats={definitionStats}
           error={error}
-          validationIssues={validationIssues}
+          validationIssues={builderValidationIssues}
           saving={saving}
           canSave={canSave}
           onSave={handleSave}
           name={name}
           onNameChange={setName}
-          priority={priority}
-          onPriorityChange={setPriority}
           maxAttempts={maxAttempts}
           onMaxAttemptsChange={setMaxAttempts}
           idempotencyKey={idempotencyKey}
@@ -1450,6 +1493,7 @@ export function CreateWorkflowView({
           onTimezoneChange={setTimezone}
           fieldClass={fieldClass}
           monoFieldClass={monoFieldClass}
+          taskResourceOptions={taskResourceOptions}
           reserveTopControlsSpace={messages.length === 0}
         />
       )}

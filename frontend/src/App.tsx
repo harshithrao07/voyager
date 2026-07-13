@@ -135,7 +135,7 @@ function formatSchedule(cronExpression?: string | null, timezone?: string | null
 
 function workflowDescription(workflow: WorkflowResponseDTO) {
   const revision = workflow.activeDefinition?.revision ? `Rev ${workflow.activeDefinition.revision}` : 'No active revision';
-  return `${workflow.priority} priority - ${workflow.maxAttempts} max attempts - ${revision}`;
+  return `${workflow.maxAttempts} max attempts - ${revision}`;
 }
 
 function mapWorkflowSummary(workflow: WorkflowResponseDTO): WorkflowSummary {

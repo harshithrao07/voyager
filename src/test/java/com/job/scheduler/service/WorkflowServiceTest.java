@@ -5,11 +5,9 @@ import com.job.scheduler.dto.CreateWorkflowRevisionRequestDTO;
 import com.job.scheduler.dto.UpdateWorkflowMetadataRequestDTO;
 import com.job.scheduler.entity.Workflow;
 import com.job.scheduler.entity.WorkflowDefinition;
-import com.job.scheduler.enums.WorkflowPriority;
 import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.repository.WorkflowDefinitionRepository;
 import com.job.scheduler.repository.WorkflowRepository;
-import com.job.scheduler.workflow.asl.validation.AslDefinitionValidationException;
 import com.job.scheduler.workflow.asl.validation.AslDefinitionValidator;
 import com.job.scheduler.workflow.asl.runtime.AslRuntimeCapabilityValidator;
 import com.job.scheduler.workflow.asl.validation.AslValidationCategory;
@@ -70,7 +68,6 @@ class WorkflowServiceTest {
         var definitionNode = definition("Done");
         var request = new CreateWorkflowRequestDTO(
                 "Daily cleanup",
-                WorkflowPriority.MEDIUM,
                 "0 0 9 * * MON-FRI",
                 4,
                 "workflow-create-1",
@@ -79,8 +76,6 @@ class WorkflowServiceTest {
         );
         when(workflowRepository.findByIdempotencyKey("workflow-create-1"))
                 .thenReturn(Optional.empty());
-        when(aslDefinitionValidator.validate(definitionNode))
-                .thenReturn(new AslValidationResult(List.of()));
         when(workflowRepository.save(any(Workflow.class))).thenAnswer(invocation -> {
             Workflow workflow = invocation.getArgument(0);
             if (workflow.getId() == null) {
@@ -116,26 +111,34 @@ class WorkflowServiceTest {
     }
 
     @Test
-    void rejectsInvalidDefinitionBeforeSaving() {
-        var definition = definition("Missing");
-        var request = request(definition);
+    void savesDraftWithoutValidatingDefinition() {
+        var definitionNode = definition("Done");
+        var request = request(definitionNode);
         when(workflowRepository.findByIdempotencyKey("workflow-key"))
                 .thenReturn(Optional.empty());
-        when(aslDefinitionValidator.validate(definition))
-                .thenReturn(new AslValidationResult(List.of(
-                        new AslValidationIssue(
-                                "$.StartAt",
-                                AslValidationCategory.ASL,
-                                "START_STATE_NOT_FOUND",
-                                "StartAt does not exist"
-                        )
-                )));
+        when(workflowRepository.save(any(Workflow.class))).thenAnswer(invocation -> {
+            Workflow saved = invocation.getArgument(0);
+            if (saved.getId() == null) {
+                saved.setId(UUID.randomUUID());
+                saved.setCreatedAt(Instant.now());
+                saved.setUpdatedAt(Instant.now());
+            }
+            return saved;
+        });
+        when(workflowDefinitionRepository.save(any(WorkflowDefinition.class)))
+                .thenAnswer(invocation -> {
+                    WorkflowDefinition saved = invocation.getArgument(0);
+                    saved.setId(UUID.randomUUID());
+                    saved.setCreatedAt(Instant.now());
+                    return saved;
+                });
 
-        assertThatThrownBy(() -> workflowService.createWorkflow(request))
-                .isInstanceOf(AslDefinitionValidationException.class);
+        var response = workflowService.createWorkflow(request);
 
-        verify(workflowRepository, never()).save(any());
-        verify(workflowDefinitionRepository, never()).save(any());
+        // A draft is saved as-is; ASL validation is deferred to activation.
+        assertThat(response.status()).isEqualTo(WorkflowStatus.DRAFT);
+        verify(aslDefinitionValidator, never()).validate(any());
+        verify(workflowDefinitionRepository).save(any());
     }
 
     @Test
@@ -146,8 +149,6 @@ class WorkflowServiceTest {
         var updatedDefinition = definition("Updated");
         when(workflowRepository.findByIdForUpdate(workflow.getId()))
                 .thenReturn(Optional.of(workflow));
-        when(aslDefinitionValidator.validate(updatedDefinition))
-                .thenReturn(new AslValidationResult(List.of()));
         when(workflowDefinitionRepository.findByWorkflowAndDefinitionHash(
                 any(Workflow.class),
                 any(String.class)
@@ -170,6 +171,8 @@ class WorkflowServiceTest {
         assertThat(response.revision()).isEqualTo(2);
         assertThat(response.active()).isFalse();
         assertThat(workflow.getActiveDefinition()).isSameAs(current);
+        // A non-activating revision is a draft — it is not validated.
+        verify(aslDefinitionValidator, never()).validate(any());
     }
 
     @Test
@@ -180,8 +183,6 @@ class WorkflowServiceTest {
         var submitted = definition("Done");
         when(workflowRepository.findByIdForUpdate(workflow.getId()))
                 .thenReturn(Optional.of(workflow));
-        when(aslDefinitionValidator.validate(submitted))
-                .thenReturn(new AslValidationResult(List.of()));
         when(workflowDefinitionRepository.findByWorkflowAndDefinitionHash(
                 any(Workflow.class),
                 any(String.class)
@@ -225,7 +226,7 @@ class WorkflowServiceTest {
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "scheduler://cleanup",
+                      "Resource": "voyager://cleanup",
                       "End": true
                     }
                   }
@@ -356,7 +357,6 @@ class WorkflowServiceTest {
                 new UpdateWorkflowMetadataRequestDTO(
                         3L,
                         " Updated workflow ",
-                        WorkflowPriority.HIGH,
                         objectMapper.getNodeFactory()
                                 .textNode("0 30 * * * *"),
                         "Asia/Kolkata",
@@ -365,7 +365,6 @@ class WorkflowServiceTest {
         );
 
         assertThat(response.name()).isEqualTo("Updated workflow");
-        assertThat(response.priority()).isEqualTo(WorkflowPriority.HIGH);
         assertThat(response.cronExpression()).isEqualTo("0 30 * * * *");
         assertThat(response.timezone()).isEqualTo("Asia/Kolkata");
         assertThat(response.maxAttempts()).isEqualTo(5);
@@ -387,7 +386,6 @@ class WorkflowServiceTest {
                 workflow.getId(),
                 new UpdateWorkflowMetadataRequestDTO(
                         2L,
-                        null,
                         null,
                         objectMapper.nullNode(),
                         null,
@@ -413,7 +411,6 @@ class WorkflowServiceTest {
                         "Changed",
                         null,
                         null,
-                        null,
                         null
                 )
         )).isInstanceOf(IllegalStateException.class)
@@ -423,7 +420,6 @@ class WorkflowServiceTest {
     private CreateWorkflowRequestDTO request(tools.jackson.databind.JsonNode definition) {
         return new CreateWorkflowRequestDTO(
                 "Workflow",
-                WorkflowPriority.MEDIUM,
                 null,
                 3,
                 "workflow-key",
@@ -444,7 +440,6 @@ class WorkflowServiceTest {
         workflow.setId(UUID.randomUUID());
         workflow.setName("Workflow");
         workflow.setStatus(WorkflowStatus.DRAFT);
-        workflow.setPriority(WorkflowPriority.MEDIUM);
         workflow.setTimezone("UTC");
         workflow.setMaxAttempts(3);
         workflow.setIdempotencyKey("workflow-key");

@@ -32,7 +32,7 @@ class McpTaskResourceTest {
     @Test
     void supportsMcpSchemeOnly() {
         assertThat(resource().supports(uri)).isTrue();
-        assertThat(resource().supports(URI.create("scheduler://webhook")))
+        assertThat(resource().supports(URI.create("voyager://webhook")))
                 .isFalse();
     }
 

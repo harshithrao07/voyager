@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { Plus, Search, Trash2 } from 'lucide-react';
 import { getStateVisual } from '../../utils/stateVisuals';
 import {
   isValidStateName,
@@ -15,6 +16,39 @@ const labelClass = 'block font-mono-sm text-[10px] uppercase tracking-[0.08em] t
 const hintClass = 'mt-1 font-body-sm text-[11px] text-on-surface-variant/70';
 const errorClass = 'mt-1 font-body-sm text-[11px] text-status-error';
 const sectionClass = 'border-b border-border-subtle px-6 py-5';
+
+function CollapsibleSection({
+  icon,
+  title,
+  description,
+  badge,
+  defaultOpen = false,
+  children,
+}: {
+  icon?: string;
+  title: string;
+  description?: string;
+  badge?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <details open={defaultOpen} className={`group ${sectionClass}`}>
+      <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+        {icon ? <span className="material-symbols-outlined text-[15px] text-on-surface-variant">{icon}</span> : null}
+        <h3 className="font-mono-sm text-[11px] font-medium uppercase tracking-[0.08em] text-on-surface">{title}</h3>
+        {badge ? (
+          <span className="rounded-full border border-border-subtle px-1.5 py-px font-mono-sm text-[9px] text-on-surface-variant">{badge}</span>
+        ) : null}
+        <span className="material-symbols-outlined ml-auto text-[18px] text-on-surface-variant transition-transform duration-200 group-open:rotate-180">
+          expand_more
+        </span>
+      </summary>
+      {description ? <p className="mt-2 font-body-sm text-[11px] leading-relaxed text-on-surface-variant/70">{description}</p> : null}
+      <div className="mt-4">{children}</div>
+    </details>
+  );
+}
 
 const END_OPTION = '__end__';
 const NONE_OPTION = '__none__';
@@ -63,10 +97,37 @@ function parseIntegerOrExpression(text: string, options: { min?: number } = {}):
   return { ok: true, value };
 }
 
+function parseNumberOrExpression(text: string, options: { min?: number } = {}): ParseResult {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return { ok: true, value: undefined };
+  }
+  if (trimmed.startsWith('{%') && trimmed.endsWith('%}')) {
+    return { ok: true, value: trimmed };
+  }
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+    return { ok: false, error: 'Enter a number or a {% ... %} expression.' };
+  }
+  const value = Number(trimmed);
+  if (options.min !== undefined && value < options.min) {
+    return { ok: false, error: `Must be at least ${options.min}.` };
+  }
+  return { ok: true, value };
+}
+
 function stringifyValue(value: unknown): string {
   if (value === undefined) return '';
   if (typeof value === 'string') return value;
   return JSON.stringify(value, null, 2);
+}
+
+function cleanPatchedObject<T extends Record<string, unknown>>(next: T, patch: Record<string, unknown>): T {
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) {
+      delete next[key];
+    }
+  }
+  return next;
 }
 
 type JsonFieldProps = {
@@ -152,6 +213,46 @@ function IntegerField({ label, value, onCommit, hint, placeholder, min, monoFiel
   );
 }
 
+type NumberFieldProps = {
+  label: string;
+  value: unknown;
+  onCommit: (value: unknown | undefined) => void;
+  hint?: string;
+  placeholder?: string;
+  min?: number;
+  monoFieldClass: string;
+};
+
+function NumberField({ label, value, onCommit, hint, placeholder, min, monoFieldClass }: NumberFieldProps) {
+  const [text, setText] = useState(() => stringifyValue(value));
+  const [error, setError] = useState<string | null>(null);
+
+  const handleChange = (nextText: string) => {
+    setText(nextText);
+    const result = parseNumberOrExpression(nextText, { min });
+    if (result.ok) {
+      setError(null);
+      onCommit(result.value);
+    } else {
+      setError(result.error);
+    }
+  };
+
+  return (
+    <div>
+      <label className={labelClass}>{label}</label>
+      <input
+        value={text}
+        onChange={(event) => handleChange(event.target.value)}
+        placeholder={placeholder}
+        spellCheck={false}
+        className={`${monoFieldClass} ${error ? 'border-status-error' : ''}`}
+      />
+      {error ? <p className={errorClass}>{error}</p> : hint ? <p className={hintClass}>{hint}</p> : null}
+    </div>
+  );
+}
+
 type TargetSelectProps = {
   label?: string;
   value: string;
@@ -160,6 +261,13 @@ type TargetSelectProps = {
   allowEnd?: boolean;
   allowNone?: boolean;
   fieldClass: string;
+};
+
+export type TaskResourceOption = {
+  value: string;
+  label: string;
+  description: string;
+  argumentsTemplate?: Record<string, unknown>;
 };
 
 function TargetSelect({ label, value, targets, onChange, allowEnd, allowNone, fieldClass }: TargetSelectProps) {
@@ -175,7 +283,7 @@ function TargetSelect({ label, value, targets, onChange, allowEnd, allowNone, fi
       >
         {allowNone && <option value={NONE_OPTION}>None</option>}
         {!allowNone && !value && <option value="">Select state...</option>}
-        {allowEnd && <option value={END_OPTION}>End workflow</option>}
+        {allowEnd && <option value={END_OPTION}>End: true</option>}
         {missing && <option value={value}>{value} (missing)</option>}
         {targets.map((target) => (
           <option key={target} value={target}>{target}</option>
@@ -184,6 +292,12 @@ function TargetSelect({ label, value, targets, onChange, allowEnd, allowNone, fi
       {missing && <p className={errorClass}>Target state "{value}" does not exist.</p>}
     </div>
   );
+}
+
+function resourceDisplayValue(resource: string) {
+  return resource.startsWith('voyager://')
+    ? resource.slice('voyager://'.length).replace(/^\/+/, '') || resource
+    : resource;
 }
 
 type Props = {
@@ -197,6 +311,7 @@ type Props = {
   onSetStart: () => void;
   fieldClass: string;
   monoFieldClass: string;
+  taskResourceOptions?: TaskResourceOption[];
 };
 
 export function StateEditorForm({
@@ -210,11 +325,13 @@ export function StateEditorForm({
   onSetStart,
   fieldClass,
   monoFieldClass,
+  taskResourceOptions = [],
 }: Props) {
   const type = stateTypeOf(state);
   const visual = getStateVisual(type);
   const otherStates = stateNames.filter((stateName) => stateName !== name);
   const [nameDraft, setNameDraft] = useState(name);
+  const [resourceSearch, setResourceSearch] = useState('');
 
   const setField = (field: string, value: unknown | undefined) => {
     const next = { ...state };
@@ -222,6 +339,18 @@ export function StateEditorForm({
       delete next[field];
     } else {
       next[field] = value;
+    }
+    onChange(next);
+  };
+
+  const setFields = (patch: Record<string, unknown | undefined>) => {
+    const next = { ...state };
+    for (const [field, value] of Object.entries(patch)) {
+      if (value === undefined) {
+        delete next[field];
+      } else {
+        next[field] = value;
+      }
     }
     onChange(next);
   };
@@ -257,7 +386,7 @@ export function StateEditorForm({
 
   const updateChoice = (index: number, patch: Record<string, unknown>) => {
     const nextChoices = choices.map((choice, choiceIndex) => (
-      choiceIndex === index ? { ...choice, ...patch } : choice
+      choiceIndex === index ? cleanPatchedObject({ ...choice, ...patch }, patch) : choice
     ));
     setField('Choices', nextChoices);
   };
@@ -272,26 +401,122 @@ export function StateEditorForm({
   const updateRetrier = (index: number, patch: Record<string, unknown>) => {
     updateArrayField('Retry', retriers.map((retrier, retrierIndex) => {
       if (retrierIndex !== index) return retrier;
-      const next = { ...retrier, ...patch };
-      for (const [key, value] of Object.entries(patch)) {
-        if (value === undefined) delete next[key];
-      }
-      return next;
+      return cleanPatchedObject({ ...retrier, ...patch }, patch);
     }));
   };
 
   const updateCatcher = (index: number, patch: Record<string, unknown>) => {
     updateArrayField('Catch', catchers.map((catcher, catcherIndex) => {
       if (catcherIndex !== index) return catcher;
-      const next = { ...catcher, ...patch };
-      for (const [key, value] of Object.entries(patch)) {
-        if (value === undefined) delete next[key];
-      }
-      return next;
+      return cleanPatchedObject({ ...catcher, ...patch }, patch);
     }));
   };
 
   const waitMode = state.Timestamp !== undefined ? 'Timestamp' : 'Seconds';
+  const argumentsObject: Record<string, unknown> = (
+    state.Arguments && typeof state.Arguments === 'object' && !Array.isArray(state.Arguments)
+      ? state.Arguments as Record<string, unknown>
+      : {}
+  );
+  const systemTaskResourceOptions: TaskResourceOption[] = [
+    {
+      value: 'voyager://webhook',
+      label: 'webhook',
+      description: 'System',
+      argumentsTemplate: {
+        url: '{% $states.input.url %}',
+        body: '{% $states.input.body %}',
+      },
+    },
+    {
+      value: 'voyager://send-email',
+      label: 'send-email',
+      description: 'System',
+      argumentsTemplate: {
+        to: '{% $states.input.to %}',
+        subject: '{% $states.input.subject %}',
+        body: '{% $states.input.body %}',
+      },
+    },
+  ];
+  const mergedTaskResourceOptions = [
+    ...systemTaskResourceOptions,
+    ...taskResourceOptions.filter((option) => (
+      !systemTaskResourceOptions.some((systemOption) => systemOption.value === option.value)
+    )),
+  ];
+  const resourceSearchQuery = resourceSearch.trim().toLowerCase();
+  const visibleTaskResourceOptions = resourceSearchQuery
+    ? mergedTaskResourceOptions.filter((option) => (
+      `${option.label} ${option.value} ${option.description}`.toLowerCase().includes(resourceSearchQuery)
+    ))
+    : mergedTaskResourceOptions;
+  const systemResourceValues = new Set(systemTaskResourceOptions.map((option) => option.value));
+  const visibleSystemResources = visibleTaskResourceOptions.filter((option) => systemResourceValues.has(option.value));
+  const visibleCustomResources = visibleTaskResourceOptions.filter((option) => !systemResourceValues.has(option.value));
+  const selectedTaskResourceOption = mergedTaskResourceOptions.find((option) => option.value === state.Resource);
+  const selectedSystemResource = state.Resource === 'voyager://webhook' || state.Resource === 'voyager://send-email'
+    ? state.Resource
+    : '';
+
+  const applyTaskResource = (option: TaskResourceOption) => {
+    const resourceChanged = state.Resource !== option.value;
+    setFields({
+      Resource: option.value,
+      Arguments: resourceChanged ? undefined : state.Arguments,
+    });
+  };
+
+  const applyArgumentsTemplate = (option: TaskResourceOption) => {
+    if (!option.argumentsTemplate) return;
+    setField('Arguments', option.argumentsTemplate);
+  };
+
+  const renderResourceOption = (option: TaskResourceOption) => {
+    const isSystem = systemResourceValues.has(option.value);
+    const isActive = state.Resource === option.value;
+    return (
+      <button
+        key={option.value}
+        type="button"
+        onClick={() => applyTaskResource(option)}
+        className={`flex w-full items-center gap-2 rounded-[3px] px-2 py-1.5 text-left transition-colors hover:bg-surface-container ${isActive ? 'bg-secondary-container/35' : ''}`}
+        title={option.value}
+      >
+        <span className={`material-symbols-outlined shrink-0 text-[15px] ${isSystem ? 'text-secondary' : 'text-status-info'}`}>
+          {isSystem ? 'bolt' : 'function'}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-mono-sm text-[11px] text-on-surface">{option.label}</span>
+          <span className="block truncate font-mono-sm text-[9px] text-on-surface-variant">{resourceDisplayValue(option.value)}</span>
+        </span>
+        {!isSystem && option.description ? (
+          <span className="shrink-0 rounded border border-border-subtle px-1.5 py-0.5 font-mono-sm text-[9px] text-on-surface-variant">
+            {option.description.replace(/^Function\s+/i, '')}
+          </span>
+        ) : null}
+      </button>
+    );
+  };
+
+  const resourceGroupLabelClass = 'flex items-center gap-1 px-2 pb-1 pt-1.5 font-mono-sm text-[9px] uppercase tracking-[0.08em] text-on-surface-variant/70';
+
+  const argumentText = (key: string) => {
+    const value = argumentsObject[key];
+    if (value === undefined) return '';
+    if (typeof value === 'string') return value;
+    return JSON.stringify(value, null, 2);
+  };
+
+  const updateArgument = (key: string, value: string) => {
+    const nextArguments = { ...argumentsObject };
+    if (value) {
+      nextArguments[key] = value;
+    } else {
+      delete nextArguments[key];
+    }
+    setField('Arguments', Object.keys(nextArguments).length > 0 ? nextArguments : undefined);
+  };
 
   const handleWaitModeChange = (mode: 'Seconds' | 'Timestamp') => {
     if (mode === waitMode) return;
@@ -341,7 +566,7 @@ export function StateEditorForm({
           <div className="flex items-center gap-2">
             {isStart ? (
               <span className="rounded border border-secondary/35 bg-secondary-container/40 px-2 py-1 font-mono-sm text-[10px] text-secondary-fixed">
-                START STATE
+                StartAt
               </span>
             ) : (
               <button
@@ -349,7 +574,7 @@ export function StateEditorForm({
                 onClick={onSetStart}
                 className="rounded border border-border-subtle px-2 py-1 font-mono-sm text-[10px] text-on-surface-variant transition-colors hover:border-secondary hover:text-secondary"
               >
-                Set as start
+                Set StartAt
               </button>
             )}
             {addRemoveButton(onDelete, `Delete state ${name}`)}
@@ -384,37 +609,160 @@ export function StateEditorForm({
       </div>
 
       {type === 'Task' && (
-        <div className={sectionClass}>
+        <CollapsibleSection
+          icon="database"
+          title="Task"
+          description="The resource this state invokes and the input it receives."
+        >
           <div className="space-y-4">
             <div>
               <label className={labelClass}>Resource</label>
               <input
                 value={typeof state.Resource === 'string' ? state.Resource : ''}
-                onChange={(event) => setField('Resource', event.target.value)}
-                placeholder="scheduler://queue/task"
+                onChange={(event) => {
+                  const value = event.target.value;
+                  const option = mergedTaskResourceOptions.find((resourceOption) => resourceOption.value === value);
+                  if (option) {
+                    applyTaskResource(option);
+                  } else {
+                    setField('Resource', value);
+                  }
+                }}
+                placeholder="voyager://webhook"
                 spellCheck={false}
                 list="voyager-task-resource-schemes"
                 className={monoFieldClass}
               />
               <datalist id="voyager-task-resource-schemes">
-                <option value="scheduler://" />
-                <option value="function://" />
-                <option value="webhook://" />
+                <option value="voyager://" />
+                {mergedTaskResourceOptions.map((option) => (
+                  <option key={option.value} value={option.value} label={option.label} />
+                ))}
                 <option value="mcp://" />
               </datalist>
+              <label className="mt-2 flex h-8 items-center gap-2 rounded-DEFAULT border border-border-subtle bg-surface-container-lowest px-2 text-on-surface-variant focus-within:border-secondary/60">
+                <Search size={12} className="shrink-0" />
+                <input
+                  value={resourceSearch}
+                  onChange={(event) => setResourceSearch(event.target.value)}
+                  placeholder="Search resources"
+                  className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono-sm text-[11px] text-on-surface outline-none placeholder:text-on-surface-variant/50 focus:border-0 focus:outline-none focus:ring-0"
+                />
+              </label>
+              <div className="mt-2 max-h-[186px] overflow-y-auto rounded-DEFAULT border border-border-subtle bg-surface-container-lowest/55 p-1">
+                {visibleSystemResources.length > 0 && (
+                  <div>
+                    <div className={resourceGroupLabelClass}>
+                      <span className="material-symbols-outlined text-[12px] text-secondary">bolt</span>
+                      System
+                    </div>
+                    {visibleSystemResources.map(renderResourceOption)}
+                  </div>
+                )}
+                {visibleCustomResources.length > 0 && (
+                  <div className={visibleSystemResources.length > 0 ? 'mt-1 border-t border-border-subtle/60 pt-1' : ''}>
+                    <div className={resourceGroupLabelClass}>
+                      <span className="material-symbols-outlined text-[12px] text-status-info">function</span>
+                      Functions
+                    </div>
+                    {visibleCustomResources.map(renderResourceOption)}
+                  </div>
+                )}
+                {visibleTaskResourceOptions.length === 0 && (
+                  <div className="px-2 py-3 text-center font-mono-sm text-[11px] text-on-surface-variant">
+                    No resources match.
+                  </div>
+                )}
+              </div>
               <p className={hintClass}>URI of the resource this task invokes.</p>
             </div>
-            <JsonField
-              label="Arguments"
-              value={state.Arguments}
-              onCommit={(value) => setField('Arguments', value)}
-              placeholder={'{\n  "orderId": "{% $states.input.orderId %}"\n}'}
-              hint="JSON sent to the resource. Defaults to the state input."
-              monoFieldClass={monoFieldClass}
-            />
+            {selectedSystemResource ? (
+              <div className="rounded-DEFAULT border border-border-subtle bg-surface-container-lowest/45 p-3">
+                <div className={labelClass}>Arguments</div>
+                <div className="mt-3 space-y-3">
+                  {selectedSystemResource === 'voyager://webhook' ? (
+                    <>
+                      <div>
+                        <label className={labelClass}>url</label>
+                        <input
+                          value={argumentText('url')}
+                          onChange={(event) => updateArgument('url', event.target.value)}
+                          placeholder="{% $states.input.url %}"
+                          spellCheck={false}
+                          className={monoFieldClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>body</label>
+                        <textarea
+                          value={argumentText('body')}
+                          onChange={(event) => updateArgument('body', event.target.value)}
+                          placeholder="{% $states.input.body %}"
+                          rows={3}
+                          spellCheck={false}
+                          className={`${monoFieldClass} h-auto min-h-[72px] resize-y py-2 leading-relaxed`}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <label className={labelClass}>to</label>
+                        <input
+                          value={argumentText('to')}
+                          onChange={(event) => updateArgument('to', event.target.value)}
+                          placeholder="{% $states.input.to %}"
+                          spellCheck={false}
+                          className={monoFieldClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>subject</label>
+                        <input
+                          value={argumentText('subject')}
+                          onChange={(event) => updateArgument('subject', event.target.value)}
+                          placeholder="{% $states.input.subject %}"
+                          spellCheck={false}
+                          className={monoFieldClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>body</label>
+                        <textarea
+                          value={argumentText('body')}
+                          onChange={(event) => updateArgument('body', event.target.value)}
+                          placeholder="{% $states.input.body %}"
+                          rows={3}
+                          spellCheck={false}
+                          className={`${monoFieldClass} h-auto min-h-[72px] resize-y py-2 leading-relaxed`}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+                {selectedTaskResourceOption?.argumentsTemplate && (
+                  <button
+                    type="button"
+                    onClick={() => applyArgumentsTemplate(selectedTaskResourceOption)}
+                    className="mt-3 h-7 rounded-DEFAULT border border-border-subtle px-2 font-mono-sm text-[10px] text-on-surface-variant transition-colors hover:border-secondary/45 hover:text-secondary"
+                  >
+                    Fill from input
+                  </button>
+                )}
+              </div>
+            ) : (
+              <JsonField
+                label="Arguments"
+                value={state.Arguments}
+                onCommit={(value) => setField('Arguments', value)}
+                placeholder={'{\n  "orderId": "{% $states.input.orderId %}"\n}'}
+                hint="JSON sent to the resource. Defaults to the state input."
+                monoFieldClass={monoFieldClass}
+              />
+            )}
             <div className="grid grid-cols-2 gap-3">
               <IntegerField
-                label="Timeout seconds"
+                label="TimeoutSeconds"
                 value={state.TimeoutSeconds}
                 onCommit={(value) => setField('TimeoutSeconds', value)}
                 placeholder="e.g. 30"
@@ -422,7 +770,7 @@ export function StateEditorForm({
                 monoFieldClass={monoFieldClass}
               />
               <IntegerField
-                label="Heartbeat seconds"
+                label="HeartbeatSeconds"
                 value={state.HeartbeatSeconds}
                 onCommit={(value) => setField('HeartbeatSeconds', value)}
                 placeholder="Optional"
@@ -431,30 +779,55 @@ export function StateEditorForm({
               />
             </div>
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {type === 'Choice' && (
-        <div className={sectionClass}>
-          <label className={labelClass}>Choice rules</label>
-          <p className={hintClass}>Evaluated in order; the first true condition wins.</p>
+        <CollapsibleSection
+          icon="call_split"
+          title="Choice rules"
+          description="Evaluated top to bottom — the first rule whose condition is true wins."
+        >
           <div className="mt-3 space-y-3">
             {choices.map((choice, index) => (
               <div key={index} className="rounded-DEFAULT border border-border-subtle p-3">
                 <div className="flex items-start gap-2">
                   <div className="flex-1 space-y-2">
-                    <input
-                      value={typeof choice?.Condition === 'string' ? choice.Condition : ''}
-                      onChange={(event) => updateChoice(index, { Condition: event.target.value })}
-                      placeholder="{% $states.input.total > 1000 %}"
-                      spellCheck={false}
-                      className={monoFieldClass}
-                    />
+                    <div>
+                      <label className={labelClass}>Condition</label>
+                      <input
+                        value={typeof choice?.Condition === 'string' ? choice.Condition : ''}
+                        onChange={(event) => updateChoice(index, { Condition: event.target.value })}
+                        placeholder="{% $states.input.total > 1000 %}"
+                        spellCheck={false}
+                        className={monoFieldClass}
+                      />
+                    </div>
                     <TargetSelect
+                      label="Next"
                       value={typeof choice?.Next === 'string' ? choice.Next : ''}
                       targets={otherStates}
                       onChange={(value) => updateChoice(index, { Next: value })}
                       fieldClass={fieldClass}
+                    />
+                    <JsonField
+                      label="Assign"
+                      value={choice?.Assign}
+                      onCommit={(value) => updateChoice(index, { Assign: value })}
+                      requireObject
+                      rows={3}
+                      placeholder={'{\n  "route": "{% $states.input.route %}"\n}'}
+                      hint="Optional variables assigned only when this rule is selected."
+                      monoFieldClass={monoFieldClass}
+                    />
+                    <JsonField
+                      label="Output"
+                      value={choice?.Output}
+                      onCommit={(value) => updateChoice(index, { Output: value })}
+                      rows={3}
+                      placeholder={'{\n  "selected": true\n}'}
+                      hint="Optional output used only when this rule is selected."
+                      monoFieldClass={monoFieldClass}
                     />
                   </div>
                   {addRemoveButton(
@@ -477,12 +850,15 @@ export function StateEditorForm({
             />
             <p className={hintClass}>Taken when no rule matches. Without it, the workflow fails with States.NoChoiceMatched.</p>
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {type === 'Wait' && (
-        <div className={sectionClass}>
-          <label className={labelClass}>Wait for</label>
+        <CollapsibleSection
+          icon="schedule"
+          title="Wait"
+          description="Pause here for a number of seconds or until a specific timestamp."
+        >
           <div className="mt-2 grid grid-cols-2 gap-2">
             {(['Seconds', 'Timestamp'] as const).map((mode) => (
               <button
@@ -493,7 +869,7 @@ export function StateEditorForm({
                   ? 'border-secondary bg-secondary-container/40 text-secondary-fixed'
                   : 'border-border-subtle text-on-surface-variant hover:text-on-surface'}`}
               >
-                {mode === 'Seconds' ? 'Duration' : 'Timestamp'}
+                {mode}
               </button>
             ))}
           </div>
@@ -521,11 +897,15 @@ export function StateEditorForm({
               </div>
             )}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {type === 'Fail' && (
-        <div className={sectionClass}>
+        <CollapsibleSection
+          icon="cancel"
+          title="Failure"
+          description="Stops the workflow immediately and reports this error."
+        >
           <div className="space-y-4">
             <div>
               <label className={labelClass}>Error</label>
@@ -548,11 +928,15 @@ export function StateEditorForm({
               />
             </div>
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {type === 'Parallel' && (
-        <div className={sectionClass}>
+        <CollapsibleSection
+          icon="account_tree"
+          title="Parallel branches"
+          description="Run every branch at the same time; each receives the same input."
+        >
           <div className="space-y-4">
             <JsonField
               label="Branches"
@@ -571,11 +955,15 @@ export function StateEditorForm({
               monoFieldClass={monoFieldClass}
             />
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {type === 'Map' && (
-        <div className={sectionClass}>
+        <CollapsibleSection
+          icon="repeat"
+          title="Map"
+          description="Run the processor once for each item in a collection."
+        >
           <div className="space-y-4">
             <JsonField
               label="Items"
@@ -587,14 +975,14 @@ export function StateEditorForm({
               monoFieldClass={monoFieldClass}
             />
             <JsonField
-              label="Item selector"
+              label="ItemSelector"
               value={state.ItemSelector}
               onCommit={(value) => setField('ItemSelector', value)}
               hint="Optional transform applied to each item before processing."
               monoFieldClass={monoFieldClass}
             />
             <JsonField
-              label="Item processor"
+              label="ItemProcessor"
               value={state.ItemProcessor}
               onCommit={(value) => setField('ItemProcessor', value)}
               requireObject
@@ -603,7 +991,7 @@ export function StateEditorForm({
               monoFieldClass={monoFieldClass}
             />
             <IntegerField
-              label="Max concurrency"
+              label="MaxConcurrency"
               value={state.MaxConcurrency}
               onCommit={(value) => setField('MaxConcurrency', value)}
               placeholder="0 = unlimited, 1 = sequential"
@@ -611,28 +999,35 @@ export function StateEditorForm({
               monoFieldClass={monoFieldClass}
             />
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {supportsNextOrEnd(type) && (
-        <div className={sectionClass}>
+        <CollapsibleSection
+          icon="arrow_forward"
+          title="Transition"
+          description="Where execution continues once this state finishes, or End to stop the workflow."
+        >
           <TargetSelect
-            label="Then"
             value={transitionValue}
             targets={otherStates}
             onChange={handleTransitionChange}
             allowEnd
             fieldClass={fieldClass}
           />
-        </div>
+        </CollapsibleSection>
       )}
 
       {(supportsAssign(type) || supportsOutput(type)) && (
-        <div className={sectionClass}>
+        <CollapsibleSection
+          icon="dataset"
+          title="Data flow"
+          description="Reshape this state's output and expose variables to later states. Optional."
+        >
           <div className="space-y-4">
             {supportsAssign(type) && (
               <JsonField
-                label="Assign variables"
+                label="Assign"
                 value={state.Assign}
                 onCommit={(value) => setField('Assign', value)}
                 requireObject
@@ -652,11 +1047,16 @@ export function StateEditorForm({
               />
             )}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {supportsRetryCatch(type) && (
-        <div className={sectionClass}>
+        <CollapsibleSection
+          icon="restart_alt"
+          title="Error handling"
+          description="Retry transient failures, then catch remaining errors and route to a fallback state."
+          badge={retriers.length > 0 || catchers.length > 0 ? `${retriers.length + catchers.length}` : undefined}
+        >
           <label className={labelClass}>Retry</label>
           <div className="mt-3 space-y-3">
             {retriers.map((retrier, index) => (
@@ -664,7 +1064,7 @@ export function StateEditorForm({
                 <div className="flex items-start gap-2">
                   <div className="flex-1 space-y-3">
                     <div>
-                      <label className={labelClass}>Errors (comma separated)</label>
+                      <label className={labelClass}>ErrorEquals</label>
                       <input
                         value={Array.isArray(retrier?.ErrorEquals) ? retrier.ErrorEquals.join(', ') : ''}
                         onChange={(event) => updateRetrier(index, {
@@ -677,7 +1077,7 @@ export function StateEditorForm({
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <IntegerField
-                        label="Interval seconds"
+                        label="IntervalSeconds"
                         value={retrier?.IntervalSeconds}
                         onCommit={(value) => updateRetrier(index, { IntervalSeconds: value })}
                         placeholder="1"
@@ -685,13 +1085,43 @@ export function StateEditorForm({
                         monoFieldClass={monoFieldClass}
                       />
                       <IntegerField
-                        label="Max attempts"
+                        label="MaxAttempts"
                         value={retrier?.MaxAttempts}
                         onCommit={(value) => updateRetrier(index, { MaxAttempts: value })}
                         placeholder="3"
                         min={0}
                         monoFieldClass={monoFieldClass}
                       />
+                      <NumberField
+                        label="BackoffRate"
+                        value={retrier?.BackoffRate}
+                        onCommit={(value) => updateRetrier(index, { BackoffRate: value })}
+                        placeholder="2"
+                        min={1}
+                        monoFieldClass={monoFieldClass}
+                      />
+                      <IntegerField
+                        label="MaxDelaySeconds"
+                        value={retrier?.MaxDelaySeconds}
+                        onCommit={(value) => updateRetrier(index, { MaxDelaySeconds: value })}
+                        placeholder="Optional"
+                        min={1}
+                        monoFieldClass={monoFieldClass}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass}>JitterStrategy</label>
+                      <select
+                        value={typeof retrier?.JitterStrategy === 'string' ? retrier.JitterStrategy : NONE_OPTION}
+                        onChange={(event) => updateRetrier(index, {
+                          JitterStrategy: event.target.value === NONE_OPTION ? undefined : event.target.value,
+                        })}
+                        className={`${fieldClass} appearance-none`}
+                      >
+                        <option value={NONE_OPTION}>None</option>
+                        <option value="FULL">FULL</option>
+                        <option value="NONE">NONE</option>
+                      </select>
                     </div>
                   </div>
                   {addRemoveButton(
@@ -715,7 +1145,7 @@ export function StateEditorForm({
                   <div className="flex items-start gap-2">
                     <div className="flex-1 space-y-3">
                       <div>
-                        <label className={labelClass}>Errors (comma separated)</label>
+                        <label className={labelClass}>ErrorEquals</label>
                         <input
                           value={Array.isArray(catcher?.ErrorEquals) ? catcher.ErrorEquals.join(', ') : ''}
                           onChange={(event) => updateCatcher(index, {
@@ -727,11 +1157,30 @@ export function StateEditorForm({
                         />
                       </div>
                       <TargetSelect
-                        label="Recover via"
+                        label="Next"
                         value={typeof catcher?.Next === 'string' ? catcher.Next : ''}
                         targets={otherStates}
                         onChange={(value) => updateCatcher(index, { Next: value })}
                         fieldClass={fieldClass}
+                      />
+                      <JsonField
+                        label="Assign"
+                        value={catcher?.Assign}
+                        onCommit={(value) => updateCatcher(index, { Assign: value })}
+                        requireObject
+                        rows={3}
+                        placeholder={'{\n  "errorName": "{% $states.errorOutput.Error %}"\n}'}
+                        hint="Optional variables assigned only when this catcher handles the error."
+                        monoFieldClass={monoFieldClass}
+                      />
+                      <JsonField
+                        label="Output"
+                        value={catcher?.Output}
+                        onCommit={(value) => updateCatcher(index, { Output: value })}
+                        rows={3}
+                        placeholder={'{\n  "handled": true,\n  "error": "{% $states.errorOutput %}"\n}'}
+                        hint="Optional output passed to the recovery state."
+                        monoFieldClass={monoFieldClass}
                       />
                     </div>
                     {addRemoveButton(
@@ -747,7 +1196,7 @@ export function StateEditorForm({
               { ErrorEquals: ['States.ALL'], Next: '' },
             ]))}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
     </div>
   );

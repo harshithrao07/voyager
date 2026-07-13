@@ -5,7 +5,6 @@ import com.job.scheduler.entity.Workflow;
 import com.job.scheduler.entity.WorkflowDefinition;
 import com.job.scheduler.entity.WorkflowExecution;
 import com.job.scheduler.enums.ExecutionScopeType;
-import com.job.scheduler.enums.WorkflowPriority;
 import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.repository.ExecutionScopeRepository;
 import com.job.scheduler.repository.WorkflowExecutionRepository;
@@ -213,7 +212,6 @@ class WorkflowExecutionServiceTest {
         workflow.setId(UUID.randomUUID());
         workflow.setName("Workflow");
         workflow.setStatus(WorkflowStatus.ACTIVE);
-        workflow.setPriority(WorkflowPriority.MEDIUM);
         workflow.setTimezone("UTC");
         workflow.setIdempotencyKey("execution-service-test");
         return workflow;

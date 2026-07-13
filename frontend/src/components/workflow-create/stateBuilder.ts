@@ -11,7 +11,7 @@ export const STATE_TYPES = ['Task', 'Pass', 'Choice', 'Wait', 'Parallel', 'Map',
 export type StateType = (typeof STATE_TYPES)[number];
 
 export const STATE_TYPE_DESCRIPTIONS: Record<StateType, string> = {
-  Task: 'Invoke a resource such as scheduler://, function://, webhook:// or mcp://',
+  Task: 'Invoke a resource such as voyager://webhook, voyager://namespace/name or mcp://',
   Pass: 'Forward input to output, optionally reshaping it',
   Choice: 'Route to the first branch whose condition is true',
   Wait: 'Pause for a duration or until a timestamp',
@@ -47,7 +47,7 @@ export function supportsRetryCatch(type: StateType) {
 export function createStateTemplate(type: StateType): AslState {
   switch (type) {
     case 'Task':
-      return { Type: 'Task', Resource: 'scheduler://', End: true };
+      return { Type: 'Task', Resource: 'voyager://', End: true };
     case 'Pass':
       return { Type: 'Pass', End: true };
     case 'Choice':
@@ -135,18 +135,229 @@ export function deleteState(definition: AslDefinition, name: string): AslDefinit
   const states = { ...(definition.States || {}) };
   delete states[name];
   const remaining = Object.keys(states);
+  const nextStates: Record<string, AslState> = {};
 
-  return {
+  for (const [stateName, state] of Object.entries(states)) {
+    const nextState: AslState = { ...state };
+    const type = stateTypeOf(nextState);
+
+    if (nextState.Next === name) {
+      delete nextState.Next;
+      if (supportsNextOrEnd(type)) {
+        nextState.End = true;
+      }
+    }
+
+    if (nextState.Default === name) {
+      delete nextState.Default;
+    }
+
+    if (Array.isArray(nextState.Choices)) {
+      nextState.Choices = nextState.Choices.filter((choice: any) => choice?.Next !== name);
+    }
+
+    if (Array.isArray(nextState.Catch)) {
+      const catchers = nextState.Catch.filter((catcher: any) => catcher?.Next !== name);
+      if (catchers.length > 0) {
+        nextState.Catch = catchers;
+      } else {
+        delete nextState.Catch;
+      }
+    }
+
+    nextStates[stateName] = nextState;
+  }
+
+  const nextDefinition: AslDefinition = {
     ...definition,
-    StartAt: definition.StartAt === name ? remaining[0] || '' : definition.StartAt,
-    States: states,
+    States: nextStates,
   };
+
+  if (definition.StartAt === name) {
+    if (remaining[0]) {
+      nextDefinition.StartAt = remaining[0];
+    } else {
+      nextDefinition.StartAt = '';
+    }
+  }
+
+  return nextDefinition;
 }
 
 export function updateState(definition: AslDefinition, name: string, state: AslState): AslDefinition {
   return {
     ...definition,
     States: { ...(definition.States || {}), [name]: state },
+  };
+}
+
+export type ConnectStatesResult = {
+  definition: AslDefinition;
+  changed: boolean;
+  message?: string;
+};
+
+export type TransitionKind = 'next' | 'choice' | 'default' | 'catch';
+
+export type TransitionRef = {
+  sourceName: string;
+  targetName: string;
+  kind: TransitionKind;
+  index?: number;
+};
+
+export function connectStates(definition: AslDefinition, sourceName: string, targetName: string): ConnectStatesResult {
+  const states = definition.States || {};
+  const source = states[sourceName];
+  const target = states[targetName];
+  if (!source || !target || sourceName === targetName) {
+    return { definition, changed: false, message: 'Pick two different states to connect.' };
+  }
+
+  const sourceType = stateTypeOf(source);
+  if (sourceType === 'Succeed' || sourceType === 'Fail') {
+    return { definition, changed: false, message: `${sourceType} states cannot have outgoing transitions.` };
+  }
+
+  if (sourceType === 'Choice') {
+    const choices = Array.isArray(source.Choices) ? [...source.Choices] : [];
+    const alreadyConnected = source.Default === targetName || choices.some((choice: any) => choice?.Next === targetName);
+    if (alreadyConnected) {
+      return { definition, changed: false, message: 'Those states are already connected.' };
+    }
+
+    const emptyChoiceIndex = choices.findIndex((choice: any) => !choice?.Next);
+    let nextState: AslState;
+    let message = 'Added Choice condition branch. Edit the condition in the inspector.';
+    if (emptyChoiceIndex >= 0) {
+      choices[emptyChoiceIndex] = {
+        ...(choices[emptyChoiceIndex] || {}),
+        Condition: choices[emptyChoiceIndex]?.Condition || '{% true %}',
+        Next: targetName,
+      };
+      nextState = { ...source, Choices: choices };
+    } else {
+      nextState = {
+        ...source,
+        Choices: [...choices, { Condition: '{% true %}', Next: targetName }],
+      };
+      message = 'Added Choice condition branch. Edit the condition in the inspector. Use Default in the inspector for fallback routing.';
+    }
+
+    return {
+      definition: updateState(definition, sourceName, nextState),
+      changed: true,
+      message,
+    };
+  }
+
+  if (!supportsNextOrEnd(sourceType)) {
+    return { definition, changed: false, message: `${sourceType} states cannot use Next transitions.` };
+  }
+
+  if (source.Next === targetName) {
+    return { definition, changed: false, message: 'Those states are already connected.' };
+  }
+
+  const nextState: AslState = { ...source, Next: targetName };
+  delete nextState.End;
+  return {
+    definition: updateState(definition, sourceName, nextState),
+    changed: true,
+    message: 'Connected states.',
+  };
+}
+
+export function disconnectStates(definition: AslDefinition, transition: TransitionRef): ConnectStatesResult {
+  const states = definition.States || {};
+  const source = states[transition.sourceName];
+  if (!source || !(transition.targetName in states)) {
+    return { definition, changed: false, message: 'That transition no longer exists.' };
+  }
+
+  if (transition.kind === 'next') {
+    if (source.Next !== transition.targetName) {
+      return { definition, changed: false, message: 'That transition no longer exists.' };
+    }
+    const nextState: AslState = { ...source, End: true };
+    delete nextState.Next;
+    return {
+      definition: updateState(definition, transition.sourceName, nextState),
+      changed: true,
+      message: 'Disconnected transition. Source state now ends the workflow.',
+    };
+  }
+
+  if (transition.kind === 'default') {
+    if (source.Default !== transition.targetName) {
+      return { definition, changed: false, message: 'That default transition no longer exists.' };
+    }
+    const nextState: AslState = { ...source };
+    delete nextState.Default;
+    return {
+      definition: updateState(definition, transition.sourceName, nextState),
+      changed: true,
+      message: 'Removed Choice default transition.',
+    };
+  }
+
+  if (transition.kind === 'choice') {
+    const choices = Array.isArray(source.Choices) ? [...source.Choices] : [];
+    const index = transition.index ?? choices.findIndex((choice: any) => choice?.Next === transition.targetName);
+    if (index < 0 || choices[index]?.Next !== transition.targetName) {
+      return { definition, changed: false, message: 'That Choice branch no longer exists.' };
+    }
+    choices.splice(index, 1);
+    return {
+      definition: updateState(definition, transition.sourceName, { ...source, Choices: choices }),
+      changed: true,
+      message: 'Removed Choice condition branch.',
+    };
+  }
+
+  const catchers = Array.isArray(source.Catch) ? [...source.Catch] : [];
+  const index = transition.index ?? catchers.findIndex((catcher: any) => catcher?.Next === transition.targetName);
+  if (index < 0 || catchers[index]?.Next !== transition.targetName) {
+    return { definition, changed: false, message: 'That catcher transition no longer exists.' };
+  }
+  catchers.splice(index, 1);
+  const nextState: AslState = { ...source };
+  if (catchers.length > 0) {
+    nextState.Catch = catchers;
+  } else {
+    delete nextState.Catch;
+  }
+  return {
+    definition: updateState(definition, transition.sourceName, nextState),
+    changed: true,
+    message: 'Removed catcher transition.',
+  };
+}
+
+export function setChoiceDefaultTransition(definition: AslDefinition, transition: TransitionRef): ConnectStatesResult {
+  const states = definition.States || {};
+  const source = states[transition.sourceName];
+  if (!source || stateTypeOf(source) !== 'Choice' || !(transition.targetName in states)) {
+    return { definition, changed: false, message: 'Only Choice transitions can be made default.' };
+  }
+  if (source.Default === transition.targetName) {
+    return { definition, changed: false, message: 'This target is already the Choice default.' };
+  }
+
+  const choices = Array.isArray(source.Choices)
+    ? source.Choices.filter((choice: any, index: number) => (
+      index !== transition.index && choice?.Next !== transition.targetName
+    ))
+    : [];
+
+  return {
+    definition: updateState(definition, transition.sourceName, {
+      ...source,
+      Choices: choices,
+      Default: transition.targetName,
+    }),
+    changed: true,
+    message: 'Set as Choice default. Fallback routing is now explicit.',
   };
 }
 

@@ -1,4 +1,4 @@
-import type { WorkflowAiStage, WorkflowPriorityDTO } from '../../api';
+import type { WorkflowAiStage } from '../../api';
 
 export type DefinitionMode = 'manual' | 'ai';
 
@@ -36,7 +36,6 @@ export type ChatSnapshot = {
   conversationId: string | null;
   conversationStage: WorkflowAiStage;
   name: string;
-  priority: WorkflowPriorityDTO;
   maxAttempts: number;
   cronExpression: string;
   timezone: string;

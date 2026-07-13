@@ -1,13 +1,14 @@
 import Editor from '@monaco-editor/react';
 import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { AlertCircle, Braces, ListPlus, Loader2, PanelRightClose, PanelRightOpen, Save } from 'lucide-react';
-import type { WorkflowPriorityDTO } from '../../api';
+import { AlertCircle, Braces, FlaskConical, ListPlus, Loader2, PanelRightClose, PanelRightOpen, Save, Wand2, X } from 'lucide-react';
 import type { DefinitionStatus, WorkflowPreview } from './types';
 import { AslGraphViewer } from '../AslGraphViewer';
-import { StateBuilderPanel } from './StateBuilderPanel';
 import type { AslDefinition } from './stateBuilder';
+import { StateCanvasBuilder } from './StateCanvasBuilder';
+import type { TaskResourceOption } from './StateEditorForm';
 import { WorkflowPreviewPanel } from './WorkflowPreviewPanel';
 import { WorkflowMetadataForm } from './WorkflowMetadataForm';
+import { WorkflowDraftTestBench } from './WorkflowDraftTestBench';
 
 type EditorView = 'code' | 'builder';
 
@@ -23,8 +24,6 @@ type Props = {
   onSave: () => void;
   name: string;
   onNameChange: (value: string) => void;
-  priority: WorkflowPriorityDTO;
-  onPriorityChange: (value: WorkflowPriorityDTO) => void;
   maxAttempts: number;
   onMaxAttemptsChange: (value: number) => void;
   idempotencyKey: string;
@@ -35,6 +34,7 @@ type Props = {
   onTimezoneChange: (value: string) => void;
   fieldClass: string;
   monoFieldClass: string;
+  taskResourceOptions?: TaskResourceOption[];
   reserveTopControlsSpace?: boolean;
 };
 
@@ -50,8 +50,6 @@ export function ManualWorkflowEditor({
   onSave,
   name,
   onNameChange,
-  priority,
-  onPriorityChange,
   maxAttempts,
   onMaxAttemptsChange,
   idempotencyKey,
@@ -62,15 +60,16 @@ export function ManualWorkflowEditor({
   onTimezoneChange,
   fieldClass,
   monoFieldClass,
+  taskResourceOptions,
   reserveTopControlsSpace,
 }: Props) {
   const [selectedStateName, setSelectedStateName] = useState('');
-  const [editorView, setEditorView] = useState<EditorView>('code');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [editorView, setEditorView] = useState<EditorView>('builder');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(360);
-  const [topPct, setTopPct] = useState(52);
+  const [layoutVersion, setLayoutVersion] = useState(0);
+  const [testBenchOpen, setTestBenchOpen] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const mainRef = useRef<HTMLDivElement>(null);
 
   const startSidebarResize = (event: ReactPointerEvent) => {
     event.preventDefault();
@@ -91,44 +90,40 @@ export function ManualWorkflowEditor({
     document.body.style.userSelect = 'none';
   };
 
-  const startVerticalResize = (event: ReactPointerEvent) => {
-    event.preventDefault();
-    const onMove = (moveEvent: PointerEvent) => {
-      const rect = mainRef.current?.getBoundingClientRect();
-      if (!rect || rect.height === 0) return;
-      const pct = ((moveEvent.clientY - rect.top) / rect.height) * 100;
-      setTopPct(Math.min(80, Math.max(20, pct)));
-    };
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    document.body.style.cursor = 'row-resize';
-    document.body.style.userSelect = 'none';
-  };
-
   const parsedDefinition = useMemo(() => {
-    if (!definitionStatus.valid) return null;
     try {
-      return JSON.parse(definitionText);
+      const parsed = JSON.parse(definitionText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return null;
+      }
+      const states = parsed.States && typeof parsed.States === 'object' && !Array.isArray(parsed.States)
+        ? parsed.States
+        : {};
+      return { ...parsed, States: states };
     } catch {
       return null;
     }
-  }, [definitionText, definitionStatus.valid]);
+  }, [definitionText]);
 
   const handleBuilderChange = (nextDefinition: AslDefinition) => {
     onDefinitionTextChange(JSON.stringify(nextDefinition, null, 2));
   };
 
+  const handleFormat = () => {
+    try {
+      const parsed = JSON.parse(definitionText);
+      onDefinitionTextChange(JSON.stringify(parsed, null, 2));
+    } catch {
+      // Keep invalid JSON untouched; the canvas layout can still be reset if a previous parse exists.
+    }
+    setLayoutVersion((version) => version + 1);
+  };
+
   const viewToggle = (
     <div className="flex items-center gap-1 rounded-DEFAULT border border-border-subtle p-0.5">
       {([
-        { view: 'code', label: 'Code', icon: <Braces size={12} /> },
         { view: 'builder', label: 'Builder', icon: <ListPlus size={12} /> },
+        { view: 'code', label: 'Code', icon: <Braces size={12} /> },
       ] as const).map(({ view, label, icon }) => (
         <button
           key={view}
@@ -148,8 +143,8 @@ export function ManualWorkflowEditor({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-transparent">
       <div ref={bodyRef} className="flex min-h-0 flex-1 overflow-hidden">
-        <main ref={mainRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-base">
-          <div className="flex min-h-0 shrink-0 flex-col" style={{ height: `${topPct}%` }}>
+        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-base">
+          <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex h-14 shrink-0 items-center border-b border-border-subtle bg-surface-base px-6">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2 font-mono-sm text-[13px] text-on-surface">
@@ -157,6 +152,26 @@ export function ManualWorkflowEditor({
                 definition.json
               </div>
               {viewToggle}
+              <button
+                type="button"
+                onClick={handleFormat}
+                className="flex h-8 items-center gap-1.5 rounded-DEFAULT border border-border-subtle px-3 font-mono-sm text-[11px] text-on-surface-variant transition-colors hover:border-secondary hover:text-secondary"
+                title="Format JSON and canvas"
+              >
+                <Wand2 size={13} />
+                Format
+              </button>
+              <button
+                type="button"
+                onClick={() => setTestBenchOpen((open) => !open)}
+                className={`flex h-8 items-center gap-1.5 rounded-DEFAULT border px-3 font-mono-sm text-[11px] transition-colors ${testBenchOpen
+                  ? 'border-secondary/50 bg-secondary-container/35 text-secondary'
+                  : 'border-border-subtle text-on-surface-variant hover:border-secondary hover:text-secondary'}`}
+                title="Test draft states without saving an execution"
+              >
+                {testBenchOpen ? <X size={13} /> : <FlaskConical size={13} />}
+                {testBenchOpen ? 'Close test' : 'Test draft'}
+              </button>
             </div>
           </div>
           <div className="flex min-h-9 shrink-0 items-center gap-x-4 gap-y-1 border-b border-border-subtle bg-surface-base px-6 py-2 font-mono-sm text-[12px] text-on-surface-variant">
@@ -172,69 +187,71 @@ export function ManualWorkflowEditor({
           </div>
           <div className="flex min-h-0 flex-1 flex-col">
             {editorView === 'code' ? (
-              <Editor
-                height="100%"
-                defaultLanguage="json"
-                theme="vs-dark"
-                value={definitionText}
-                onChange={(value) => onDefinitionTextChange(value || '')}
-                options={{
-                  minimap: { enabled: false },
-                  scrollBeyondLastLine: false,
-                  fontSize: 14,
-                  fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                  wordWrap: 'on',
-                  tabSize: 2,
-                  lineNumbersMinChars: 3,
-                  padding: { top: 16, bottom: 16 },
-                }}
-              />
+              <div className="grid min-h-0 flex-1 grid-cols-[minmax(360px,46%)_minmax(420px,1fr)]">
+                <div className="min-h-0 border-r border-border-subtle">
+                  <Editor
+                    height="100%"
+                    defaultLanguage="json"
+                    theme="vs-dark"
+                    value={definitionText}
+                    onChange={(value) => onDefinitionTextChange(value || '')}
+                    options={{
+                      minimap: { enabled: false },
+                      scrollBeyondLastLine: false,
+                      fontSize: 14,
+                      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                      wordWrap: 'on',
+                      tabSize: 2,
+                      lineNumbersMinChars: 3,
+                      padding: { top: 16, bottom: 16 },
+                    }}
+                  />
+                </div>
+                <div className="flex min-h-0 flex-col">
+                  <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border-subtle bg-surface-base px-4 font-mono-sm text-[12px] text-on-surface">
+                    <span className="material-symbols-outlined text-[17px]">account_tree</span>
+                    canvas
+                  </div>
+                  <div className="min-h-0 flex-1">
+                    {parsedDefinition ? (
+                      <AslGraphViewer
+                        definition={parsedDefinition}
+                        selectedStateName={selectedStateName}
+                        onStateSelect={setSelectedStateName}
+                        layoutVersion={layoutVersion}
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center bg-surface-lowest px-6 text-center font-mono-sm text-[12px] text-on-surface-variant">
+                        Fix the definition JSON to render the canvas.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             ) : parsedDefinition ? (
-              <StateBuilderPanel
+              <StateCanvasBuilder
                 definition={parsedDefinition}
                 onDefinitionChange={handleBuilderChange}
                 selectedStateName={selectedStateName}
                 onStateSelect={setSelectedStateName}
                 fieldClass={fieldClass}
                 monoFieldClass={monoFieldClass}
+                taskResourceOptions={taskResourceOptions}
+                layoutVersion={layoutVersion}
               />
             ) : (
               <div className="flex flex-1 items-center justify-center px-6 text-center font-mono-sm text-[12px] text-on-surface-variant">
-                The definition JSON is invalid. Switch to Code view to fix it before using the builder.
+                The definition JSON cannot be parsed. Switch to Code view to fix it before using the builder.
               </div>
             )}
           </div>
-          </div>
-
-          <div
-            role="separator"
-            aria-orientation="horizontal"
-            onPointerDown={startVerticalResize}
-            className="group hidden h-1.5 shrink-0 cursor-row-resize items-center justify-center bg-border-subtle/40 transition-colors hover:bg-primary/50 xl:flex"
-          >
-            <span className="h-0.5 w-8 rounded-full bg-border-subtle transition-colors group-hover:bg-primary" />
-          </div>
-
-          <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex h-14 shrink-0 items-center justify-between border-y border-border-subtle bg-surface-base px-6">
-            <div className="flex items-center gap-2 font-mono-sm text-[13px] text-on-surface">
-              <span className="material-symbols-outlined text-[18px]">account_tree</span>
-              state machine
-            </div>
-          </div>
-          <div className="min-h-0 flex-1">
-            {parsedDefinition ? (
-              <AslGraphViewer
-                definition={parsedDefinition}
-                selectedStateName={selectedStateName}
-                onStateSelect={setSelectedStateName}
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center bg-surface-lowest px-6 text-center font-mono-sm text-[12px] text-on-surface-variant">
-                Fix the definition JSON to render the state machine diagram.
-              </div>
-            )}
-          </div>
+          {testBenchOpen && parsedDefinition && (
+            <WorkflowDraftTestBench
+              definition={parsedDefinition}
+              selectedStateName={selectedStateName}
+              onStateSelect={setSelectedStateName}
+            />
+          )}
           </div>
 
           {!sidebarOpen && (
@@ -316,7 +333,10 @@ export function ManualWorkflowEditor({
               </div>
             ) : (
               <div className="mt-5 rounded-DEFAULT border border-secondary/35 bg-secondary-container/45 p-4 text-body-sm text-secondary-fixed">
-                Ready to save as a draft workflow.
+                Ready to save as a draft.
+                <span className="mt-1 block text-[11px] text-secondary-fixed/70">
+                  Structure checks pass. JSONata expressions and runtime behavior aren't verified.
+                </span>
               </div>
             )}
           </div>
@@ -324,8 +344,6 @@ export function ManualWorkflowEditor({
             <WorkflowMetadataForm
               name={name}
               onNameChange={onNameChange}
-              priority={priority}
-              onPriorityChange={onPriorityChange}
               maxAttempts={maxAttempts}
               onMaxAttemptsChange={onMaxAttemptsChange}
               idempotencyKey={idempotencyKey}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { RefObject } from 'react';
-import { ReactFlow, useNodesState, useEdgesState, Handle, Position, useReactFlow, BaseEdge, Background, BackgroundVariant, getBezierPath } from '@xyflow/react';
-import type { EdgeProps } from '@xyflow/react';
+import type { MouseEvent as ReactMouseEvent, RefObject } from 'react';
+import { ReactFlow, useNodesState, useEdgesState, Handle, Position, useReactFlow, BaseEdge, Background, BackgroundVariant, EdgeLabelRenderer, getBezierPath } from '@xyflow/react';
+import type { Connection, EdgeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from '@dagrejs/dagre';
 import { aslToReactFlow } from '../utils/aslParser';
@@ -9,14 +9,17 @@ import { LocateFixed, Maximize2, Minimize2, ZoomIn, ZoomOut } from 'lucide-react
 
 const dagreGraph = new dagre.graphlib.Graph();
 dagreGraph.setDefaultEdgeLabel(() => ({}));
+const NODE_WIDTH = 200;
+const NODE_HEIGHT = 72;
+const NEW_NODE_X_GAP = 280;
+const NEW_NODE_Y_GAP = 124;
+type LayoutDirection = 'LR' | 'TB';
 
-const getLayoutedElements = (nodes: any[], edges: any[], direction = 'LR') => {
+const getLayoutedElements = (nodes: any[], edges: any[], direction: LayoutDirection = 'TB') => {
   dagreGraph.setGraph({ rankdir: direction, nodesep: 92, ranksep: 92 });
 
   nodes.forEach((node) => {
-    const width = 200;
-    const height = 72;
-    dagreGraph.setNode(node.id, { width, height });
+    dagreGraph.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
   });
 
   edges.forEach((edge) => {
@@ -27,15 +30,14 @@ const getLayoutedElements = (nodes: any[], edges: any[], direction = 'LR') => {
 
   const newNodes = nodes.map((node) => {
     const nodeWithPosition = dagreGraph.node(node.id);
-    const width = 200;
-    const height = 72;
     return {
       ...node,
-      targetPosition: 'left',
-      sourcePosition: 'right',
+      targetPosition: direction === 'TB' ? 'top' : 'left',
+      sourcePosition: direction === 'TB' ? 'bottom' : 'right',
+      data: { ...(node.data || {}), layoutDirection: direction },
       position: {
-        x: nodeWithPosition.x - width / 2,
-        y: nodeWithPosition.y - height / 2,
+        x: nodeWithPosition.x - NODE_WIDTH / 2,
+        y: nodeWithPosition.y - NODE_HEIGHT / 2,
       },
     };
   });
@@ -51,31 +53,126 @@ const getLayoutedElements = (nodes: any[], edges: any[], direction = 'LR') => {
   return { nodes: newNodes, edges };
 };
 
+type NodePosition = { x: number; y: number };
+
+function overlaps(a: NodePosition, b: NodePosition) {
+  return Math.abs(a.x - b.x) < NODE_WIDTH + 28 && Math.abs(a.y - b.y) < NODE_HEIGHT + 28;
+}
+
+function nextOpenPosition(existingPositions: NodePosition[], fallbackPosition: NodePosition, index: number, direction: LayoutDirection) {
+  if (existingPositions.length === 0) {
+    return fallbackPosition;
+  }
+
+  const maxX = Math.max(...existingPositions.map((position) => position.x));
+  const minY = Math.min(...existingPositions.map((position) => position.y));
+  const maxY = Math.max(...existingPositions.map((position) => position.y));
+  const minX = Math.min(...existingPositions.map((position) => position.x));
+  if (direction === 'TB') {
+    const horizontalSlots = Math.max(3, Math.ceil(existingPositions.length / 2));
+    let position = {
+      x: minX + (index % horizontalSlots) * NEW_NODE_X_GAP,
+      y: maxY + NEW_NODE_Y_GAP,
+    };
+
+    while (existingPositions.some((existing) => overlaps(position, existing))) {
+      position = {
+        x: position.x > maxX + NEW_NODE_X_GAP ? minX : position.x + NEW_NODE_X_GAP,
+        y: position.x > maxX + NEW_NODE_X_GAP ? position.y + NEW_NODE_Y_GAP : position.y,
+      };
+    }
+
+    return position;
+  }
+
+  const verticalSlots = Math.max(3, Math.ceil(existingPositions.length / 2));
+  let position = {
+    x: maxX + NEW_NODE_X_GAP,
+    y: minY + (index % verticalSlots) * NEW_NODE_Y_GAP,
+  };
+
+  while (existingPositions.some((existing) => overlaps(position, existing))) {
+    position = {
+      x: position.y > maxY + NEW_NODE_Y_GAP ? position.x + NEW_NODE_X_GAP : position.x,
+      y: position.y > maxY + NEW_NODE_Y_GAP ? minY : position.y + NEW_NODE_Y_GAP,
+    };
+  }
+
+  return position;
+}
+
 // Custom Nodes to hide default ReactFlow styles and handle edges perfectly
+const handleStyle = {
+  width: 10,
+  height: 10,
+  background: '#f2795a',
+  border: '2px solid rgba(7, 13, 24, 0.96)',
+  boxShadow: '0 0 0 3px rgba(242, 121, 90, 0.16)',
+};
+
+const hiddenHandleStyle = { visibility: 'hidden' as const };
+
+function ConnectionHandle({
+  type,
+  position,
+  connectable,
+}: {
+  type: 'source' | 'target';
+  position: Position;
+  connectable: boolean;
+}) {
+  return (
+    <Handle
+      type={type}
+      position={position}
+      isConnectable={connectable}
+      style={connectable ? handleStyle : hiddenHandleStyle}
+    />
+  );
+}
+
 const CustomDefaultNode = ({ data }: any) => (
   <>
-    <Handle type="target" position={Position.Left} style={{ visibility: 'hidden' }} />
+    <ConnectionHandle
+      type="target"
+      position={data.layoutDirection === 'TB' ? Position.Top : Position.Left}
+      connectable={Boolean(data.connectable)}
+    />
     {data.label}
-    <Handle type="source" position={Position.Right} style={{ visibility: 'hidden' }} />
+    <ConnectionHandle
+      type="source"
+      position={data.layoutDirection === 'TB' ? Position.Bottom : Position.Right}
+      connectable={Boolean(data.connectable)}
+    />
   </>
 );
 
 const CustomInputNode = ({ data }: any) => (
   <>
     {data.label}
-    <Handle type="source" position={Position.Right} style={{ visibility: 'hidden' }} />
+    <ConnectionHandle
+      type="source"
+      position={data.layoutDirection === 'TB' ? Position.Bottom : Position.Right}
+      connectable={Boolean(data.connectable)}
+    />
   </>
 );
 
 const CustomOutputNode = ({ data }: any) => (
   <>
-    <Handle type="target" position={Position.Left} style={{ visibility: 'hidden' }} />
+    <ConnectionHandle
+      type="target"
+      position={data.layoutDirection === 'TB' ? Position.Top : Position.Left}
+      connectable={Boolean(data.connectable)}
+    />
     {data.label}
   </>
 );
 
 function DataFlowEdge({
   id,
+  source,
+  target,
   sourceX,
   sourceY,
   targetX,
@@ -84,7 +181,7 @@ function DataFlowEdge({
   targetPosition,
   data,
 }: EdgeProps) {
-  const [edgePath] = getBezierPath({
+  const [edgePath, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
     sourcePosition,
@@ -95,9 +192,31 @@ function DataFlowEdge({
   });
   const isError = data?.status === 'error';
   const stroke = isError ? '#f43f5e' : (typeof data?.color === 'string' ? data.color : '#3c4350');
+  const label = typeof data?.label === 'string' ? data.label : '';
+  const onContextMenu = typeof data?.onContextMenu === 'function' ? data.onContextMenu : undefined;
 
   return (
     <>
+      <path
+        d={edgePath}
+        fill="none"
+        stroke="transparent"
+        strokeWidth={18}
+        className="react-flow__edge-interaction"
+        onContextMenu={(event) => {
+          if (!onContextMenu || !source || !target) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onContextMenu({
+            sourceName: source,
+            targetName: target,
+            kind: data?.transitionKind,
+            index: data?.transitionIndex,
+            x: event.clientX,
+            y: event.clientY,
+          });
+        }}
+      />
       <BaseEdge
         id={id}
         path={edgePath}
@@ -109,6 +228,33 @@ function DataFlowEdge({
           animation: 'workflow-edge-dash 18s linear infinite',
         }}
       />
+      {label && (
+        <EdgeLabelRenderer>
+          <div
+            className={`nodrag nopan pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 rounded border px-1.5 py-0.5 font-mono-sm text-[9px] uppercase tracking-[0.06em] shadow-[0_8px_24px_rgba(0,0,0,0.32)] ${
+              isError
+                ? 'border-status-error/35 bg-status-error/15 text-status-error'
+                : 'border-border-subtle bg-surface-container-highest/90 text-on-surface-variant'
+            }`}
+            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+            onContextMenu={(event) => {
+              if (!onContextMenu || !source || !target) return;
+              event.preventDefault();
+              event.stopPropagation();
+              onContextMenu({
+                sourceName: source,
+                targetName: target,
+                kind: data?.transitionKind,
+                index: data?.transitionIndex,
+                x: event.clientX,
+                y: event.clientY,
+              });
+            }}
+          >
+            {label}
+          </div>
+        </EdgeLabelRenderer>
+      )}
       {isError ? (
         <>
           <circle r="3.25" fill="#f43f5e" className="workflow-data-packet-error" opacity="0">
@@ -227,22 +373,86 @@ interface Props {
   definition: any;
   selectedStateName?: string;
   onStateSelect: (stateName: string) => void;
+  connectable?: boolean;
+  onConnectStates?: (sourceStateName: string, targetStateName: string) => void;
+  preserveNodePositions?: boolean;
+  layoutDirection?: LayoutDirection;
+  layoutVersion?: number;
+  onStateContextMenu?: (stateName: string, event: ReactMouseEvent) => void;
+  onEdgeContextMenu?: (transition: {
+    sourceName: string;
+    targetName: string;
+    kind: unknown;
+    index?: unknown;
+    x: number;
+    y: number;
+  }) => void;
 }
 
-export function AslGraphViewer({ definition, selectedStateName, onStateSelect }: Props) {
+export function AslGraphViewer({
+  definition,
+  selectedStateName,
+  onStateSelect,
+  connectable = false,
+  onConnectStates,
+  preserveNodePositions = false,
+  layoutDirection = 'TB',
+  layoutVersion = 0,
+  onStateContextMenu,
+  onEdgeContextMenu,
+}: Props) {
   const viewerRef = useRef<HTMLDivElement>(null);
+  const lastLayoutVersionRef = useRef(layoutVersion);
   const [nodes, setNodes, onNodesChange] = useNodesState<any>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<any>([]);
+
+  const handleConnect = useCallback((connection: Connection) => {
+    if (!connection.source || !connection.target || connection.source === connection.target) {
+      return;
+    }
+    onConnectStates?.(connection.source, connection.target);
+  }, [onConnectStates]);
 
   useEffect(() => {
     const { nodes: initialNodes, edges: initialEdges } = aslToReactFlow(definition, {
       selectedStateName,
       onStateSelect,
+      connectable,
+      onStateContextMenu,
     });
-    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(initialNodes, initialEdges);
-    setNodes(layoutedNodes);
+    const edgesWithHandlers = initialEdges.map((edge) => ({
+      ...edge,
+      data: { ...(edge.data || {}), onContextMenu: onEdgeContextMenu },
+    }));
+    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(initialNodes, edgesWithHandlers, layoutDirection);
+    setNodes((currentNodes) => {
+      const shouldRelayout = lastLayoutVersionRef.current !== layoutVersion;
+      lastLayoutVersionRef.current = layoutVersion;
+      if (!preserveNodePositions || currentNodes.length === 0 || shouldRelayout) {
+        return layoutedNodes;
+      }
+
+      const currentPositionById = new Map(
+        currentNodes.map((node) => [node.id, node.position] as const),
+      );
+      const nextIds = new Set(layoutedNodes.map((node) => node.id));
+      const existingPositions = currentNodes
+        .filter((node) => nextIds.has(node.id))
+        .map((node) => node.position);
+
+      return layoutedNodes.map((node, index) => {
+        const currentPosition = currentPositionById.get(node.id);
+        if (currentPosition) {
+          return { ...node, position: currentPosition };
+        }
+
+        const position = nextOpenPosition(existingPositions, node.position, index, layoutDirection);
+        existingPositions.push(position);
+        return { ...node, position };
+      });
+    });
     setEdges(layoutedEdges);
-  }, [definition, selectedStateName, onStateSelect, setNodes, setEdges]);
+  }, [connectable, definition, layoutDirection, layoutVersion, onEdgeContextMenu, onStateContextMenu, preserveNodePositions, selectedStateName, onStateSelect, setNodes, setEdges]);
 
   return (
     <div ref={viewerRef} className="relative h-full w-full bg-surface-lowest">
@@ -251,6 +461,9 @@ export function AslGraphViewer({ definition, selectedStateName, onStateSelect }:
         edges={edges} 
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onConnect={connectable ? handleConnect : undefined}
+        nodesConnectable={connectable}
+        isValidConnection={(connection) => Boolean(connection.source && connection.target && connection.source !== connection.target)}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         fitView 

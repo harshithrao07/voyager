@@ -54,7 +54,7 @@ public class HealthIndicatorConfig {
     }
 
     /**
-     * Judge0 backs {@code function://} Task resources. Reports UP only when the
+     * Judge0 backs {@code voyager://namespace/name} Task resources. Reports UP only when the
      * engine advertises languages and has at least one execution worker; the
      * languages/statuses/worker counts are surfaced as details for diagnostics.
      * Custom indicators like this one are not part of the liveness/readiness

@@ -10,7 +10,6 @@ import com.job.scheduler.enums.ExecutionScopeStatus;
 import com.job.scheduler.enums.ExecutionScopeType;
 import com.job.scheduler.enums.StateExecutionAttemptStatus;
 import com.job.scheduler.enums.WorkflowExecutionStatus;
-import com.job.scheduler.enums.WorkflowPriority;
 import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.repository.ExecutionScopeRepository;
 import com.job.scheduler.repository.StateExecutionAttemptRepository;
@@ -365,7 +364,7 @@ class ParallelWorkflowIntegrationTest {
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "scheduler://test",
+                      "Resource": "voyager://test",
                       "Next": "Done"
                     },
                     "Done": {
@@ -523,7 +522,6 @@ class ParallelWorkflowIntegrationTest {
         Workflow workflow = new Workflow();
         workflow.setName("Parallel runtime test");
         workflow.setStatus(WorkflowStatus.ACTIVE);
-        workflow.setPriority(WorkflowPriority.MEDIUM);
         workflow.setTimezone("UTC");
         workflow.setMaxAttempts(3);
         workflow.setIdempotencyKey("parallel-" + UUID.randomUUID());

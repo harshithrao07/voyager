@@ -15,7 +15,7 @@ import tools.jackson.databind.node.ObjectNode;
 import java.net.URI;
 
 /**
- * Task resource for {@code scheduler://webhook}. Maps HTTP outcomes to the
+ * Task resource for {@code voyager://webhook}. Maps HTTP outcomes to the
  * stable webhook error vocabulary and preserves the status and (truncated)
  * response body as structured detail.
  */
@@ -30,7 +30,7 @@ public class SchedulerWebhookTaskResource implements TaskResource {
 
     @Override
     public boolean supports(URI resource) {
-        return "scheduler".equals(resource.getScheme())
+        return "voyager".equals(resource.getScheme())
                 && "webhook".equals(operation(resource));
     }
 

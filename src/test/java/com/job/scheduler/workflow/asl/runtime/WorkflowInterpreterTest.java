@@ -255,7 +255,7 @@ class WorkflowInterpreterTest {
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "scheduler://webhook",
+                      "Resource": "voyager://webhook",
                       "Arguments": {
                         "url": "{% $states.input.url %}",
                         "body": {
@@ -290,7 +290,7 @@ class WorkflowInterpreterTest {
         StateExecution taskState = latestState.get();
         StateExecutionAttempt attempt = latestAttempt.get();
         assertThat(taskState.getResource())
-                .isEqualTo("scheduler://webhook");
+                .isEqualTo("voyager://webhook");
         assertThat(attempt.getStatus())
                 .isEqualTo(StateExecutionAttemptStatus.PENDING);
         assertThat(objectMapper.readTree(attempt.getArguments())
@@ -349,7 +349,7 @@ class WorkflowInterpreterTest {
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "scheduler://cleanup",
+                      "Resource": "voyager://cleanup",
                       "Retry": [{
                         "ErrorEquals": ["Temporary"],
                         "IntervalSeconds": 2,
@@ -420,7 +420,7 @@ class WorkflowInterpreterTest {
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "scheduler://cleanup",
+                      "Resource": "voyager://cleanup",
                       "Retry": [{
                         "ErrorEquals": ["Temporary"],
                         "MaxAttempts": 0
@@ -499,7 +499,7 @@ class WorkflowInterpreterTest {
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "scheduler://cleanup",
+                      "Resource": "voyager://cleanup",
                       "Next": "Done"
                     },
                     "Done": {"Type": "Succeed"}
@@ -543,7 +543,7 @@ class WorkflowInterpreterTest {
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "scheduler://cleanup",
+                      "Resource": "voyager://cleanup",
                       "Next": "Done"
                     },
                     "Done": {"Type": "Succeed"}
@@ -664,7 +664,7 @@ class WorkflowInterpreterTest {
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "scheduler://webhook",
+                      "Resource": "voyager://webhook",
                       "Arguments": {
                         "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                       },
@@ -690,7 +690,7 @@ class WorkflowInterpreterTest {
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "scheduler://webhook",
+                      "Resource": "voyager://webhook",
                       "End": true
                     }
                   }
@@ -724,7 +724,7 @@ class WorkflowInterpreterTest {
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "scheduler://webhook",
+                      "Resource": "voyager://webhook",
                       "End": true
                     }
                   }

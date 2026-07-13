@@ -54,7 +54,9 @@ public class WorkflowService {
             return toResponse(existing);
         }
 
-        validateDefinition(request.definition());
+        // Drafts are intentionally saved without ASL validation — a draft may still
+        // be incomplete. The definition is validated when the workflow is activated
+        // (see activateDefinition -> validateExecutableDefinition).
         String timezone = normalizeTimezone(request.timezone());
         CronExpression cronExpression = parseCronExpression(request.cronExpression());
         WorkflowDefinitionCanonicalizer.CanonicalWorkflowDefinition canonical =
@@ -63,7 +65,6 @@ public class WorkflowService {
         Workflow workflow = new Workflow();
         workflow.setName(request.name().trim());
         workflow.setStatus(WorkflowStatus.DRAFT);
-        workflow.setPriority(request.priority());
         workflow.setCronExpression(normalizeNullable(request.cronExpression()));
         workflow.setTimezone(timezone);
         workflow.setMaxAttempts(
@@ -98,7 +99,9 @@ public class WorkflowService {
             CreateWorkflowRevisionRequestDTO request
     ) {
         Workflow workflow = findForUpdate(workflowId);
-        validateDefinition(request.definition());
+        // A new revision is a draft until activated — no ASL validation here. When
+        // request.activate() is set, activateDefinition validates the definition
+        // (validateExecutableDefinition) before it can go live.
         WorkflowDefinitionCanonicalizer.CanonicalWorkflowDefinition canonical =
                 definitionCanonicalizer.canonicalize(request.definition());
 
@@ -211,10 +214,6 @@ public class WorkflowService {
                 );
             }
             workflow.setName(name);
-            changed = true;
-        }
-        if (request.priority() != null) {
-            workflow.setPriority(request.priority());
             changed = true;
         }
         if (request.cronExpression() != null) {
@@ -372,13 +371,6 @@ public class WorkflowService {
         return parsed == null ? null : nextRunAt(parsed, timezone);
     }
 
-    private void validateDefinition(JsonNode definition) {
-        AslValidationResult validation = aslDefinitionValidator.validate(definition);
-        if (!validation.isValid()) {
-            throw new AslDefinitionValidationException(validation.issues());
-        }
-    }
-
     private void validateExecutableDefinition(JsonNode definition) {
         AslValidationResult validation = aslDefinitionValidator.validate(definition);
         if (!validation.isExecutable()) {
@@ -406,7 +398,6 @@ public class WorkflowService {
                 workflow.getVersion(),
                 workflow.getName(),
                 workflow.getStatus(),
-                workflow.getPriority(),
                 workflow.getCronExpression(),
                 workflow.getTimezone(),
                 workflow.getNextRunAt(),

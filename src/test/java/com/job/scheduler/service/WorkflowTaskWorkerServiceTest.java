@@ -87,7 +87,7 @@ class WorkflowTaskWorkerServiceTest {
         when(attemptRepository.findByIdWithWorkerContext(attempt.getId()))
                 .thenReturn(Optional.of(attempt));
         when(resourceRouter.execute(
-                eq("scheduler://cleanup"),
+                eq("voyager://cleanup"),
                 any(),
                 any()
         )).thenReturn(result);
@@ -162,7 +162,7 @@ class WorkflowTaskWorkerServiceTest {
         scope.setWorkflowExecution(workflowExecution);
         StateExecution stateExecution = new StateExecution();
         stateExecution.setExecutionScope(scope);
-        stateExecution.setResource("scheduler://cleanup");
+        stateExecution.setResource("voyager://cleanup");
         StateExecutionAttempt value = new StateExecutionAttempt();
         value.setId(UUID.randomUUID());
         value.setStateExecution(stateExecution);

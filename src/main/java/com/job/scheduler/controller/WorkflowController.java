@@ -2,6 +2,8 @@ package com.job.scheduler.controller;
 
 import com.job.scheduler.dto.CreateWorkflowRequestDTO;
 import com.job.scheduler.dto.CreateWorkflowRevisionRequestDTO;
+import com.job.scheduler.dto.DraftStateTestRequestDTO;
+import com.job.scheduler.dto.DraftStateTestResponseDTO;
 import com.job.scheduler.dto.StartWorkflowExecutionRequestDTO;
 import com.job.scheduler.dto.WorkflowDefinitionResponseDTO;
 import com.job.scheduler.dto.WorkflowExecutionResponseDTO;
@@ -13,6 +15,7 @@ import com.job.scheduler.dto.WorkflowPageDTO;
 import com.job.scheduler.dto.UpdateWorkflowMetadataRequestDTO;
 import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.service.WorkflowExecutionInspectionService;
+import com.job.scheduler.service.WorkflowDraftTestService;
 import com.job.scheduler.service.WorkflowExecutionCancellationService;
 import com.job.scheduler.service.WorkflowExecutionRunner;
 import com.job.scheduler.service.WorkflowService;
@@ -41,12 +44,20 @@ public class WorkflowController {
             workflowExecutionInspectionService;
     private final WorkflowExecutionCancellationService
             workflowExecutionCancellationService;
+    private final WorkflowDraftTestService workflowDraftTestService;
 
     @PostMapping
     public ResponseEntity<WorkflowResponseDTO> createWorkflow(
             @Valid @RequestBody CreateWorkflowRequestDTO request
     ) {
         return ResponseEntity.ok(workflowService.createWorkflow(request));
+    }
+
+    @PostMapping("/draft-tests/state")
+    public ResponseEntity<DraftStateTestResponseDTO> testDraftState(
+            @Valid @RequestBody DraftStateTestRequestDTO request
+    ) {
+        return ResponseEntity.ok(workflowDraftTestService.testState(request));
     }
 
     @GetMapping

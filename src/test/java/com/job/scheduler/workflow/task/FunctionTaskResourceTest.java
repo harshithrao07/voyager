@@ -20,22 +20,22 @@ class FunctionTaskResourceTest {
             new FunctionTaskResource(invocationService);
 
     @Test
-    void supportsFunctionSchemeOnly() {
-        assertThat(resource.supports(URI.create("function://billing/tax")))
+    void supportsVoyagerFunctionResourcesOnly() {
+        assertThat(resource.supports(URI.create("voyager://billing/tax")))
                 .isTrue();
-        assertThat(resource.supports(URI.create("scheduler://webhook")))
+        assertThat(resource.supports(URI.create("voyager://webhook")))
                 .isFalse();
     }
 
     @Test
-    void parsesExplicitVersion() {
+    void parsesExplicitVersionFromVoyagerFunctionUri() {
         var input = objectMapper.createObjectNode().put("amount", 10);
         var output = objectMapper.createObjectNode().put("tax", 1.8);
         when(invocationService.invokeForTask(
                 "billing", "tax", 3, input, TaskExecutionContext.NONE))
                 .thenReturn(output);
 
-        assertThat(resource.execute(URI.create("function://billing/tax@v3"), input))
+        assertThat(resource.execute(URI.create("voyager://billing/tax@v3"), input))
                 .isEqualTo(output);
         verify(invocationService).invokeForTask(
                 "billing", "tax", 3, input, TaskExecutionContext.NONE);
@@ -48,7 +48,7 @@ class FunctionTaskResourceTest {
                 "billing", "tax", null, input, TaskExecutionContext.NONE))
                 .thenReturn(objectMapper.createObjectNode());
 
-        resource.execute(URI.create("function://billing/tax@latest"), input);
+        resource.execute(URI.create("voyager://billing/tax@latest"), input);
 
         verify(invocationService).invokeForTask(
                 "billing", "tax", null, input, TaskExecutionContext.NONE);
@@ -61,7 +61,7 @@ class FunctionTaskResourceTest {
         when(invocationService.invokeForTask("billing", "tax", null, input, context))
                 .thenReturn(objectMapper.createObjectNode());
 
-        resource.execute(URI.create("function://billing/tax@latest"), input, context);
+        resource.execute(URI.create("voyager://billing/tax@latest"), input, context);
 
         verify(invocationService).invokeForTask("billing", "tax", null, input, context);
     }
@@ -69,7 +69,7 @@ class FunctionTaskResourceTest {
     @Test
     void rejectsInvalidVersion() {
         assertThatThrownBy(() -> resource.execute(
-                URI.create("function://billing/tax@beta"),
+                URI.create("voyager://billing/tax@beta"),
                 objectMapper.createObjectNode()
         ))
                 .isInstanceOf(TaskResourceException.class)

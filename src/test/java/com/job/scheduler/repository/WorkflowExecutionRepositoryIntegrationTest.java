@@ -9,7 +9,6 @@ import com.job.scheduler.entity.WorkflowExecution;
 import com.job.scheduler.enums.AslStateType;
 import com.job.scheduler.enums.ExecutionScopeStatus;
 import com.job.scheduler.enums.ExecutionScopeType;
-import com.job.scheduler.enums.WorkflowPriority;
 import com.job.scheduler.enums.StateExecutionAttemptStatus;
 import com.job.scheduler.enums.StateExecutionStatus;
 import com.job.scheduler.enums.WorkflowExecutionStatus;
@@ -192,7 +191,7 @@ class WorkflowExecutionRepositoryIntegrationTest {
         stateExecution.setStateName("ChargeOrder");
         stateExecution.setStateType(AslStateType.TASK);
         stateExecution.setStatus(StateExecutionStatus.RETRY_WAIT);
-        stateExecution.setResource("scheduler://payments/charge");
+        stateExecution.setResource("voyager://payments/charge");
         stateExecution.setInput("{\"orderId\":\"order-100\"}");
         stateExecution = stateExecutionRepository.saveAndFlush(stateExecution);
 
@@ -902,7 +901,6 @@ class WorkflowExecutionRepositoryIntegrationTest {
         Workflow workflow = new Workflow();
         workflow.setName("Workflow execution test");
         workflow.setStatus(WorkflowStatus.ACTIVE);
-        workflow.setPriority(WorkflowPriority.MEDIUM);
         workflow.setTimezone("UTC");
         workflow.setMaxAttempts(3);
         workflow.setIdempotencyKey(idempotencyKey);

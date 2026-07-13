@@ -46,8 +46,8 @@ public class WorkflowGenerationService {
             7. OUTPUT STRICTLY RAW JSON. No markdown, no explanations.
             
             RESOURCES:
-            - scheduler://webhook: args url(str), method(str), body(obj), headers(obj)
-            - scheduler://send-email: args to(str), subject(str), body(str)
+            - voyager://webhook: args url(str), body(obj)
+            - voyager://send-email: args to(str), subject(str), body(str)
             
             MCP TOOLS:
             %s

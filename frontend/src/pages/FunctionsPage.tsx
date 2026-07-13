@@ -70,7 +70,7 @@ function FunctionMetric({ label, value, tone }: { label: string; value: string |
 }
 
 function functionResource(fn: Pick<FunctionDefinitionDTO, 'namespace' | 'name'>, version?: number | null) {
-  return `function://${fn.namespace || 'namespace'}/${fn.name || 'name'}${version ? `@v${version}` : '@latest'}`;
+  return `voyager://${fn.namespace || 'namespace'}/${fn.name || 'name'}${version ? `@v${version}` : '@latest'}`;
 }
 
 function languagesForSourceMode(languages: FunctionLanguageDTO[], sourceMode: FunctionSourceMode) {
@@ -706,7 +706,7 @@ function FunctionCreateWorkbench({
 
   return (
     <FunctionVersionWorkbench
-      resourceLabel={`function://${namespace || 'namespace'}/${name || 'name'}@v1`}
+      resourceLabel={`voyager://${namespace || 'namespace'}/${name || 'name'}@v1`}
       languages={languages}
       languageId={languageId}
       onLanguageChange={setLanguageId}

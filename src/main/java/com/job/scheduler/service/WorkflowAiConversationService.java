@@ -11,7 +11,6 @@ import com.job.scheduler.entity.WorkflowAiConversation;
 import com.job.scheduler.entity.WorkflowAiMessage;
 import com.job.scheduler.enums.WorkflowAiConversationStage;
 import com.job.scheduler.enums.WorkflowAiMessageRole;
-import com.job.scheduler.enums.WorkflowPriority;
 import com.job.scheduler.repository.WorkflowAiConversationRepository;
 import com.job.scheduler.repository.WorkflowAiMessageRepository;
 import com.job.scheduler.workflow.asl.runtime.AslRuntimeCapabilityValidator;
@@ -58,12 +57,12 @@ public class WorkflowAiConversationService {
               "message": "short assistant message for the user",
               "aslDefinition": optional JSONata-only ASL object,
               "finalPlan": optional object,
-              "draftWorkflowPayload": optional object with name, priority, cronExpression, timezone, maxAttempts, idempotencyKey, definition
+              "draftWorkflowPayload": optional object with name, cronExpression, timezone, maxAttempts, idempotencyKey, definition
             }
             ASL rules: omit QueryLanguage and Version, use JSONata expressions with {% %}, reject JSONPath fields and States.* intrinsics.
-            Keep cron, timezone, priority, approval, and schedule metadata outside ASL.
+            Keep cron, timezone, approval, and schedule metadata outside ASL.
             Ask clarifying questions until the workflow is clear. When ASL is ready, include aslDefinition.
-            After ASL is approved, collect workflow name, cron expression if scheduled, timezone, priority, and max attempts.
+            After ASL is approved, collect workflow name, cron expression if scheduled, timezone, and max attempts.
             When everything is ready, return PLAN_READY with finalPlan and draftWorkflowPayload.
             If the selected local model supports visible reasoning, put that reasoning before the JSON as <think>...</think>.
             The content after </think> must still be strict JSON only.
@@ -604,7 +603,6 @@ public class WorkflowAiConversationService {
         }
         return new CreateWorkflowRequestDTO(
                 conversation.getName(),
-                WorkflowPriority.MEDIUM,
                 null,
                 3,
                 "workflow-ai-" + conversation.getId(),

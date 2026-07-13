@@ -32,7 +32,7 @@ class AslTaskStateDefinitionValidatorTest {
                   "States": {
                     "CallTool": {
                       "Type": "Task",
-                      "Resource": "scheduler://send-email",
+                      "Resource": "voyager://send-email",
                       "Arguments": {
                         "to": "{% $states.input.email %}"
                       },
@@ -85,7 +85,7 @@ class AslTaskStateDefinitionValidatorTest {
                   "States": {
                     "State": {
                       "Type": "Task",
-                      "Resource": "scheduler://cleanup",
+                      "Resource": "voyager://cleanup",
                       "Retry": [{
                         "ErrorEquals": ["States.ALL"],
                         "JitterStrategy": "CUSTOM"
@@ -141,7 +141,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup"
+                          "Resource": "voyager://cleanup"
                         }
                         """),
                 "$.States.State",
@@ -156,7 +156,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "Arguments": {
                             "value": "{% $states.result %}"
                           },
@@ -175,7 +175,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "Arguments": "{% $states.errorOutput %}",
                           "End": true
                         }
@@ -192,7 +192,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "TimeoutSeconds": 0,
                           "End": true
                         }
@@ -209,7 +209,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "TimeoutSeconds": "30",
                           "End": true
                         }
@@ -226,7 +226,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "Retry": {},
                           "End": true
                         }
@@ -243,7 +243,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "Retry": [{}],
                           "End": true
                         }
@@ -259,7 +259,7 @@ class AslTaskStateDefinitionValidatorTest {
         AslValidationResult result = validate(machineWithState("""
                 {
                   "Type": "Task",
-                  "Resource": "scheduler://cleanup",
+                  "Resource": "voyager://cleanup",
                   "Retry": [],
                   "Catch": [],
                   "End": true
@@ -277,7 +277,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "Retry": [
                             {
                               "ErrorEquals": ["States.Timeout", "States.ALL"]
@@ -298,7 +298,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "Retry": [
                             {"ErrorEquals": ["States.ALL"]},
                             {"ErrorEquals": ["States.Timeout"]}
@@ -318,7 +318,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "Retry": [
                             {
                               "ErrorEquals": ["States.CustomFailure"]
@@ -338,7 +338,7 @@ class AslTaskStateDefinitionValidatorTest {
         String definition = machineWithState("""
                 {
                   "Type": "Task",
-                  "Resource": "scheduler://cleanup",
+                  "Resource": "voyager://cleanup",
                   "Retry": [
                     {
                       "ErrorEquals": ["States.Timeout"],
@@ -369,7 +369,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "Catch": [
                             {
                               "ErrorEquals": ["States.ALL"],
@@ -394,7 +394,7 @@ class AslTaskStateDefinitionValidatorTest {
                   "States": {
                     "State": {
                       "Type": "Task",
-                      "Resource": "scheduler://cleanup",
+                      "Resource": "voyager://cleanup",
                       "Catch": [
                         {
                           "ErrorEquals": ["States.ALL"],
@@ -420,7 +420,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "Arguments": "{% States.Format('x') %}",
                           "End": true
                         }
@@ -437,7 +437,7 @@ class AslTaskStateDefinitionValidatorTest {
                 machineWithState("""
                         {
                           "Type": "Task",
-                          "Resource": "scheduler://cleanup",
+                          "Resource": "voyager://cleanup",
                           "Arguments": {
                             "customerId.$": "$.customerId"
                           },

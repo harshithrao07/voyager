@@ -32,7 +32,7 @@ class SchedulerWebhookTaskResourceTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private SchedulerWebhookTaskResource resource;
-    private final URI uri = URI.create("scheduler://webhook");
+    private final URI uri = URI.create("voyager://webhook");
 
     @BeforeEach
     void setUp() {
@@ -43,9 +43,9 @@ class SchedulerWebhookTaskResourceTest {
     }
 
     @Test
-    void supportsSchedulerWebhookOnly() {
+    void supportsVoyagerWebhookOnly() {
         assertThat(resource.supports(uri)).isTrue();
-        assertThat(resource.supports(URI.create("scheduler://send-email")))
+        assertThat(resource.supports(URI.create("voyager://send-email")))
                 .isFalse();
         assertThat(resource.supports(URI.create("mcp://s/t"))).isFalse();
     }

@@ -16,13 +16,13 @@ class TaskResourceRouterTest {
     @Test
     void routesToTheFirstSupportingResource() {
         JsonNode expected = objectMapper.createObjectNode().put("ok", true);
-        TaskResource webhook = new StubResource("scheduler", "webhook", expected);
-        TaskResource email = new StubResource("scheduler", "send-email", null);
+        TaskResource webhook = new StubResource("voyager", "webhook", expected);
+        TaskResource email = new StubResource("voyager", "send-email", null);
         TaskResourceRouter router =
                 new TaskResourceRouter(List.of(email, webhook));
 
         JsonNode output = router.execute(
-                "scheduler://webhook",
+                "voyager://webhook",
                 objectMapper.createObjectNode()
         );
 

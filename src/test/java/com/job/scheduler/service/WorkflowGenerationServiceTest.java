@@ -66,7 +66,7 @@ class WorkflowGenerationServiceTest {
         
         when(mcpToolRepository.findByEnabledTrue()).thenReturn(List.of(tool));
 
-        String validJson = "{\"Type\": \"Task\", \"Resource\": \"scheduler://webhook\", \"End\": true}";
+        String validJson = "{\"Type\": \"Task\", \"Resource\": \"voyager://webhook\", \"End\": true}";
         JsonNode parsed = objectMapper.readTree(validJson);
         
         when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(AiMessage.from("```json\n" + validJson + "\n```")));

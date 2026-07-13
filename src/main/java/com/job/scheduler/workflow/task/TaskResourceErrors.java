@@ -19,21 +19,21 @@ public final class TaskResourceErrors {
     public static final String PERMISSIONS = "States.Permissions";
     public static final String TASK_FAILED = "States.TaskFailed";
 
-    // scheduler://webhook
+    // voyager://webhook
     public static final String WEBHOOK_TIMEOUT = "Scheduler.Webhook.Timeout";
     public static final String WEBHOOK_CLIENT_ERROR =
             "Scheduler.Webhook.ClientError";
     public static final String WEBHOOK_SERVER_ERROR =
             "Scheduler.Webhook.ServerError";
 
-    // scheduler://send-email
+    // voyager://send-email
     public static final String EMAIL_SEND_FAILED = "Scheduler.Email.SendFailed";
 
     // mcp://serverId/toolName
     public static final String MCP_TOOL_NOT_FOUND = "Mcp.ToolNotFound";
     public static final String MCP_TOOL_FAILED = "Mcp.ToolFailed";
 
-    // function://namespace/name@version
+    // voyager://namespace/name@version
     public static final String TIMEOUT = "States.Timeout";
     public static final String FUNCTION_NOT_FOUND = "Function.NotFound";
     public static final String FUNCTION_COMPILE_ERROR =

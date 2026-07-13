@@ -397,8 +397,8 @@ original revision.
 
 Currently supported resources:
 
-- `scheduler://send-email`
-- `scheduler://webhook`
+- `voyager://send-email`
+- `voyager://webhook`
 - `mcp://serverId/toolName`
 
 Pending:

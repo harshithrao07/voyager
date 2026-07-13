@@ -62,7 +62,7 @@ export function Judge0RuntimePanel() {
           <div>
             <h2 className="font-display text-[15px] font-semibold text-on-surface">Execution runtime</h2>
             <p className="mt-0.5 font-mono-sm text-[11px] text-on-surface-variant">
-              Judge0 sandbox that powers <span className="text-secondary">function://</span> tasks
+              Judge0 sandbox that powers <span className="text-secondary">voyager://namespace/name</span> tasks
             </p>
           </div>
         </div>

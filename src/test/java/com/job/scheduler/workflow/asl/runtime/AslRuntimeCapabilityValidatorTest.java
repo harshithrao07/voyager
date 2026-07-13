@@ -49,7 +49,7 @@ class AslRuntimeCapabilityValidatorTest {
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "scheduler://cleanup",
+                      "Resource": "voyager://cleanup",
                       "End": true
                     }
                   }
