@@ -6,6 +6,7 @@ import com.job.scheduler.dto.WorkflowDefinitionResponseDTO;
 import com.job.scheduler.dto.WorkflowResponseDTO;
 import com.job.scheduler.dto.WorkflowPageDTO;
 import com.job.scheduler.dto.UpdateWorkflowMetadataRequestDTO;
+import com.job.scheduler.dto.UpdateWorkflowCanvasLayoutRequestDTO;
 import com.job.scheduler.entity.Workflow;
 import com.job.scheduler.entity.WorkflowDefinition;
 import com.job.scheduler.enums.WorkflowStatus;
@@ -14,6 +15,7 @@ import com.job.scheduler.repository.WorkflowRepository;
 import com.job.scheduler.workflow.asl.runtime.AslRuntimeCapabilityValidator;
 import com.job.scheduler.workflow.asl.validation.AslDefinitionValidationException;
 import com.job.scheduler.workflow.asl.validation.AslDefinitionValidator;
+import com.job.scheduler.workflow.asl.validation.AslMcpResourceValidator;
 import com.job.scheduler.workflow.asl.validation.AslValidationResult;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
@@ -38,6 +40,7 @@ import java.util.UUID;
 public class WorkflowService {
     private static final String DEFAULT_TIMEZONE = "UTC";
     private static final int MAX_PAGE_SIZE = 100;
+    private static final double MAX_CANVAS_COORDINATE = 1_000_000.0;
 
     private final WorkflowRepository workflowRepository;
     private final WorkflowDefinitionRepository workflowDefinitionRepository;
@@ -45,6 +48,7 @@ public class WorkflowService {
     private final WorkflowDefinitionCanonicalizer definitionCanonicalizer;
     private final ObjectMapper objectMapper;
     private final AslRuntimeCapabilityValidator runtimeCapabilityValidator;
+    private final AslMcpResourceValidator mcpResourceValidator;
 
     @Transactional
     public WorkflowResponseDTO createWorkflow(CreateWorkflowRequestDTO request) {
@@ -54,18 +58,16 @@ public class WorkflowService {
             return toResponse(existing);
         }
 
-        // Drafts are intentionally saved without ASL validation — a draft may still
-        // be incomplete. The definition is validated when the workflow is activated
-        // (see activateDefinition -> validateExecutableDefinition).
         String timezone = normalizeTimezone(request.timezone());
-        CronExpression cronExpression = parseCronExpression(request.cronExpression());
+        String cronExpression = normalizeNullable(request.cronExpression());
+        parseCronExpression(cronExpression);
         WorkflowDefinitionCanonicalizer.CanonicalWorkflowDefinition canonical =
                 definitionCanonicalizer.canonicalize(request.definition());
 
         Workflow workflow = new Workflow();
         workflow.setName(request.name().trim());
         workflow.setStatus(WorkflowStatus.DRAFT);
-        workflow.setCronExpression(normalizeNullable(request.cronExpression()));
+        workflow.setCronExpression(cronExpression);
         workflow.setTimezone(timezone);
         workflow.setMaxAttempts(
                 request.maxAttempts() == null
@@ -73,11 +75,7 @@ public class WorkflowService {
                         : request.maxAttempts()
         );
         workflow.setIdempotencyKey(request.idempotencyKey().trim());
-        workflow.setNextRunAt(
-                cronExpression == null
-                        ? null
-                        : nextRunAt(cronExpression, timezone)
-        );
+        workflow.setNextRunAt(null);
         workflowRepository.save(workflow);
 
         WorkflowDefinition definition = new WorkflowDefinition();
@@ -87,8 +85,12 @@ public class WorkflowService {
         definition.setDefinitionHash(canonical.hash());
         workflowDefinitionRepository.save(definition);
 
-        workflow.setActiveDefinition(definition);
-        workflowRepository.save(workflow);
+        // Manual workflows have no schedule to activate. A successful save makes
+        // the validated definition executable immediately. Recurring workflows
+        // remain unscheduled until their revision is explicitly activated.
+        if (isManual(workflow)) {
+            activateDefinition(workflow, definition);
+        }
 
         return toResponse(workflow);
     }
@@ -99,9 +101,6 @@ public class WorkflowService {
             CreateWorkflowRevisionRequestDTO request
     ) {
         Workflow workflow = findForUpdate(workflowId);
-        // A new revision is a draft until activated — no ASL validation here. When
-        // request.activate() is set, activateDefinition validates the definition
-        // (validateExecutableDefinition) before it can go live.
         WorkflowDefinitionCanonicalizer.CanonicalWorkflowDefinition canonical =
                 definitionCanonicalizer.canonicalize(request.definition());
 
@@ -109,7 +108,7 @@ public class WorkflowService {
                 .findByWorkflowAndDefinitionHash(workflow, canonical.hash())
                 .orElse(null);
         if (duplicate != null) {
-            if (request.activate()) {
+            if (shouldActivateOnSave(workflow, request.activate())) {
                 activateDefinition(workflow, duplicate);
             }
             return toDefinitionResponse(workflow, duplicate);
@@ -127,7 +126,7 @@ public class WorkflowService {
         definition.setDefinitionHash(canonical.hash());
         workflowDefinitionRepository.save(definition);
 
-        if (request.activate()) {
+        if (shouldActivateOnSave(workflow, request.activate())) {
             activateDefinition(workflow, definition);
         }
 
@@ -269,6 +268,31 @@ public class WorkflowService {
     }
 
     @Transactional
+    public WorkflowDefinitionResponseDTO updateCanvasLayout(
+            UUID workflowId,
+            long revision,
+            UpdateWorkflowCanvasLayoutRequestDTO request
+    ) {
+        Workflow workflow = findForUpdate(workflowId);
+        ensureNotArchived(workflow);
+        WorkflowDefinition definition = workflowDefinitionRepository
+                .findByWorkflowAndRevision(workflow, revision)
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "Workflow definition revision does not exist"
+                ));
+        JsonNode canvasLayout = normalizeCanvasLayout(
+                definition,
+                request.positions()
+        );
+        definition.setCanvasLayout(writeJson(
+                canvasLayout,
+                "workflow canvas layout"
+        ));
+        workflowDefinitionRepository.saveAndFlush(definition);
+        return toDefinitionResponse(workflow, definition);
+    }
+
+    @Transactional
     public WorkflowDefinitionResponseDTO activateRevision(UUID workflowId, long revision) {
         Workflow workflow = findForUpdate(workflowId);
         ensureNotArchived(workflow);
@@ -355,6 +379,17 @@ public class WorkflowService {
         workflowRepository.save(workflow);
     }
 
+    private boolean shouldActivateOnSave(
+            Workflow workflow,
+            boolean activationRequested
+    ) {
+        return isManual(workflow) || activationRequested;
+    }
+
+    private boolean isManual(Workflow workflow) {
+        return normalizeNullable(workflow.getCronExpression()) == null;
+    }
+
     private void ensureNotArchived(Workflow workflow) {
         if (workflow.getStatus() == WorkflowStatus.ARCHIVED) {
             throw new IllegalStateException(
@@ -379,6 +414,10 @@ public class WorkflowService {
         var runtimeIssues = runtimeCapabilityValidator.validate(definition);
         if (!runtimeIssues.isEmpty()) {
             throw new AslDefinitionValidationException(runtimeIssues);
+        }
+        var mcpIssues = mcpResourceValidator.validate(definition);
+        if (!mcpIssues.isEmpty()) {
+            throw new AslDefinitionValidationException(mcpIssues);
         }
     }
 
@@ -420,6 +459,7 @@ public class WorkflowService {
                 definition.getRevision(),
                 definition.getDefinitionHash(),
                 readDefinition(definition),
+                readCanvasLayout(definition),
                 workflow.getActiveDefinition() != null
                         && workflow.getActiveDefinition().getId().equals(definition.getId()),
                 definition.getCreatedAt()
@@ -431,6 +471,113 @@ public class WorkflowService {
             return objectMapper.readTree(definition.getDefinition());
         } catch (Exception exception) {
             throw new IllegalStateException("Could not read persisted ASL definition", exception);
+        }
+    }
+
+    private JsonNode readCanvasLayout(WorkflowDefinition definition) {
+        if (definition.getCanvasLayout() == null
+                || definition.getCanvasLayout().isBlank()) {
+            return objectMapper.createObjectNode();
+        }
+        try {
+            JsonNode layout = objectMapper.readTree(definition.getCanvasLayout());
+            return layout != null && layout.isObject()
+                    ? layout
+                    : objectMapper.createObjectNode();
+        } catch (Exception exception) {
+            throw new IllegalStateException(
+                    "Could not read persisted workflow canvas layout",
+                    exception
+            );
+        }
+    }
+
+    private JsonNode normalizeCanvasLayout(
+            WorkflowDefinition definition,
+            JsonNode positions
+    ) {
+        if (!positions.isObject()) {
+            throw new IllegalArgumentException(
+                    "Canvas positions must be an object keyed by state name"
+            );
+        }
+        JsonNode workflowDefinition = readDefinition(definition);
+        JsonNode states = workflowDefinition.path("States");
+        if (positions.size() > countStates(workflowDefinition)) {
+            throw new IllegalArgumentException(
+                    "Canvas positions contain more entries than the workflow definition"
+            );
+        }
+
+        var normalized = objectMapper.createObjectNode();
+        for (var entry : positions.properties()) {
+            String stateName = entry.getKey();
+            JsonNode position = entry.getValue();
+            boolean rootState = states.has(stateName);
+            boolean scopedState = stateName.startsWith("@scope/")
+                    && workflowDefinition.at(stateName.substring("@scope".length())).isObject()
+                    && workflowDefinition.at(stateName.substring("@scope".length())).has("Type");
+            if (!rootState && !scopedState) {
+                throw new IllegalArgumentException(
+                        "Canvas position references an unknown state: " + stateName
+                );
+            }
+            if (!position.isObject()
+                    || !position.path("x").isNumber()
+                    || !position.path("y").isNumber()) {
+                throw new IllegalArgumentException(
+                        "Canvas position for " + stateName
+                                + " must contain numeric x and y values"
+                );
+            }
+            double x = position.path("x").doubleValue();
+            double y = position.path("y").doubleValue();
+            if (!Double.isFinite(x)
+                    || !Double.isFinite(y)
+                    || Math.abs(x) > MAX_CANVAS_COORDINATE
+                    || Math.abs(y) > MAX_CANVAS_COORDINATE) {
+                throw new IllegalArgumentException(
+                        "Canvas position for " + stateName + " is outside the allowed range"
+                );
+            }
+            normalized.set(
+                    stateName,
+                    objectMapper.createObjectNode()
+                            .put("x", x)
+                            .put("y", y)
+            );
+        }
+        return normalized;
+    }
+
+    private int countStates(JsonNode machine) {
+        JsonNode states = machine.path("States");
+        if (!states.isObject()) {
+            return 0;
+        }
+
+        int count = states.size();
+        for (var stateEntry : states.properties()) {
+            JsonNode state = stateEntry.getValue();
+            if ("Parallel".equals(state.path("Type").stringValue())
+                    && state.path("Branches").isArray()) {
+                for (JsonNode branch : state.path("Branches")) {
+                    count += countStates(branch);
+                }
+            }
+            if ("Map".equals(state.path("Type").stringValue())
+                    && state.path("ItemProcessor").isObject()) {
+                count += countStates(state.path("ItemProcessor"));
+            }
+        }
+        return count;
+    }
+
+    private String writeJson(JsonNode value, String label) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Could not persist " + label, exception);
         }
     }
 

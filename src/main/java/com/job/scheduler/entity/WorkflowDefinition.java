@@ -14,7 +14,6 @@ import jakarta.persistence.UniqueConstraint;
 import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.Immutable;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -22,7 +21,6 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Immutable
 @Getter
 @Setter
 @Table(
@@ -68,6 +66,10 @@ public class WorkflowDefinition {
             length = 64
     )
     private String definitionHash;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "canvas_layout", columnDefinition = "jsonb")
+    private String canvasLayout;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

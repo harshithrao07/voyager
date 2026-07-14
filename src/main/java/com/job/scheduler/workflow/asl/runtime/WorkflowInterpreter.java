@@ -14,6 +14,7 @@ import com.job.scheduler.repository.ExecutionScopeRepository;
 import com.job.scheduler.repository.StateExecutionRepository;
 import com.job.scheduler.repository.StateExecutionAttemptRepository;
 import com.job.scheduler.repository.WorkflowExecutionRepository;
+import com.job.scheduler.workflow.task.McpTaskResource;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
@@ -558,8 +559,17 @@ public class WorkflowInterpreter {
         );
         List<StateExecutionAttempt> attempts = attemptRepository
                 .findByStateExecutionOrderByAttemptNumberAsc(stateExecution);
+        // Mutating MCP calls (WRITE/DESTRUCTIVE) are never auto-retried: a failure
+        // may follow a side effect that already happened on the server, so a retry
+        // could duplicate it. The Retry block still governs every other resource
+        // (including READ-only MCP calls). Catch still applies as a routing escape.
+        JsonNode resourceNode = stateDefinition.path("Resource");
+        String resource = resourceNode.isString() ? resourceNode.stringValue() : null;
+        JsonNode retryConfig = McpTaskResource.isMutatingResource(resource)
+                ? null
+                : stateDefinition.get("Retry");
         AslRetryResolver.RetryDecision retry = retryResolver.resolve(
-                stateDefinition.get("Retry"),
+                retryConfig,
                 error,
                 attempts
         );

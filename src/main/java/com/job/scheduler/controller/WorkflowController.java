@@ -13,6 +13,7 @@ import com.job.scheduler.dto.WorkflowExecutionPageDTO;
 import com.job.scheduler.dto.WorkflowResponseDTO;
 import com.job.scheduler.dto.WorkflowPageDTO;
 import com.job.scheduler.dto.UpdateWorkflowMetadataRequestDTO;
+import com.job.scheduler.dto.UpdateWorkflowCanvasLayoutRequestDTO;
 import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.service.WorkflowExecutionInspectionService;
 import com.job.scheduler.service.WorkflowDraftTestService;
@@ -30,6 +31,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.PutMapping;
 
 import java.util.List;
 import java.util.UUID;
@@ -102,6 +104,17 @@ public class WorkflowController {
             @PathVariable UUID workflowId
     ) {
         return ResponseEntity.ok(workflowService.getRevisions(workflowId));
+    }
+
+    @PutMapping("/{workflowId}/revisions/{revision}/canvas-layout")
+    public ResponseEntity<WorkflowDefinitionResponseDTO> updateCanvasLayout(
+            @PathVariable UUID workflowId,
+            @PathVariable long revision,
+            @Valid @RequestBody UpdateWorkflowCanvasLayoutRequestDTO request
+    ) {
+        return ResponseEntity.ok(
+                workflowService.updateCanvasLayout(workflowId, revision, request)
+        );
     }
 
     @PostMapping("/{workflowId}/revisions/{revision}/activate")

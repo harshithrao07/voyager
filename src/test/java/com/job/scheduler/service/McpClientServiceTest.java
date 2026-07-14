@@ -23,11 +23,14 @@ class McpClientServiceTest {
     @Mock
     private McpServerRepository mcpServerRepository;
 
+    @Mock
+    private McpTokenResolver tokenResolver;
+
     private McpClientService mcpClientService;
 
     @BeforeEach
     void setUp() {
-        mcpClientService = new McpClientService(mcpServerRepository);
+        mcpClientService = new McpClientService(mcpServerRepository, tokenResolver);
     }
 
     @Test
@@ -50,13 +53,14 @@ class McpClientServiceTest {
     }
 
     @Test
-    void listToolsRejectsBearerTokenServerUntilTokenResolutionExists() {
+    void listToolsRejectsBearerTokenServerWhenNoTokenConfigured() {
         when(mcpServerRepository.findByServerId("local-tools"))
                 .thenReturn(Optional.of(server(McpServerStatus.ENABLED, McpAuthType.BEARER_TOKEN)));
+        when(tokenResolver.resolve(org.mockito.ArgumentMatchers.any())).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> mcpClientService.listTools("local-tools").block())
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("Bearer token MCP clients need a token resolver before use");
+                .hasMessage("No token configured for MCP server: local-tools");
     }
 
     private McpServer server(McpServerStatus status, McpAuthType authType) {

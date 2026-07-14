@@ -83,6 +83,7 @@ public class McpServerRegistryService {
         server.setAuthTokenRef(blankToNull(request.authTokenRef()));
         server.setTrustLevel(request.trustLevel() == null ? McpTrustLevel.UNTRUSTED : request.trustLevel());
         server.setStatus(request.status() == null ? McpServerStatus.DISABLED : request.status());
+        server.setRequestTimeoutMs(request.requestTimeoutMs());
     }
 
     private void validateRequest(McpServerRequestDTO request) {
@@ -124,6 +125,7 @@ public class McpServerRegistryService {
                 server.getAuthTokenRef(),
                 server.getTrustLevel(),
                 server.getStatus(),
+                server.getRequestTimeoutMs(),
                 server.getCreatedAt(),
                 server.getUpdatedAt()
         );

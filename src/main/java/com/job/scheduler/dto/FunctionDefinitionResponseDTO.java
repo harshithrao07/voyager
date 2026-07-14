@@ -7,7 +7,6 @@ import java.util.UUID;
 
 public record FunctionDefinitionResponseDTO(
         UUID id,
-        String namespace,
         String name,
         String description,
         Integer activeVersion,

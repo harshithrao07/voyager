@@ -12,9 +12,9 @@ import java.util.UUID;
 @Repository
 public interface FunctionDefinitionRepository
         extends JpaRepository<FunctionDefinition, UUID> {
-    boolean existsByNamespaceAndName(String namespace, String name);
+    boolean existsByName(String name);
 
-    Optional<FunctionDefinition> findByNamespaceAndName(String namespace, String name);
+    Optional<FunctionDefinition> findByName(String name);
 
     List<FunctionDefinition> findAllByOrderByUpdatedAtDesc();
 

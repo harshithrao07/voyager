@@ -36,6 +36,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -132,6 +133,7 @@ class WorkflowControllerTest {
                 1,
                 "a".repeat(64),
                 definition,
+                objectMapper.createObjectNode(),
                 true,
                 Instant.now()
         );
@@ -188,6 +190,7 @@ class WorkflowControllerTest {
                         1,
                         "a".repeat(64),
                         definition,
+                        objectMapper.createObjectNode(),
                         true,
                         Instant.now()
                 ));
@@ -199,6 +202,46 @@ class WorkflowControllerTest {
                         ))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.active").value(true));
+    }
+
+    @Test
+    void updatesRevisionCanvasLayout() throws Exception {
+        UUID workflowId = UUID.randomUUID();
+        var definition = objectMapper.readTree("""
+                {
+                  "StartAt": "Done",
+                  "States": {"Done": {"Type": "Succeed"}}
+                }
+                """);
+        var canvasLayout = objectMapper.readTree("""
+                {"Done": {"x": 120.5, "y": -40}}
+                """);
+        when(workflowService.updateCanvasLayout(
+                eq(workflowId),
+                eq(1L),
+                any()
+        )).thenReturn(new WorkflowDefinitionResponseDTO(
+                UUID.randomUUID(),
+                1,
+                "a".repeat(64),
+                definition,
+                canvasLayout,
+                true,
+                Instant.now()
+        ));
+
+        mockMvc.perform(put(
+                                "/app/v1/workflows/{workflowId}/revisions/{revision}/canvas-layout",
+                                workflowId,
+                                1
+                        )
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"positions": {"Done": {"x": 120.5, "y": -40}}}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canvasLayout.Done.x").value(120.5))
+                .andExpect(jsonPath("$.canvasLayout.Done.y").value(-40));
     }
 
     @Test

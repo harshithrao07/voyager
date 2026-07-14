@@ -19,6 +19,7 @@ public record McpServerResponseDTO(
         String authTokenRef,
         McpTrustLevel trustLevel,
         McpServerStatus status,
+        Integer requestTimeoutMs,
         Instant createdAt,
         Instant updatedAt
 ) {

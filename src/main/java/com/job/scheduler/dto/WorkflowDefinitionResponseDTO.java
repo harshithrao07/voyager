@@ -10,6 +10,7 @@ public record WorkflowDefinitionResponseDTO(
         long revision,
         String definitionHash,
         JsonNode definition,
+        JsonNode canvasLayout,
         boolean active,
         Instant createdAt
 ) {

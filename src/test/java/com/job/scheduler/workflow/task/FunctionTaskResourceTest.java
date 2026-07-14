@@ -21,9 +21,11 @@ class FunctionTaskResourceTest {
 
     @Test
     void supportsVoyagerFunctionResourcesOnly() {
-        assertThat(resource.supports(URI.create("voyager://billing/tax")))
+        assertThat(resource.supports(URI.create("voyager://function/tax")))
                 .isTrue();
-        assertThat(resource.supports(URI.create("voyager://webhook")))
+        assertThat(resource.supports(URI.create("voyager://system/webhook")))
+                .isFalse();
+        assertThat(resource.supports(URI.create("voyager://mcp/s/t")))
                 .isFalse();
     }
 
@@ -32,44 +34,44 @@ class FunctionTaskResourceTest {
         var input = objectMapper.createObjectNode().put("amount", 10);
         var output = objectMapper.createObjectNode().put("tax", 1.8);
         when(invocationService.invokeForTask(
-                "billing", "tax", 3, input, TaskExecutionContext.NONE))
+                "tax", 3, input, TaskExecutionContext.NONE))
                 .thenReturn(output);
 
-        assertThat(resource.execute(URI.create("voyager://billing/tax@v3"), input))
+        assertThat(resource.execute(URI.create("voyager://function/tax@v3"), input))
                 .isEqualTo(output);
         verify(invocationService).invokeForTask(
-                "billing", "tax", 3, input, TaskExecutionContext.NONE);
+                "tax", 3, input, TaskExecutionContext.NONE);
     }
 
     @Test
     void latestVersionUsesActiveVersion() {
         var input = objectMapper.createObjectNode();
         when(invocationService.invokeForTask(
-                "billing", "tax", null, input, TaskExecutionContext.NONE))
+                "tax", null, input, TaskExecutionContext.NONE))
                 .thenReturn(objectMapper.createObjectNode());
 
-        resource.execute(URI.create("voyager://billing/tax@latest"), input);
+        resource.execute(URI.create("voyager://function/tax@latest"), input);
 
         verify(invocationService).invokeForTask(
-                "billing", "tax", null, input, TaskExecutionContext.NONE);
+                "tax", null, input, TaskExecutionContext.NONE);
     }
 
     @Test
     void passesWorkflowContextToInvocation() {
         var input = objectMapper.createObjectNode();
         var context = new TaskExecutionContext(java.util.UUID.randomUUID(), "CalculateTax");
-        when(invocationService.invokeForTask("billing", "tax", null, input, context))
+        when(invocationService.invokeForTask("tax", null, input, context))
                 .thenReturn(objectMapper.createObjectNode());
 
-        resource.execute(URI.create("voyager://billing/tax@latest"), input, context);
+        resource.execute(URI.create("voyager://function/tax@latest"), input, context);
 
-        verify(invocationService).invokeForTask("billing", "tax", null, input, context);
+        verify(invocationService).invokeForTask("tax", null, input, context);
     }
 
     @Test
     void rejectsInvalidVersion() {
         assertThatThrownBy(() -> resource.execute(
-                URI.create("voyager://billing/tax@beta"),
+                URI.create("voyager://function/tax@beta"),
                 objectMapper.createObjectNode()
         ))
                 .isInstanceOf(TaskResourceException.class)

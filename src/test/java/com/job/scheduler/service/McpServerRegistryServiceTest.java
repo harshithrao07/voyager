@@ -50,7 +50,8 @@ class McpServerRegistryServiceTest {
                 McpAuthType.NONE,
                 null,
                 null,
-                null
+                null,
+                5000
         );
 
         when(mcpServerRepository.existsByServerId("local-tools")).thenReturn(false);
@@ -68,6 +69,7 @@ class McpServerRegistryServiceTest {
         assertThat(response.baseUrl()).isEqualTo("http://localhost:8081");
         assertThat(response.trustLevel()).isEqualTo(McpTrustLevel.UNTRUSTED);
         assertThat(response.status()).isEqualTo(McpServerStatus.DISABLED);
+        assertThat(response.requestTimeoutMs()).isEqualTo(5000);
 
         ArgumentCaptor<McpServer> serverCaptor = ArgumentCaptor.forClass(McpServer.class);
         verify(mcpServerRepository).save(serverCaptor.capture());
@@ -76,6 +78,7 @@ class McpServerRegistryServiceTest {
         assertThat(savedServer.getServerId()).isEqualTo("local-tools");
         assertThat(savedServer.getTrustLevel()).isEqualTo(McpTrustLevel.UNTRUSTED);
         assertThat(savedServer.getStatus()).isEqualTo(McpServerStatus.DISABLED);
+        assertThat(savedServer.getRequestTimeoutMs()).isEqualTo(5000);
     }
 
     @Test
@@ -99,7 +102,8 @@ class McpServerRegistryServiceTest {
                 McpAuthType.BEARER_TOKEN,
                 null,
                 McpTrustLevel.READ_ONLY,
-                McpServerStatus.DISABLED
+                McpServerStatus.DISABLED,
+                null
         );
 
         assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
@@ -150,7 +154,8 @@ class McpServerRegistryServiceTest {
                 McpAuthType.NONE,
                 null,
                 McpTrustLevel.READ_ONLY,
-                McpServerStatus.ENABLED
+                McpServerStatus.ENABLED,
+                null
         );
     }
 

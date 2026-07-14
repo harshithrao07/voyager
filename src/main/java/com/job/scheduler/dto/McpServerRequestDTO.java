@@ -7,6 +7,7 @@ import com.job.scheduler.enums.McpTrustLevel;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
 
 public record McpServerRequestDTO(
         @NotBlank
@@ -33,6 +34,9 @@ public record McpServerRequestDTO(
 
         McpTrustLevel trustLevel,
 
-        McpServerStatus status
+        McpServerStatus status,
+
+        @Positive(message = "requestTimeoutMs must be positive")
+        Integer requestTimeoutMs
 ) {
 }

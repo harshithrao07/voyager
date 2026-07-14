@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import type { WorkflowSummary } from './components/WorkflowListView';
 import { WorkspaceState } from './components/WorkspaceState';
+import { WorkflowSettingsPanel } from './components/WorkflowSettingsPanel';
 import { DashboardPage } from './pages/DashboardPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { CreateWorkflowPage } from './pages/CreateWorkflowPage';
@@ -8,16 +10,20 @@ import { SettingsPage } from './pages/SettingsPage';
 import { FunctionsPage } from './pages/FunctionsPage';
 import { WorkflowDetailPage, type WorkflowRevision } from './pages/WorkflowDetailPage';
 import {
+  activateWorkflowRevision,
   getWorkflow,
   getWorkflowRevisions,
   listWorkflows,
   listWorkflowAiConversations,
+  updateWorkflowCanvasLayout,
   type WorkflowAiConversationSummaryDTO,
   type WorkflowDefinitionResponseDTO,
   type WorkflowPageDTO,
   type WorkflowResponseDTO,
   type WorkflowStatusDTO,
 } from './api';
+import type { CanvasNodePositions } from './types/workflowCanvas';
+import { mergeCanvasPositionsForScope } from './components/workflow-create/nestedMachine';
 
 const activeDefinition = {
   "StartAt": "Fetch Source Data",
@@ -159,6 +165,7 @@ function mapWorkflowRevision(revision: WorkflowDefinitionResponseDTO): WorkflowR
     active: revision.active,
     note: `Definition hash ${hash}`,
     definition: revision.definition,
+    canvasLayout: revision.canvasLayout || {},
     runs: [],
   };
 }
@@ -175,6 +182,7 @@ function buildGeneratedRevision(definition: any): WorkflowRevision {
     active: false,
     note: 'Generated locally from the prompt. Save it as a backend revision when ready.',
     definition,
+    canvasLayout: {},
     runs: [],
   };
 }
@@ -273,6 +281,7 @@ type AppRoute =
   | { page: 'create' }
   | { page: 'chat'; chatId: string }
   | { page: 'workflow'; workflowId: string }
+  | { page: 'workflow-edit'; workflowId: string; revision: number }
   | { page: 'settings' }
   | { page: 'functions' };
 
@@ -290,6 +299,15 @@ function parseRoute(pathname: string): AppRoute {
     return { page: 'chat', chatId: decodeURIComponent(chatMatch[1]) };
   }
 
+  const workflowEditMatch = normalized.match(/^\/workflows\/([^/]+)\/revisions\/(\d+)\/edit$/);
+  if (workflowEditMatch?.[1] && workflowEditMatch[2]) {
+    return {
+      page: 'workflow-edit',
+      workflowId: decodeURIComponent(workflowEditMatch[1]),
+      revision: Number(workflowEditMatch[2]),
+    };
+  }
+
   const workflowMatch = normalized.match(/^\/workflows\/([^/]+)$/);
   if (workflowMatch?.[1]) {
     return { page: 'workflow', workflowId: decodeURIComponent(workflowMatch[1]) };
@@ -300,6 +318,10 @@ function parseRoute(pathname: string): AppRoute {
 
 function workflowPath(workflowId: string) {
   return `/workflows/${encodeURIComponent(workflowId)}`;
+}
+
+function workflowRevisionEditPath(workflowId: string, revision: number) {
+  return `${workflowPath(workflowId)}/revisions/${revision}/edit`;
 }
 
 function canonicalPath(pathname: string) {
@@ -314,6 +336,7 @@ function App() {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [revisionPanelOpen, setRevisionPanelOpen] = useState(false);
+  const [workflowSettingsOpen, setWorkflowSettingsOpen] = useState(false);
   const [newWorkflowResetKey, setNewWorkflowResetKey] = useState(0);
   const [route, setRoute] = useState<AppRoute>(() => parseRoute(window.location.pathname));
   const [functionsWorkbenchActive, setFunctionsWorkbenchActive] = useState(false);
@@ -324,28 +347,57 @@ function App() {
   const [workflowListError, setWorkflowListError] = useState<string | null>(null);
   const [workflowDetail, setWorkflowDetail] = useState<WorkflowResponseDTO | null>(null);
   const [workflowRevisions, setWorkflowRevisions] = useState<WorkflowRevision[]>([]);
+  const canvasLayoutSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const workflowEditDirtyRef = useRef(false);
+  const workflowSettingsDirtyRef = useRef(false);
+  const preferredWorkflowRevisionRef = useRef<{ workflowId: string; revisionId: string } | null>(null);
+  const currentPathRef = useRef(canonicalPath(window.location.pathname));
   const [workflowDetailLoading, setWorkflowDetailLoading] = useState(false);
   const [workflowDetailError, setWorkflowDetailError] = useState<string | null>(null);
+  const [workflowActionBusy, setWorkflowActionBusy] = useState(false);
   const [workflowDef, setWorkflowDef] = useState<any>(activeDefinition);
   const [activeTab, setActiveTab] = useState<'visualizer' | 'definition' | 'executions'>('visualizer');
   const [selectedStateName, setSelectedStateName] = useState('Fetch Source Data');
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowSummary | null>(null);
+  const selectedWorkflowId = selectedWorkflow?.id ?? null;
   const [selectedRevisionId, setSelectedRevisionId] = useState('');
   const selectedRevision =
     workflowRevisions.find((revision) => revision.id === selectedRevisionId) ||
     workflowRevisions.find((revision) => revision.active) ||
     workflowRevisions[0] ||
     null;
+  const revisionEditBase = route.page === 'workflow-edit'
+    ? workflowRevisions.find((revision) => revision.id === String(route.revision)) || null
+    : null;
   const currentDefinition = selectedRevision?.definition || workflowDetail?.activeDefinition?.definition || workflowDef;
+  const handleWorkflowEditDirtyChange = useCallback((dirty: boolean) => {
+    workflowEditDirtyRef.current = dirty;
+  }, []);
+  const handleWorkflowSettingsDirtyChange = useCallback((dirty: boolean) => {
+    workflowSettingsDirtyRef.current = dirty;
+  }, []);
   const navigate = (path: string, options: { replace?: boolean } = {}) => {
-    if (window.location.pathname !== path) {
+    const nextPath = canonicalPath(path);
+    if (workflowEditDirtyRef.current && currentPathRef.current !== nextPath) {
+      const discard = window.confirm('Discard the unsaved workflow revision changes?');
+      if (!discard) return;
+      workflowEditDirtyRef.current = false;
+    }
+    if (workflowSettingsDirtyRef.current && currentPathRef.current !== nextPath) {
+      const discard = window.confirm('Discard the unsaved workflow settings?');
+      if (!discard) return;
+      workflowSettingsDirtyRef.current = false;
+      setWorkflowSettingsOpen(false);
+    }
+    if (window.location.pathname !== nextPath) {
       if (options.replace) {
-        window.history.replaceState({}, '', path);
+        window.history.replaceState({}, '', nextPath);
       } else {
-        window.history.pushState({}, '', path);
+        window.history.pushState({}, '', nextPath);
       }
     }
-    setRoute(parseRoute(path));
+    currentPathRef.current = nextPath;
+    setRoute(parseRoute(nextPath));
   };
 
   useEffect(() => {
@@ -354,12 +406,31 @@ function App() {
       window.history.replaceState({}, '', currentPath);
       setRoute(parseRoute(currentPath));
     }
+    currentPathRef.current = currentPath;
 
     const handlePopState = () => {
       const path = canonicalPath(window.location.pathname);
+      if (workflowEditDirtyRef.current && currentPathRef.current !== path) {
+        const discard = window.confirm('Discard the unsaved workflow revision changes?');
+        if (!discard) {
+          window.history.pushState({}, '', currentPathRef.current);
+          return;
+        }
+        workflowEditDirtyRef.current = false;
+      }
+      if (workflowSettingsDirtyRef.current && currentPathRef.current !== path) {
+        const discard = window.confirm('Discard the unsaved workflow settings?');
+        if (!discard) {
+          window.history.pushState({}, '', currentPathRef.current);
+          return;
+        }
+        workflowSettingsDirtyRef.current = false;
+        setWorkflowSettingsOpen(false);
+      }
       if (path !== window.location.pathname) {
         window.history.replaceState({}, '', path);
       }
+      currentPathRef.current = path;
       setRoute(parseRoute(path));
     };
     window.addEventListener('popstate', handlePopState);
@@ -427,6 +498,12 @@ function App() {
 
   useEffect(() => {
     if (route.page !== 'workflow') {
+      setWorkflowSettingsOpen(false);
+    }
+  }, [route.page]);
+
+  useEffect(() => {
+    if (route.page !== 'workflow' && route.page !== 'workflow-edit') {
       setSelectedWorkflow(null);
       setSelectedRevisionId('');
       setDetailsPanelOpen(false);
@@ -461,7 +538,7 @@ function App() {
   }, [route, workflowSummaries, workflowDetail]);
 
   useEffect(() => {
-    if (!selectedWorkflow) {
+    if (!selectedWorkflowId) {
       setWorkflowDetail(null);
       setWorkflowRevisions([]);
       setWorkflowDetailError(null);
@@ -476,23 +553,35 @@ function App() {
     setWorkflowRevisions([]);
 
     Promise.all([
-      getWorkflow({ workflowId: selectedWorkflow.id }),
-      getWorkflowRevisions({ workflowId: selectedWorkflow.id }),
+      getWorkflow({ workflowId: selectedWorkflowId }),
+      getWorkflowRevisions({ workflowId: selectedWorkflowId }),
     ])
       .then(([detail, revisionDtos]) => {
         if (cancelled) return;
 
         const revisions = revisionDtos.map(mapWorkflowRevision);
-        const activeRevision =
+        const requestedRevision = route.page === 'workflow-edit'
+          ? revisions.find((revision) => revision.id === String(route.revision)) || null
+          : null;
+        const preferredRevision = preferredWorkflowRevisionRef.current?.workflowId === selectedWorkflowId
+          ? revisions.find((revision) => revision.id === preferredWorkflowRevisionRef.current?.revisionId) || null
+          : null;
+        const displayedRevision =
+          requestedRevision ||
+          preferredRevision ||
           revisions.find((revision) => revision.active) ||
           (detail.activeDefinition ? mapWorkflowRevision(detail.activeDefinition) : null) ||
           revisions[0] ||
           null;
-        const nextDefinition = activeRevision?.definition || detail.activeDefinition?.definition || activeDefinition;
+        const nextDefinition = displayedRevision?.definition || detail.activeDefinition?.definition || activeDefinition;
+
+        if (preferredRevision) {
+          preferredWorkflowRevisionRef.current = null;
+        }
 
         setWorkflowDetail(detail);
-        setWorkflowRevisions(revisions.length > 0 ? revisions : activeRevision ? [activeRevision] : []);
-        setSelectedRevisionId(activeRevision?.id || '');
+        setWorkflowRevisions(revisions.length > 0 ? revisions : displayedRevision ? [displayedRevision] : []);
+        setSelectedRevisionId(displayedRevision?.id || '');
         setWorkflowDef(nextDefinition);
         setSelectedStateName(getStartState(nextDefinition));
       })
@@ -509,7 +598,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedWorkflow]);
+  }, [selectedWorkflowId, route]);
 
   const handleWorkflowGenerated = (definition: any) => {
     setWorkflowDef(definition);
@@ -582,6 +671,77 @@ function App() {
     navigate(workflowPath(summary.id));
   };
 
+  const handleWorkflowUpdated = useCallback((updatedWorkflow: WorkflowResponseDTO) => {
+    const summary = mapWorkflowSummary(updatedWorkflow);
+    setWorkflowDetail(updatedWorkflow);
+    setSelectedWorkflow(summary);
+    setWorkflowSummaries((current) => current.map((workflow) => (
+      workflow.id === summary.id ? summary : workflow
+    )));
+    setWorkflowPage((current) => current ? {
+      ...current,
+      content: current.content.map((workflow) => (
+        workflow.id === updatedWorkflow.id ? updatedWorkflow : workflow
+      )),
+    } : current);
+  }, []);
+
+  const handleWorkflowArchived = useCallback((archivedWorkflow: WorkflowResponseDTO) => {
+    handleWorkflowUpdated(archivedWorkflow);
+    workflowSettingsDirtyRef.current = false;
+    setWorkflowSettingsOpen(false);
+  }, [handleWorkflowUpdated]);
+
+  const handleWorkflowRevisionSaved = async (
+    workflowId: string,
+    savedRevision: WorkflowDefinitionResponseDTO,
+  ) => {
+    const locallyMappedRevision = mapWorkflowRevision(savedRevision);
+    preferredWorkflowRevisionRef.current = {
+      workflowId,
+      revisionId: locallyMappedRevision.id,
+    };
+    setWorkflowRevisions((current) => [
+      locallyMappedRevision,
+      ...current
+        .filter((revision) => revision.id !== locallyMappedRevision.id)
+        .map((revision) => savedRevision.active ? { ...revision, active: false } : revision),
+    ]);
+    setSelectedRevisionId(locallyMappedRevision.id);
+    setWorkflowDef(locallyMappedRevision.definition);
+    setSelectedStateName(getStartState(locallyMappedRevision.definition));
+    setDetailsPanelOpen(false);
+    setRevisionPanelOpen(false);
+    setActiveTab('visualizer');
+
+    try {
+      const [detail, revisionDtos] = await Promise.all([
+        getWorkflow({ workflowId }),
+        getWorkflowRevisions({ workflowId }),
+      ]);
+      const revisions = revisionDtos.map(mapWorkflowRevision);
+      const refreshedRevision = revisions.find((revision) => revision.id === String(savedRevision.revision))
+        || locallyMappedRevision;
+      const summary = mapWorkflowSummary(detail);
+
+      setWorkflowDetail(detail);
+      setWorkflowRevisions(revisions);
+      setSelectedRevisionId(refreshedRevision.id);
+      setWorkflowDef(refreshedRevision.definition);
+      setSelectedStateName(getStartState(refreshedRevision.definition));
+      setSelectedWorkflow(summary);
+      setWorkflowSummaries((current) => [summary, ...current.filter((item) => item.id !== summary.id)]);
+      setWorkflowPage((current) => current ? {
+        ...current,
+        content: current.content.map((workflow) => workflow.id === detail.id ? detail : workflow),
+      } : current);
+    } catch (error) {
+      toast.error(error instanceof Error
+        ? `Revision saved, but workflow details could not be refreshed: ${error.message}`
+        : 'Revision saved, but workflow details could not be refreshed.');
+    }
+  };
+
   const handleRevisionSelected = (revision: WorkflowRevision) => {
     setSelectedRevisionId(revision.id);
     setSelectedStateName(getStartState(revision.definition));
@@ -595,13 +755,84 @@ function App() {
     }
   };
 
+  const handleCanvasLayoutChange = useCallback((positions: CanvasNodePositions) => {
+    if (!selectedRevision) return;
+
+    const selectedRevisionNumber = Number(selectedRevision.id);
+    const mergedPositions = mergeCanvasPositionsForScope(
+      selectedRevision.canvasLayout,
+      [],
+      positions,
+    );
+    setWorkflowRevisions((current) => current.map((revision) => (
+      revision.id === selectedRevision.id ? { ...revision, canvasLayout: mergedPositions } : revision
+    )));
+
+    if (!workflowDetail || !Number.isSafeInteger(selectedRevisionNumber) || selectedRevisionNumber < 1) {
+      return;
+    }
+
+    const workflowId = workflowDetail.id;
+    canvasLayoutSaveQueueRef.current = canvasLayoutSaveQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await updateWorkflowCanvasLayout(workflowId, selectedRevisionNumber, mergedPositions);
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : 'Could not save the canvas layout.');
+        }
+      });
+  }, [selectedRevision, workflowDetail]);
+
+  const handleActivateSchedule = async () => {
+    if (!workflowDetail || !workflowDetail.cronExpression || !selectedRevision) {
+      return;
+    }
+
+    const revision = Number(selectedRevision.id);
+    if (!Number.isSafeInteger(revision) || revision < 1) {
+      toast.error('Select a persisted revision before activating the schedule.');
+      return;
+    }
+
+    setWorkflowActionBusy(true);
+    try {
+      await activateWorkflowRevision(workflowDetail.id, revision);
+      const [detail, revisionDtos] = await Promise.all([
+        getWorkflow({ workflowId: workflowDetail.id }),
+        getWorkflowRevisions({ workflowId: workflowDetail.id }),
+      ]);
+      const revisions = revisionDtos.map(mapWorkflowRevision);
+      const activeRevision = revisions.find((item) => item.active) || null;
+      const nextDefinition = activeRevision?.definition || detail.activeDefinition?.definition || activeDefinition;
+      const summary = mapWorkflowSummary(detail);
+
+      setWorkflowDetail(detail);
+      setWorkflowRevisions(revisions);
+      setSelectedRevisionId(activeRevision?.id || selectedRevision.id);
+      setWorkflowDef(nextDefinition);
+      setSelectedStateName(getStartState(nextDefinition));
+      setWorkflowSummaries((current) => [summary, ...current.filter((item) => item.id !== summary.id)]);
+      setWorkflowPage((current) => current ? {
+        ...current,
+        content: current.content.map((item) => item.id === detail.id ? detail : item),
+      } : current);
+      setSelectedWorkflow(summary);
+      toast.success('Schedule activated');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not activate the schedule.');
+    } finally {
+      setWorkflowActionBusy(false);
+    }
+  };
+
   const handleStateSelect = (stateName: string) => {
     setSelectedStateName(stateName);
     setDetailsPanelOpen(true);
     setRevisionPanelOpen(false);
   };
 
-  const createViewActive = route.page === 'create' || route.page === 'chat';
+  const createViewActive = route.page === 'create' || route.page === 'chat' || route.page === 'workflow-edit';
   const hideMainHeader = createViewActive || (route.page === 'functions' && functionsWorkbenchActive);
   const sortedChatSummaries = [...chatSummaries].sort((left, right) => chatSortTime(right) - chatSortTime(left));
   const sidebarChatSummaries = sortedChatSummaries.slice(0, 5);
@@ -870,10 +1101,53 @@ function App() {
                     <span>Revision</span>
                     <span className="font-mono-sm text-[11px] text-on-surface-variant">{selectedRevision?.label || 'Loading'}</span>
                   </button>
-                  <button onClick={() => setActiveTab('executions')} className="flex h-9 items-center gap-2 rounded-DEFAULT border border-primary bg-primary px-3 font-body-sm text-body-sm font-medium text-surface-lowest transition-colors hover:bg-primary-fixed">
-                    <span className="material-symbols-outlined text-[16px]">play_arrow</span>
-                    Execute
-                  </button>
+                  {workflowDetail && workflowDetail.status !== 'ARCHIVED' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRevisionPanelOpen(false);
+                        setDetailsPanelOpen(false);
+                        setWorkflowSettingsOpen(true);
+                      }}
+                      className="flex h-9 items-center gap-2 rounded-DEFAULT border border-border-subtle bg-surface-elevated px-3 font-body-sm text-body-sm text-primary transition-colors hover:border-secondary/55 hover:bg-surface-container"
+                      title="Edit workflow metadata and lifecycle"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">tune</span>
+                      Settings
+                    </button>
+                  )}
+                  {selectedRevision
+                    && Number.isSafeInteger(Number(selectedRevision.id))
+                    && workflowDetail?.status !== 'ARCHIVED' && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(workflowRevisionEditPath(
+                        selectedWorkflow.id,
+                        Number(selectedRevision.id),
+                      ))}
+                      className="flex h-9 items-center gap-2 rounded-DEFAULT border border-border-subtle bg-surface-elevated px-3 font-body-sm text-body-sm text-primary transition-colors hover:border-secondary/55 hover:bg-surface-container"
+                      title={`Use ${selectedRevision.label} as the base for a new immutable revision`}
+                    >
+                      <span className="material-symbols-outlined text-[16px]">edit_note</span>
+                      Edit as new revision
+                    </button>
+                  )}
+                  {workflowDetail?.status === 'DRAFT' && workflowDetail.cronExpression ? (
+                    <button
+                      type="button"
+                      onClick={handleActivateSchedule}
+                      disabled={workflowActionBusy || !selectedRevision}
+                      className="flex h-9 items-center gap-2 rounded-DEFAULT border border-primary bg-primary px-3 font-body-sm text-body-sm font-medium text-surface-lowest transition-colors hover:bg-primary-fixed disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">event_available</span>
+                      {workflowActionBusy ? 'Activating...' : 'Activate schedule'}
+                    </button>
+                  ) : (workflowDetail?.status === 'ACTIVE' || workflowDetail?.status === 'PAUSED') ? (
+                    <button onClick={() => setActiveTab('executions')} className="flex h-9 items-center gap-2 rounded-DEFAULT border border-primary bg-primary px-3 font-body-sm text-body-sm font-medium text-surface-lowest transition-colors hover:bg-primary-fixed">
+                      <span className="material-symbols-outlined text-[16px]">play_arrow</span>
+                      Execute
+                    </button>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -882,7 +1156,36 @@ function App() {
 
           {route.page !== 'workflow' ? (
             <div className="flex-1 min-h-0 overflow-hidden">
-              {route.page === 'create' || route.page === 'chat' ? (
+              {route.page === 'workflow-edit' ? (
+                workflowDetailLoading ? (
+                  <WorkspaceState title="Loading revision" message="Preparing the selected workflow revision for editing." />
+                ) : workflowDetailError ? (
+                  <WorkspaceState title="Revision unavailable" message={workflowDetailError} />
+                ) : !workflowDetail || !revisionEditBase ? (
+                  <WorkspaceState
+                    title="Revision not found"
+                    message={`Revision ${route.revision} is not available for this workflow.`}
+                    action={{ label: 'Back to workflow', onClick: () => navigate(workflowPath(route.workflowId)) }}
+                  />
+                ) : (
+                  <CreateWorkflowPage
+                    key={`${workflowDetail.id}:${revisionEditBase.id}:edit`}
+                    onWorkflowCreated={handleWorkflowCreated}
+                    onWorkflowRevisionSaved={handleWorkflowRevisionSaved}
+                    onUnsavedChangesChange={handleWorkflowEditDirtyChange}
+                    onNavigate={navigate}
+                    revisionEdit={{
+                      workflow: workflowDetail,
+                      baseRevision: {
+                        revision: Number(revisionEditBase.id),
+                        definition: revisionEditBase.definition,
+                        canvasLayout: revisionEditBase.canvasLayout,
+                        active: Boolean(revisionEditBase.active),
+                      },
+                    }}
+                  />
+                )
+              ) : route.page === 'create' || route.page === 'chat' ? (
                 <CreateWorkflowPage
                   key={newWorkflowResetKey}
                   routeChatId={route.page === 'chat' ? route.chatId : undefined}
@@ -936,10 +1239,20 @@ function App() {
             onRevisionSelected={handleRevisionIdSelected}
             onCloseRevisionPanel={() => setRevisionPanelOpen(false)}
             onWorkflowGenerated={handleWorkflowGenerated}
+            onCanvasLayoutChange={handleCanvasLayoutChange}
           />
           )}
         </main>
       </div>
+      {route.page === 'workflow' && workflowSettingsOpen && workflowDetail && (
+        <WorkflowSettingsPanel
+          workflow={workflowDetail}
+          onClose={() => setWorkflowSettingsOpen(false)}
+          onDirtyChange={handleWorkflowSettingsDirtyChange}
+          onWorkflowUpdated={handleWorkflowUpdated}
+          onWorkflowArchived={handleWorkflowArchived}
+        />
+      )}
       {searchModalOpen && (
         <div
           className="fixed inset-0 z-50 flex cursor-pointer items-start justify-center bg-background/80 pt-[20vh] backdrop-blur-sm"

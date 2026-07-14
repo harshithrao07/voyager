@@ -27,7 +27,7 @@ export function WorkflowListView({ workflows, onSelect }: Props) {
     <div className="h-full min-h-0 bg-surface-base p-6">
       <section className="h-full rounded-lg border border-border-subtle bg-surface-container-lowest flex flex-col overflow-hidden">
         <div className="p-4 border-b border-border-muted bg-surface/50 backdrop-blur-sm flex items-center justify-between">
-          <h2 className="font-display text-[14px] font-semibold leading-5 text-primary">Active Workflows</h2>
+          <h2 className="font-display text-[14px] font-semibold leading-5 text-primary">Workflows</h2>
           <button className="text-on-surface-variant hover:text-primary transition-colors" aria-label="Filter workflows">
             <Filter size={18} />
           </button>

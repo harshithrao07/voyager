@@ -67,18 +67,13 @@ public class FunctionRegistryService {
     public FunctionDefinitionResponseDTO createFunction(
             FunctionDefinitionRequestDTO request
     ) {
-        if (functionRepository.existsByNamespaceAndName(
-                request.namespace(),
-                request.name()
-        )) {
+        if (functionRepository.existsByName(request.name())) {
             throw new IllegalStateException(
-                    "Function already exists: "
-                            + request.namespace() + "/" + request.name()
+                    "Function already exists: " + request.name()
             );
         }
 
         FunctionDefinition function = new FunctionDefinition();
-        function.setNamespace(request.namespace());
         function.setName(request.name());
         applyRequest(function, request);
         return toResponse(functionRepository.save(function));
@@ -108,10 +103,9 @@ public class FunctionRegistryService {
             FunctionDefinitionRequestDTO request
     ) {
         FunctionDefinition function = findFunction(functionId);
-        if (!function.getNamespace().equals(request.namespace())
-                || !function.getName().equals(request.name())) {
+        if (!function.getName().equals(request.name())) {
             throw new IllegalArgumentException(
-                    "Function namespace/name cannot be changed"
+                    "Function name cannot be changed"
             );
         }
         applyRequest(function, request);
@@ -374,8 +368,8 @@ public class FunctionRegistryService {
                 ));
     }
 
-    FunctionDefinition findFunction(String namespace, String name) {
-        return functionRepository.findByNamespaceAndName(namespace, name)
+    FunctionDefinition findFunction(String name) {
+        return functionRepository.findByName(name)
                 .orElseThrow(() -> new EntityNotFoundException(
                         FUNCTION_NOT_FOUND_MESSAGE
                 ));
@@ -401,7 +395,6 @@ public class FunctionRegistryService {
     FunctionDefinitionResponseDTO toResponse(FunctionDefinition function) {
         return new FunctionDefinitionResponseDTO(
                 function.getId(),
-                function.getNamespace(),
                 function.getName(),
                 function.getDescription(),
                 function.getActiveVersion(),

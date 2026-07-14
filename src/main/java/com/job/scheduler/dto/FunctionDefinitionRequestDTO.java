@@ -10,13 +10,6 @@ public record FunctionDefinitionRequestDTO(
                 regexp = "^[a-z0-9][a-z0-9-]*$",
                 message = "must use lowercase letters, numbers, and hyphens"
         )
-        String namespace,
-
-        @NotBlank
-        @Pattern(
-                regexp = "^[a-z0-9][a-z0-9-]*$",
-                message = "must use lowercase letters, numbers, and hyphens"
-        )
         String name,
 
         String description,

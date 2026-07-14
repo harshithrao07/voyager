@@ -10,7 +10,7 @@ import tools.jackson.databind.JsonNode;
 
 import java.net.URI;
 
-/** Task resource for {@code voyager://send-email}. */
+/** Task resource for {@code voyager://system/send-email}. */
 @Component
 @RequiredArgsConstructor
 public class SchedulerEmailTaskResource implements TaskResource {
@@ -20,7 +20,8 @@ public class SchedulerEmailTaskResource implements TaskResource {
     @Override
     public boolean supports(URI resource) {
         return "voyager".equals(resource.getScheme())
-                && "send-email".equals(operation(resource));
+                && "system".equals(resource.getHost())
+                && "send-email".equals(trimSlashes(resource.getPath()));
     }
 
     @Override

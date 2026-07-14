@@ -392,7 +392,6 @@ class FunctionRegistryServiceTest {
     private FunctionDefinition function(FunctionStatus status) {
         FunctionDefinition value = new FunctionDefinition();
         value.setId(UUID.randomUUID());
-        value.setNamespace("billing");
         value.setName("tax");
         value.setActiveVersion(1);
         value.setStatus(status);

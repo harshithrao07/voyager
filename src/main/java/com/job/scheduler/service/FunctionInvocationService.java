@@ -194,13 +194,11 @@ public class FunctionInvocationService {
     }
 
     public JsonNode invokeForTask(
-            String namespace,
             String name,
             Integer requestedVersion,
             JsonNode input
     ) {
         return invokeForTask(
-                namespace,
                 name,
                 requestedVersion,
                 input,
@@ -209,7 +207,6 @@ public class FunctionInvocationService {
     }
 
     public JsonNode invokeForTask(
-            String namespace,
             String name,
             Integer requestedVersion,
             JsonNode input,
@@ -217,7 +214,7 @@ public class FunctionInvocationService {
     ) {
         try {
             FunctionDefinition function =
-                    functionRegistryService.findFunction(namespace, name);
+                    functionRegistryService.findFunction(name);
             FunctionVersion version = requestedVersion == null
                     ? functionRegistryService.activeVersion(function)
                     : functionRegistryService.findVersion(function, requestedVersion);
@@ -352,8 +349,7 @@ public class FunctionInvocationService {
     ) {
         if (function.getStatus() != FunctionStatus.ENABLED) {
             throw new IllegalStateException(
-                    "Function is disabled: "
-                            + function.getNamespace() + "/" + function.getName()
+                    "Function is disabled: " + function.getName()
             );
         }
         if (version.getStatus() != FunctionVersionStatus.AVAILABLE) {

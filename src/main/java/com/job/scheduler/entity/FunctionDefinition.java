@@ -26,8 +26,8 @@ import java.util.UUID;
         name = "workflow_functions",
         uniqueConstraints = {
                 @UniqueConstraint(
-                        name = "uk_workflow_functions_namespace_name",
-                        columnNames = {"namespace", "name"}
+                        name = "uk_workflow_functions_name",
+                        columnNames = {"name"}
                 )
         },
         indexes = {
@@ -40,9 +40,6 @@ public class FunctionDefinition {
     @GeneratedValue(strategy = GenerationType.UUID)
     @Column(nullable = false, updatable = false)
     private UUID id;
-
-    @Column(name = "namespace", nullable = false, updatable = false)
-    private String namespace;
 
     @Column(name = "name", nullable = false, updatable = false)
     private String name;

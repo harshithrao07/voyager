@@ -287,7 +287,7 @@ class FunctionInvocationServiceTest {
 
     @Test
     void invokeForTaskThrowsStableTimeoutError() {
-        when(functionRegistryService.findFunction("billing", "tax"))
+        when(functionRegistryService.findFunction("tax"))
                 .thenReturn(function);
         when(functionRegistryService.activeVersion(function)).thenReturn(version);
         when(judge0Client.createSubmission(any())).thenReturn("token-4");
@@ -307,7 +307,6 @@ class FunctionInvocationServiceTest {
         ));
 
         assertThatThrownBy(() -> service.invokeForTask(
-                "billing",
                 "tax",
                 null,
                 objectMapper.createObjectNode()
@@ -388,7 +387,6 @@ class FunctionInvocationServiceTest {
     private FunctionDefinition function() {
         FunctionDefinition value = new FunctionDefinition();
         value.setId(UUID.randomUUID());
-        value.setNamespace("billing");
         value.setName("tax");
         value.setActiveVersion(1);
         value.setStatus(FunctionStatus.ENABLED);

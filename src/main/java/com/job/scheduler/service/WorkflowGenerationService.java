@@ -46,10 +46,11 @@ public class WorkflowGenerationService {
             7. OUTPUT STRICTLY RAW JSON. No markdown, no explanations.
             
             RESOURCES:
-            - voyager://webhook: args url(str), body(obj)
-            - voyager://send-email: args to(str), subject(str), body(str)
-            
-            MCP TOOLS:
+            - voyager://system/webhook: args url(str), body(obj)
+            - voyager://system/send-email: args to(str), subject(str), body(str)
+            - voyager://function/<name>@<version>: invoke a custom function (omit @version for the active one)
+
+            MCP TOOLS (voyager://mcp/<serverId>/<toolName>; append ?trust=WRITE or ?trust=DESTRUCTIVE for non-read tools):
             %s
             """;
 
@@ -123,7 +124,11 @@ public class WorkflowGenerationService {
 
         StringBuilder doc = new StringBuilder();
         for (McpTool tool : tools) {
-            doc.append("- mcp://").append(tool.getMcpServer().getServerId()).append("/").append(tool.getToolName());
+            doc.append("- voyager://mcp/").append(tool.getMcpServer().getServerId()).append("/").append(tool.getToolName());
+            // The server's trust level tells the model whether the call needs a
+            // ?trust= grant: READ_ONLY tools need none; WRITE/DESTRUCTIVE do.
+            Object trustLevel = tool.getMcpServer().getTrustLevel();
+            doc.append(" [trust: ").append(trustLevel == null ? "UNTRUSTED" : trustLevel).append("]");
             if (tool.getInputSchema() != null) {
                 doc.append(" args: ").append(flattenJsonSchema(tool.getInputSchema()));
             }

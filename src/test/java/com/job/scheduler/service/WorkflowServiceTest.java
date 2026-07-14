@@ -3,12 +3,17 @@ package com.job.scheduler.service;
 import com.job.scheduler.dto.CreateWorkflowRequestDTO;
 import com.job.scheduler.dto.CreateWorkflowRevisionRequestDTO;
 import com.job.scheduler.dto.UpdateWorkflowMetadataRequestDTO;
+import com.job.scheduler.dto.UpdateWorkflowCanvasLayoutRequestDTO;
 import com.job.scheduler.entity.Workflow;
 import com.job.scheduler.entity.WorkflowDefinition;
 import com.job.scheduler.enums.WorkflowStatus;
+import com.job.scheduler.repository.McpServerRepository;
+import com.job.scheduler.repository.McpToolRepository;
 import com.job.scheduler.repository.WorkflowDefinitionRepository;
 import com.job.scheduler.repository.WorkflowRepository;
 import com.job.scheduler.workflow.asl.validation.AslDefinitionValidator;
+import com.job.scheduler.workflow.asl.validation.AslDefinitionValidationException;
+import com.job.scheduler.workflow.asl.validation.AslMcpResourceValidator;
 import com.job.scheduler.workflow.asl.runtime.AslRuntimeCapabilityValidator;
 import com.job.scheduler.workflow.asl.validation.AslValidationCategory;
 import com.job.scheduler.workflow.asl.validation.AslValidationIssue;
@@ -47,6 +52,12 @@ class WorkflowServiceTest {
     @Mock
     private AslDefinitionValidator aslDefinitionValidator;
 
+    @Mock
+    private McpServerRepository mcpServerRepository;
+
+    @Mock
+    private McpToolRepository mcpToolRepository;
+
     private ObjectMapper objectMapper;
     private WorkflowService workflowService;
 
@@ -59,12 +70,13 @@ class WorkflowServiceTest {
                 aslDefinitionValidator,
                 new WorkflowDefinitionCanonicalizer(objectMapper),
                 objectMapper,
-                new AslRuntimeCapabilityValidator()
+                new AslRuntimeCapabilityValidator(),
+                new AslMcpResourceValidator(mcpServerRepository, mcpToolRepository)
         );
     }
 
     @Test
-    void createsDraftWorkflowWithImmutableRevisionOne() {
+    void createsInactiveRecurringWorkflowWithImmutableRevisionOne() {
         var definitionNode = definition("Done");
         var request = new CreateWorkflowRequestDTO(
                 "Daily cleanup",
@@ -96,11 +108,10 @@ class WorkflowServiceTest {
         var response = workflowService.createWorkflow(request);
 
         assertThat(response.status()).isEqualTo(WorkflowStatus.DRAFT);
-        assertThat(response.activeDefinition().revision()).isEqualTo(1);
-        assertThat(response.activeDefinition().definitionHash()).hasSize(64);
-        assertThat(response.activeDefinition().active()).isTrue();
+        assertThat(response.activeDefinition()).isNull();
         assertThat(response.timezone()).isEqualTo("Asia/Kolkata");
-        assertThat(response.nextRunAt()).isNotNull();
+        assertThat(response.nextRunAt()).isNull();
+        verify(aslDefinitionValidator, never()).validate(any());
 
         ArgumentCaptor<WorkflowDefinition> definitionCaptor =
                 ArgumentCaptor.forClass(WorkflowDefinition.class);
@@ -111,7 +122,7 @@ class WorkflowServiceTest {
     }
 
     @Test
-    void savesDraftWithoutValidatingDefinition() {
+    void validatesAndActivatesManualWorkflowOnSave() {
         var definitionNode = definition("Done");
         var request = request(definitionNode);
         when(workflowRepository.findByIdempotencyKey("workflow-key"))
@@ -132,18 +143,49 @@ class WorkflowServiceTest {
                     saved.setCreatedAt(Instant.now());
                     return saved;
                 });
+        when(aslDefinitionValidator.validate(any()))
+                .thenReturn(new AslValidationResult(List.of()));
 
         var response = workflowService.createWorkflow(request);
 
-        // A draft is saved as-is; ASL validation is deferred to activation.
-        assertThat(response.status()).isEqualTo(WorkflowStatus.DRAFT);
-        verify(aslDefinitionValidator, never()).validate(any());
+        assertThat(response.status()).isEqualTo(WorkflowStatus.ACTIVE);
+        assertThat(response.activeDefinition().revision()).isEqualTo(1);
+        assertThat(response.activeDefinition().active()).isTrue();
+        assertThat(response.nextRunAt()).isNull();
+        verify(aslDefinitionValidator).validate(any());
         verify(workflowDefinitionRepository).save(any());
+    }
+
+    @Test
+    void rejectsManualWorkflowThatIsNotExecutable() {
+        var request = request(definition("Done"));
+        when(workflowRepository.findByIdempotencyKey("workflow-key"))
+                .thenReturn(Optional.empty());
+        when(workflowRepository.save(any(Workflow.class))).thenAnswer(invocation -> {
+            Workflow saved = invocation.getArgument(0);
+            if (saved.getId() == null) {
+                saved.setId(UUID.randomUUID());
+            }
+            return saved;
+        });
+        when(workflowDefinitionRepository.save(any(WorkflowDefinition.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(aslDefinitionValidator.validate(any()))
+                .thenReturn(new AslValidationResult(List.of(new AslValidationIssue(
+                        "$.States.Done",
+                        AslValidationCategory.ASL,
+                        "TEST_INVALID",
+                        "Definition is not executable"
+                ))));
+
+        assertThatThrownBy(() -> workflowService.createWorkflow(request))
+                .isInstanceOf(AslDefinitionValidationException.class);
     }
 
     @Test
     void createsNextImmutableRevisionWithoutActivatingIt() {
         Workflow workflow = workflow();
+        workflow.setCronExpression("0 0 * * * *");
         WorkflowDefinition current = persistedDefinition(workflow, 1, definition("Done"));
         workflow.setActiveDefinition(current);
         var updatedDefinition = definition("Updated");
@@ -176,8 +218,46 @@ class WorkflowServiceTest {
     }
 
     @Test
+    void validatesAndActivatesManualRevisionOnSave() {
+        Workflow workflow = workflow();
+        WorkflowDefinition current = persistedDefinition(workflow, 1, definition("Done"));
+        workflow.setActiveDefinition(current);
+        workflow.setStatus(WorkflowStatus.ACTIVE);
+        var updatedDefinition = definition("Updated");
+        when(workflowRepository.findByIdForUpdate(workflow.getId()))
+                .thenReturn(Optional.of(workflow));
+        when(workflowDefinitionRepository.findByWorkflowAndDefinitionHash(
+                any(Workflow.class),
+                any(String.class)
+        )).thenReturn(Optional.empty());
+        when(workflowDefinitionRepository.findFirstByWorkflowOrderByRevisionDesc(workflow))
+                .thenReturn(Optional.of(current));
+        when(workflowDefinitionRepository.save(any(WorkflowDefinition.class)))
+                .thenAnswer(invocation -> {
+                    WorkflowDefinition definition = invocation.getArgument(0);
+                    definition.setId(UUID.randomUUID());
+                    definition.setCreatedAt(Instant.now());
+                    return definition;
+                });
+        when(aslDefinitionValidator.validate(any()))
+                .thenReturn(new AslValidationResult(List.of()));
+
+        var response = workflowService.createRevision(
+                workflow.getId(),
+                new CreateWorkflowRevisionRequestDTO(updatedDefinition, false)
+        );
+
+        assertThat(response.revision()).isEqualTo(2);
+        assertThat(response.active()).isTrue();
+        assertThat(workflow.getActiveDefinition().getRevision()).isEqualTo(2);
+        assertThat(workflow.getStatus()).isEqualTo(WorkflowStatus.ACTIVE);
+        verify(aslDefinitionValidator).validate(any());
+    }
+
+    @Test
     void duplicateRevisionReturnsExistingDefinition() {
         Workflow workflow = workflow();
+        workflow.setCronExpression("0 0 * * * *");
         WorkflowDefinition current = persistedDefinition(workflow, 1, definition("Done"));
         workflow.setActiveDefinition(current);
         var submitted = definition("Done");
@@ -215,6 +295,98 @@ class WorkflowServiceTest {
         assertThat(workflow.getStatus()).isEqualTo(WorkflowStatus.ACTIVE);
         assertThat(workflow.getActiveDefinition()).isSameAs(definition);
         verify(workflowRepository).save(workflow);
+    }
+
+    @Test
+    void persistsCanvasLayoutWithoutChangingTheAslRevision() {
+        Workflow workflow = workflow();
+        WorkflowDefinition definition = persistedDefinition(workflow, 1, definition("Done"));
+        workflow.setActiveDefinition(definition);
+        var positions = objectMapper.createObjectNode()
+                .set("Done", objectMapper.createObjectNode()
+                        .put("x", 145.5)
+                        .put("y", -32));
+        when(workflowRepository.findByIdForUpdate(workflow.getId()))
+                .thenReturn(Optional.of(workflow));
+        when(workflowDefinitionRepository.findByWorkflowAndRevision(workflow, 1))
+                .thenReturn(Optional.of(definition));
+        when(workflowDefinitionRepository.saveAndFlush(definition))
+                .thenReturn(definition);
+
+        var response = workflowService.updateCanvasLayout(
+                workflow.getId(),
+                1,
+                new UpdateWorkflowCanvasLayoutRequestDTO(positions)
+        );
+
+        assertThat(response.canvasLayout().path("Done").path("x").doubleValue())
+                .isEqualTo(145.5);
+        assertThat(response.canvasLayout().path("Done").path("y").doubleValue())
+                .isEqualTo(-32.0);
+        assertThat(response.definition()).isEqualTo(definition("Done"));
+        assertThat(response.definitionHash()).isEqualTo(definition.getDefinitionHash());
+    }
+
+    @Test
+    void persistsScopedCanvasLayoutForParallelAndMapNestedStates() throws Exception {
+        Workflow workflow = workflow();
+        var nestedDefinition = objectMapper.readTree("""
+                {
+                  "StartAt": "FanOut",
+                  "States": {
+                    "FanOut": {
+                      "Type": "Parallel",
+                      "Branches": [{
+                        "StartAt": "ProcessItems",
+                        "States": {
+                          "ProcessItems": {
+                            "Type": "Map",
+                            "Items": [],
+                            "ItemProcessor": {
+                              "StartAt": "HandleItem",
+                              "States": {"HandleItem": {"Type": "Pass", "End": true}}
+                            },
+                            "End": true
+                          }
+                        }
+                      }],
+                      "End": true
+                    }
+                  }
+                }
+                """);
+        WorkflowDefinition definition = persistedDefinition(workflow, 1, nestedDefinition);
+        workflow.setActiveDefinition(definition);
+        var positions = objectMapper.createObjectNode();
+        positions.set("FanOut", objectMapper.createObjectNode().put("x", 10).put("y", 20));
+        positions.set(
+                "@scope/States/FanOut/Branches/0/States/ProcessItems",
+                objectMapper.createObjectNode().put("x", 30).put("y", 40)
+        );
+        positions.set(
+                "@scope/States/FanOut/Branches/0/States/ProcessItems/ItemProcessor/States/HandleItem",
+                objectMapper.createObjectNode().put("x", 50).put("y", 60)
+        );
+        when(workflowRepository.findByIdForUpdate(workflow.getId()))
+                .thenReturn(Optional.of(workflow));
+        when(workflowDefinitionRepository.findByWorkflowAndRevision(workflow, 1))
+                .thenReturn(Optional.of(definition));
+        when(workflowDefinitionRepository.saveAndFlush(definition))
+                .thenReturn(definition);
+
+        var response = workflowService.updateCanvasLayout(
+                workflow.getId(),
+                1,
+                new UpdateWorkflowCanvasLayoutRequestDTO(positions)
+        );
+
+        assertThat(response.canvasLayout()).hasSize(3);
+        assertThat(response.canvasLayout()
+                .path("@scope/States/FanOut/Branches/0/States/ProcessItems")
+                .path("x").doubleValue()).isEqualTo(30.0);
+        assertThat(response.canvasLayout()
+                .path("@scope/States/FanOut/Branches/0/States/ProcessItems/ItemProcessor/States/HandleItem")
+                .path("y").doubleValue()).isEqualTo(60.0);
     }
 
     @Test

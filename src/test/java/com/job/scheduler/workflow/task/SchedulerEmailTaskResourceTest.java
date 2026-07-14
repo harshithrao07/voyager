@@ -27,7 +27,7 @@ class SchedulerEmailTaskResourceTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private SchedulerEmailTaskResource resource;
-    private final URI uri = URI.create("voyager://send-email");
+    private final URI uri = URI.create("voyager://system/send-email");
 
     @BeforeEach
     void setUp() {
@@ -40,7 +40,7 @@ class SchedulerEmailTaskResourceTest {
     @Test
     void supportsVoyagerSendEmailOnly() {
         assertThat(resource.supports(uri)).isTrue();
-        assertThat(resource.supports(URI.create("voyager://webhook")))
+        assertThat(resource.supports(URI.create("voyager://system/webhook")))
                 .isFalse();
     }
 

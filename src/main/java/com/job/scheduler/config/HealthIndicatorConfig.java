@@ -1,5 +1,10 @@
 package com.job.scheduler.config;
 
+import com.job.scheduler.entity.McpServer;
+import com.job.scheduler.entity.McpTool;
+import com.job.scheduler.enums.McpServerStatus;
+import com.job.scheduler.repository.McpServerRepository;
+import com.job.scheduler.repository.McpToolRepository;
 import com.job.scheduler.service.Judge0Client;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.springframework.boot.health.contributor.Health;
@@ -11,8 +16,13 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.kafka.core.KafkaAdmin;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @Configuration
 public class HealthIndicatorConfig {
@@ -54,7 +64,7 @@ public class HealthIndicatorConfig {
     }
 
     /**
-     * Judge0 backs {@code voyager://namespace/name} Task resources. Reports UP only when the
+     * Judge0 backs {@code voyager://function/name} Task resources. Reports UP only when the
      * engine advertises languages and has at least one execution worker; the
      * languages/statuses/worker counts are surfaced as details for diagnostics.
      * Custom indicators like this one are not part of the liveness/readiness
@@ -74,6 +84,46 @@ public class HealthIndicatorConfig {
                         .withDetail("statuses", statuses)
                         .withDetail("workers", workers.total())
                         .withDetail("availableWorkers", workers.available())
+                        .build();
+            } catch (RuntimeException exception) {
+                return Health.down(exception).build();
+            }
+        };
+    }
+
+    /**
+     * Surfaces the MCP client subsystem: how many servers are ENABLED and, per
+     * server, how many tools are known and when they were last seen by a sync.
+     * Reports UP whenever the catalog is readable — an external MCP server being
+     * unreachable is that server's problem, not this app's, so it never marks the
+     * app DOWN. DOWN here means the tool catalog itself could not be read.
+     */
+    @Bean
+    public HealthIndicator mcpHealthIndicator(
+            McpServerRepository mcpServerRepository,
+            McpToolRepository mcpToolRepository
+    ) {
+        return () -> {
+            try {
+                List<McpServer> enabledServers = mcpServerRepository
+                        .findByStatusOrderByCreatedAtDesc(McpServerStatus.ENABLED);
+                Map<String, Object> perServer = new LinkedHashMap<>();
+                for (McpServer server : enabledServers) {
+                    List<McpTool> knownTools = mcpToolRepository
+                            .findByMcpServerAndEnabledTrueOrderByToolNameAsc(server);
+                    Instant lastSeenAt = knownTools.stream()
+                            .map(McpTool::getLastSeenAt)
+                            .filter(Objects::nonNull)
+                            .max(Comparator.naturalOrder())
+                            .orElse(null);
+                    Map<String, Object> detail = new LinkedHashMap<>();
+                    detail.put("tools", knownTools.size());
+                    detail.put("lastSeenAt", lastSeenAt);
+                    perServer.put(server.getServerId(), detail);
+                }
+                return Health.up()
+                        .withDetail("enabledServers", enabledServers.size())
+                        .withDetail("servers", perServer)
                         .build();
             } catch (RuntimeException exception) {
                 return Health.down(exception).build();

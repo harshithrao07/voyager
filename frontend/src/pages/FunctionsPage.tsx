@@ -69,8 +69,8 @@ function FunctionMetric({ label, value, tone }: { label: string; value: string |
   );
 }
 
-function functionResource(fn: Pick<FunctionDefinitionDTO, 'namespace' | 'name'>, version?: number | null) {
-  return `voyager://${fn.namespace || 'namespace'}/${fn.name || 'name'}${version ? `@v${version}` : '@latest'}`;
+function functionResource(fn: Pick<FunctionDefinitionDTO, 'name'>, version?: number | null) {
+  return `voyager://function/${fn.name || 'name'}${version ? `@v${version}` : '@latest'}`;
 }
 
 function languagesForSourceMode(languages: FunctionLanguageDTO[], sourceMode: FunctionSourceMode) {
@@ -187,7 +187,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
   const filteredFunctions = functions.filter((fn) => {
     const query = search.trim().toLowerCase();
     if (!query) return true;
-    return [fn.namespace, fn.name, fn.description || '']
+    return [fn.name, fn.description || '']
       .some((value) => value.toLowerCase().includes(query));
   });
 
@@ -325,7 +325,6 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
     setBusy(true);
     try {
       await updateFunctionDefinition(fn.id, {
-        namespace: fn.namespace,
         name: fn.name,
         description: fn.description,
         status: fn.status === 'ENABLED' ? 'DISABLED' : 'ENABLED',
@@ -644,7 +643,7 @@ function FunctionListView({
                     {fn.activeVersion ? `v${fn.activeVersion}` : '-'}
                   </span>
                 </div>
-                <div className="mt-2 truncate font-mono-sm text-[11px] text-on-surface-variant">{fn.namespace} / {fn.name}</div>
+                <div className="mt-2 truncate font-mono-sm text-[11px] text-on-surface-variant">{fn.name}</div>
                 <div className="mt-1 font-mono-sm text-[11px] text-on-surface-variant">{formatUpdated(fn.updatedAt)}</div>
               </button>
             ))}
@@ -664,7 +663,6 @@ function FunctionCreateWorkbench({
   onCancel: () => void;
   onDone: (functionId: string) => void;
 }) {
-  const [namespace, setNamespace] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [languageId, setLanguageId] = useState('');
@@ -672,10 +670,9 @@ function FunctionCreateWorkbench({
 
   const sortedLanguages = [...languagesForSourceMode(languages, sourceMode)]
     .sort((a, b) => a.name.localeCompare(b.name));
-  const validDefinition = slug.test(namespace) && slug.test(name);
+  const validDefinition = slug.test(name);
   const metadata = (
-    <div className="grid gap-3 lg:grid-cols-3">
-      <MetaInput label="Namespace" value={namespace} onChange={setNamespace} placeholder="billing" />
+    <div className="grid gap-3 lg:grid-cols-2">
       <MetaInput label="Name" value={name} onChange={setName} placeholder="calculate-tax" />
       <label>
         <span className={labelClass}>Language</span>
@@ -695,10 +692,9 @@ function FunctionCreateWorkbench({
 
   const createShell = async () => {
     if (!validDefinition) {
-      throw new Error('Enter a valid namespace and name.');
+      throw new Error('Enter a valid name.');
     }
     return createFunctionDefinition({
-      namespace,
       name,
       description: description.trim() || undefined,
     });
@@ -706,7 +702,7 @@ function FunctionCreateWorkbench({
 
   return (
     <FunctionVersionWorkbench
-      resourceLabel={`voyager://${namespace || 'namespace'}/${name || 'name'}@v1`}
+      resourceLabel={`voyager://function/${name || 'name'}@v1`}
       languages={languages}
       languageId={languageId}
       onLanguageChange={setLanguageId}
@@ -877,7 +873,7 @@ function FunctionDetail({
               <div className="min-w-0 pt-1">
                 <h2 className="truncate text-[22px] font-semibold tracking-[-0.01em] text-on-surface">{selected.name}</h2>
                 <div className="mt-1 font-mono-sm text-[13px] text-on-surface">
-                  {selected.namespace} <span className="text-on-surface-variant">/</span> {selected.name}
+                  voyager://function/{selected.name}
                 </div>
                 <p className="mt-2 max-w-3xl text-[13px] leading-5 text-on-surface-variant">
                   {selected.description || 'Reads JSON from stdin and returns JSON through stdout for the next workflow state.'}
@@ -1016,7 +1012,6 @@ function FunctionOverviewDetails({
       </div>
       <div className="space-y-3">
         <OverviewLine label="Function ID" value={selected.id} mono copyable />
-        <OverviewLine label="Namespace" value={selected.namespace} mono />
         <OverviewLine label="Name" value={selected.name} mono />
         <OverviewLine label="Created" value={formatDateTime(selected.createdAt)} />
         <OverviewLine label="Updated" value={formatDateTime(selected.updatedAt)} />
@@ -1882,8 +1877,7 @@ function SelectedMetadata({
           <span>{editBanner}</span>
         </div>
       )}
-      <div className="grid gap-3 lg:grid-cols-3">
-        <ReadOnlyMeta label="Namespace" value={selected.namespace} />
+      <div className="grid gap-3 lg:grid-cols-2">
         <ReadOnlyMeta label="Name" value={selected.name} />
         <label>
           <span className={labelClass}>Language</span>

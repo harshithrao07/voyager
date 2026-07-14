@@ -4,6 +4,8 @@ import { AlertTriangle, Flag, Trash2, X } from 'lucide-react';
 import { getStateVisual } from '../../utils/stateVisuals';
 import { AslGraphViewer } from '../AslGraphViewer';
 import { StateEditorForm, type TaskResourceOption } from './StateEditorForm';
+import type { MachinePathSegment } from './nestedMachine';
+import type { CanvasNodePositions } from '../../types/workflowCanvas';
 import {
   addState,
   connectStates,
@@ -43,6 +45,9 @@ type Props = {
   monoFieldClass: string;
   taskResourceOptions?: TaskResourceOption[];
   layoutVersion?: number;
+  initialNodePositions?: CanvasNodePositions;
+  onNodePositionsChange?: (positions: CanvasNodePositions) => void;
+  onOpenNestedScope?: (segment: MachinePathSegment) => void;
 };
 
 export function StateCanvasBuilder({
@@ -54,6 +59,9 @@ export function StateCanvasBuilder({
   monoFieldClass,
   taskResourceOptions,
   layoutVersion = 0,
+  initialNodePositions,
+  onNodePositionsChange,
+  onOpenNestedScope,
 }: Props) {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [connectionNotice, setConnectionNotice] = useState<{ tone: 'ok' | 'warn'; message: string } | null>(null);
@@ -235,6 +243,8 @@ export function StateCanvasBuilder({
         connectable
         onConnectStates={handleConnectStates}
         preserveNodePositions
+        initialNodePositions={initialNodePositions}
+        onNodePositionsChange={onNodePositionsChange}
         layoutVersion={layoutVersion}
         onStateContextMenu={handleStateContextMenu}
         onEdgeContextMenu={handleEdgeContextMenu}
@@ -437,6 +447,7 @@ export function StateCanvasBuilder({
             fieldClass={fieldClass}
             monoFieldClass={monoFieldClass}
             taskResourceOptions={taskResourceOptions}
+            onOpenNestedScope={onOpenNestedScope}
           />
         </section>
       )}

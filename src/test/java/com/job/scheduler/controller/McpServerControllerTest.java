@@ -266,6 +266,7 @@ class McpServerControllerTest {
                 null,
                 McpTrustLevel.READ_ONLY,
                 status,
+                null,
                 Instant.parse("2026-06-17T00:00:00Z"),
                 Instant.parse("2026-06-17T00:00:00Z")
         );

@@ -60,7 +60,7 @@ export function aslToReactFlow(asl: any, options: AslToReactFlowOptions = {}): {
               event.stopPropagation();
               options.onStateContextMenu(stateName, event);
             }}
-            className={`${nodeStatus === 'error' ? 'bg-[#1a0f12]' : 'bg-surface-elevated'} border ${visual.softBgClass} ${isSelected ? `${visual.borderClass} ring-1 ${visual.selectedRingClass} shadow-[0_4px_24px_rgba(99,102,241,0.12)]` : visual.borderClass} w-[200px] rounded p-2 shadow-[0_4px_24px_rgba(0,0,0,0.5)] z-10 flex flex-col relative group cursor-pointer transition-[filter,box-shadow] hover:brightness-110 text-left overflow-hidden`}
+            className={`${visual.nodeBgClass} border ${isSelected ? `${visual.borderClass} ring-1 ${visual.selectedRingClass} shadow-[0_4px_24px_rgba(99,102,241,0.12)]` : visual.borderClass} w-[200px] rounded p-2 shadow-[0_4px_24px_rgba(0,0,0,0.5)] z-10 flex flex-col relative group cursor-pointer transition-[filter,box-shadow] hover:brightness-110 text-left overflow-hidden`}
           >
             <div className="absolute inset-0 bg-gradient-to-b from-white/[0.03] to-transparent rounded-DEFAULT pointer-events-none"></div>
             <div className={`absolute left-0 top-0 h-full w-1 ${visual.barClass}`}></div>

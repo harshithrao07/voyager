@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, RefObject } from 'react';
 import { ReactFlow, useNodesState, useEdgesState, Handle, Position, useReactFlow, BaseEdge, Background, BackgroundVariant, EdgeLabelRenderer, getBezierPath } from '@xyflow/react';
-import type { Connection, EdgeProps } from '@xyflow/react';
+import type { Connection, EdgeProps, OnNodeDrag } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from '@dagrejs/dagre';
 import { aslToReactFlow } from '../utils/aslParser';
 import { LocateFixed, Maximize2, Minimize2, ZoomIn, ZoomOut } from 'lucide-react';
+import type { CanvasNodePositions } from '../types/workflowCanvas';
 
 const dagreGraph = new dagre.graphlib.Graph();
 dagreGraph.setDefaultEdgeLabel(() => ({}));
@@ -54,6 +55,22 @@ const getLayoutedElements = (nodes: any[], edges: any[], direction: LayoutDirect
 };
 
 type NodePosition = { x: number; y: number };
+
+function applySavedPositions(nodes: any[], positions?: CanvasNodePositions) {
+  if (!positions) return nodes;
+
+  return nodes.map((node) => {
+    const position = positions[node.id];
+    return position ? { ...node, position } : node;
+  });
+}
+
+function positionsFromNodes(nodes: any[]): CanvasNodePositions {
+  return Object.fromEntries(nodes.map((node) => [
+    node.id,
+    { x: node.position.x, y: node.position.y },
+  ]));
+}
 
 function overlaps(a: NodePosition, b: NodePosition) {
   return Math.abs(a.x - b.x) < NODE_WIDTH + 28 && Math.abs(a.y - b.y) < NODE_HEIGHT + 28;
@@ -376,6 +393,8 @@ interface Props {
   connectable?: boolean;
   onConnectStates?: (sourceStateName: string, targetStateName: string) => void;
   preserveNodePositions?: boolean;
+  initialNodePositions?: CanvasNodePositions;
+  onNodePositionsChange?: (positions: CanvasNodePositions) => void;
   layoutDirection?: LayoutDirection;
   layoutVersion?: number;
   onStateContextMenu?: (stateName: string, event: ReactMouseEvent) => void;
@@ -396,6 +415,8 @@ export function AslGraphViewer({
   connectable = false,
   onConnectStates,
   preserveNodePositions = false,
+  initialNodePositions,
+  onNodePositionsChange,
   layoutDirection = 'TB',
   layoutVersion = 0,
   onStateContextMenu,
@@ -403,6 +424,7 @@ export function AslGraphViewer({
 }: Props) {
   const viewerRef = useRef<HTMLDivElement>(null);
   const lastLayoutVersionRef = useRef(layoutVersion);
+  const lastInitialPositionsRef = useRef(initialNodePositions);
   const [nodes, setNodes, onNodesChange] = useNodesState<any>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<any>([]);
 
@@ -412,6 +434,19 @@ export function AslGraphViewer({
     }
     onConnectStates?.(connection.source, connection.target);
   }, [onConnectStates]);
+
+  const handleNodeDragStop: OnNodeDrag = useCallback((_event, movedNode, draggedNodes) => {
+    if (!onNodePositionsChange) return;
+
+    const movedPositions = new Map(
+      draggedNodes.map((node) => [node.id, node.position] as const),
+    );
+    movedPositions.set(movedNode.id, movedNode.position);
+    onNodePositionsChange(positionsFromNodes(nodes.map((node) => ({
+      ...node,
+      position: movedPositions.get(node.id) || node.position,
+    }))));
+  }, [nodes, onNodePositionsChange]);
 
   useEffect(() => {
     const { nodes: initialNodes, edges: initialEdges } = aslToReactFlow(definition, {
@@ -425,11 +460,19 @@ export function AslGraphViewer({
       data: { ...(edge.data || {}), onContextMenu: onEdgeContextMenu },
     }));
     const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(initialNodes, edgesWithHandlers, layoutDirection);
+    const savedPositionsChanged = lastInitialPositionsRef.current !== initialNodePositions;
+    lastInitialPositionsRef.current = initialNodePositions;
     setNodes((currentNodes) => {
       const shouldRelayout = lastLayoutVersionRef.current !== layoutVersion;
       lastLayoutVersionRef.current = layoutVersion;
-      if (!preserveNodePositions || currentNodes.length === 0 || shouldRelayout) {
+      if (shouldRelayout) {
         return layoutedNodes;
+      }
+      if (currentNodes.length === 0 || !preserveNodePositions) {
+        return applySavedPositions(layoutedNodes, initialNodePositions);
+      }
+      if (savedPositionsChanged) {
+        return applySavedPositions(layoutedNodes, initialNodePositions);
       }
 
       const currentPositionById = new Map(
@@ -452,7 +495,7 @@ export function AslGraphViewer({
       });
     });
     setEdges(layoutedEdges);
-  }, [connectable, definition, layoutDirection, layoutVersion, onEdgeContextMenu, onStateContextMenu, preserveNodePositions, selectedStateName, onStateSelect, setNodes, setEdges]);
+  }, [connectable, definition, initialNodePositions, layoutDirection, layoutVersion, onEdgeContextMenu, onStateContextMenu, preserveNodePositions, selectedStateName, onStateSelect, setNodes, setEdges]);
 
   return (
     <div ref={viewerRef} className="relative h-full w-full bg-surface-lowest">
@@ -460,6 +503,7 @@ export function AslGraphViewer({
         nodes={nodes} 
         edges={edges} 
         onNodesChange={onNodesChange}
+        onNodeDragStop={onNodePositionsChange ? handleNodeDragStop : undefined}
         onEdgesChange={onEdgesChange}
         onConnect={connectable ? handleConnect : undefined}
         nodesConnectable={connectable}

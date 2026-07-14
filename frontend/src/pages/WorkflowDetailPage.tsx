@@ -2,11 +2,12 @@ import { PanelRightOpen } from 'lucide-react';
 import { WorkflowGeneratorPanel } from '../components/WorkflowGeneratorPanel';
 import { AslCodeViewer } from '../components/AslCodeViewer';
 import { AslGraphViewer } from '../components/AslGraphViewer';
-import { NodeDetailsPanel } from '../components/NodeDetailsPanel';
+import { StateDetailsPanel } from '../components/StateDetailsPanel';
 import { RevisionHistoryPanel } from '../components/RevisionHistoryPanel';
 import { ExecutionStatusView, type ExecutionRun } from '../components/ExecutionStatusView';
 import { WorkspaceState } from '../components/WorkspaceState';
 import type { WorkflowResponseDTO } from '../api';
+import type { CanvasNodePositions } from '../types/workflowCanvas';
 
 export type WorkflowRevision = {
   id: string;
@@ -15,6 +16,7 @@ export type WorkflowRevision = {
   active?: boolean;
   note: string;
   definition: any;
+  canvasLayout: CanvasNodePositions;
   runs: ExecutionRun[];
 };
 
@@ -37,6 +39,7 @@ type Props = {
   onRevisionSelected: (revisionId: string) => void;
   onCloseRevisionPanel: () => void;
   onWorkflowGenerated: (definition: any) => void;
+  onCanvasLayoutChange: (positions: CanvasNodePositions) => void;
 };
 
 export function WorkflowDetailPage({
@@ -57,6 +60,7 @@ export function WorkflowDetailPage({
   onRevisionSelected,
   onCloseRevisionPanel,
   onWorkflowGenerated,
+  onCanvasLayoutChange,
 }: Props) {
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -76,6 +80,9 @@ export function WorkflowDetailPage({
             definition={currentDefinition}
             selectedStateName={selectedStateName}
             onStateSelect={onStateSelect}
+            preserveNodePositions
+            initialNodePositions={selectedRevision?.canvasLayout}
+            onNodePositionsChange={onCanvasLayoutChange}
           />
         ) : (
           <AslCodeViewer definition={currentDefinition} />
@@ -85,8 +92,8 @@ export function WorkflowDetailPage({
             type="button"
             onClick={onOpenDetails}
             className="absolute right-4 top-1/2 z-40 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-DEFAULT border border-border-subtle bg-surface-container-highest/90 text-on-surface-variant shadow-lg backdrop-blur-xl transition-colors hover:border-border-muted hover:bg-surface-container hover:text-primary lg:flex"
-            aria-label="Open node details"
-            title="Open node details"
+            aria-label="Open state details"
+            title="Open state details"
           >
             <PanelRightOpen size={18} />
           </button>
@@ -112,7 +119,7 @@ export function WorkflowDetailPage({
               />
             )
           ) : activeTab === 'visualizer' ? (
-            <NodeDetailsPanel
+            <StateDetailsPanel
               definition={currentDefinition}
               selectedStateName={selectedStateName}
               onClose={onCloseDetails}

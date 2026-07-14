@@ -413,6 +413,52 @@ class WorkflowInterpreterTest {
     }
 
     @Test
+    void doesNotRetryMutatingMcpTaskEvenWhenRetryMatches() {
+        configureTaskDefinition("""
+                {
+                  "StartAt": "Call",
+                  "States": {
+                    "Call": {
+                      "Type": "Task",
+                      "Resource": "voyager://mcp/crm/create-lead?trust=WRITE",
+                      "Retry": [{
+                        "ErrorEquals": ["Temporary"],
+                        "IntervalSeconds": 2,
+                        "MaxAttempts": 2
+                      }],
+                      "Next": "Done"
+                    },
+                    "Done": {"Type": "Succeed"}
+                  }
+                }
+                """);
+
+        interpreter.advance(root.getId());
+        StateExecution stateExecution = latestState.get();
+        StateExecutionAttempt firstAttempt = latestAttempt.get();
+        firstAttempt.setStatus(StateExecutionAttemptStatus.RUNNING);
+        firstAttempt.setStartedAt(Instant.now());
+        when(attemptRepository.findByIdForUpdate(firstAttempt.getId()))
+                .thenReturn(Optional.of(firstAttempt));
+        when(attemptRepository
+                .findByStateExecutionOrderByAttemptNumberAsc(stateExecution))
+                .thenReturn(attempts);
+
+        InterpreterOutcome outcome = interpreter.completeTaskFailure(
+                firstAttempt.getId(),
+                "Temporary",
+                "try later"
+        );
+
+        // The Retry rule matches "Temporary", but a WRITE MCP call is not
+        // auto-retried: the state fails instead of scheduling a second attempt.
+        assertThat(outcome).isInstanceOf(InterpreterOutcome.Failed.class);
+        assertThat(attempts).hasSize(1);
+        assertThat(stateExecution.getStatus())
+                .isEqualTo(com.job.scheduler.enums.StateExecutionStatus.FAILED);
+    }
+
+    @Test
     void appliesFirstMatchingCatcherAfterRetriesAreExhausted() {
         configureTaskDefinition("""
                 {

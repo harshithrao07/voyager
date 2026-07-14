@@ -66,7 +66,7 @@ class WorkflowGenerationServiceTest {
         
         when(mcpToolRepository.findByEnabledTrue()).thenReturn(List.of(tool));
 
-        String validJson = "{\"Type\": \"Task\", \"Resource\": \"voyager://webhook\", \"End\": true}";
+        String validJson = "{\"Type\": \"Task\", \"Resource\": \"voyager://system/webhook\", \"End\": true}";
         JsonNode parsed = objectMapper.readTree(validJson);
         
         when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(AiMessage.from("```json\n" + validJson + "\n```")));
@@ -80,7 +80,7 @@ class WorkflowGenerationServiceTest {
         verify(chatLanguageModel, times(1)).generate(messagesCaptor.capture());
         List<ChatMessage> messages = messagesCaptor.getValue();
         assertThat(messages).hasSize(2); // System, User
-        assertThat(messages.get(0).text()).contains("mcp://github/list_prs");
+        assertThat(messages.get(0).text()).contains("voyager://mcp/github/list_prs");
         assertThat(messages.get(1).text()).contains("do something");
     }
 

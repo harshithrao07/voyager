@@ -11,6 +11,11 @@ import {
   supportsRetryCatch,
   type AslState,
 } from './stateBuilder';
+import {
+  createNestedMachine,
+  isMachine,
+  type MachinePathSegment,
+} from './nestedMachine';
 
 const labelClass = 'block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant';
 const hintClass = 'mt-1 font-body-sm text-[11px] text-on-surface-variant/70';
@@ -312,6 +317,7 @@ type Props = {
   fieldClass: string;
   monoFieldClass: string;
   taskResourceOptions?: TaskResourceOption[];
+  onOpenNestedScope?: (segment: MachinePathSegment) => void;
 };
 
 export function StateEditorForm({
@@ -326,6 +332,7 @@ export function StateEditorForm({
   fieldClass,
   monoFieldClass,
   taskResourceOptions = [],
+  onOpenNestedScope,
 }: Props) {
   const type = stateTypeOf(state);
   const visual = getStateVisual(type);
@@ -383,6 +390,7 @@ export function StateEditorForm({
   };
 
   const choices: any[] = Array.isArray(state.Choices) ? state.Choices : [];
+  const parallelBranches: unknown[] = Array.isArray(state.Branches) ? state.Branches : [];
 
   const updateChoice = (index: number, patch: Record<string, unknown>) => {
     const nextChoices = choices.map((choice, choiceIndex) => (
@@ -420,7 +428,7 @@ export function StateEditorForm({
   );
   const systemTaskResourceOptions: TaskResourceOption[] = [
     {
-      value: 'voyager://webhook',
+      value: 'voyager://system/webhook',
       label: 'webhook',
       description: 'System',
       argumentsTemplate: {
@@ -429,7 +437,7 @@ export function StateEditorForm({
       },
     },
     {
-      value: 'voyager://send-email',
+      value: 'voyager://system/send-email',
       label: 'send-email',
       description: 'System',
       argumentsTemplate: {
@@ -455,7 +463,7 @@ export function StateEditorForm({
   const visibleSystemResources = visibleTaskResourceOptions.filter((option) => systemResourceValues.has(option.value));
   const visibleCustomResources = visibleTaskResourceOptions.filter((option) => !systemResourceValues.has(option.value));
   const selectedTaskResourceOption = mergedTaskResourceOptions.find((option) => option.value === state.Resource);
-  const selectedSystemResource = state.Resource === 'voyager://webhook' || state.Resource === 'voyager://send-email'
+  const selectedSystemResource = state.Resource === 'voyager://system/webhook' || state.Resource === 'voyager://system/send-email'
     ? state.Resource
     : '';
 
@@ -628,17 +636,17 @@ export function StateEditorForm({
                     setField('Resource', value);
                   }
                 }}
-                placeholder="voyager://webhook"
+                placeholder="voyager://system/webhook"
                 spellCheck={false}
                 list="voyager-task-resource-schemes"
                 className={monoFieldClass}
               />
               <datalist id="voyager-task-resource-schemes">
-                <option value="voyager://" />
+                <option value="voyager://function/" />
                 {mergedTaskResourceOptions.map((option) => (
                   <option key={option.value} value={option.value} label={option.label} />
                 ))}
-                <option value="mcp://" />
+                <option value="voyager://mcp/" />
               </datalist>
               <label className="mt-2 flex h-8 items-center gap-2 rounded-DEFAULT border border-border-subtle bg-surface-container-lowest px-2 text-on-surface-variant focus-within:border-secondary/60">
                 <Search size={12} className="shrink-0" />
@@ -680,7 +688,7 @@ export function StateEditorForm({
               <div className="rounded-DEFAULT border border-border-subtle bg-surface-container-lowest/45 p-3">
                 <div className={labelClass}>Arguments</div>
                 <div className="mt-3 space-y-3">
-                  {selectedSystemResource === 'voyager://webhook' ? (
+                  {selectedSystemResource === 'voyager://system/webhook' ? (
                     <>
                       <div>
                         <label className={labelClass}>url</label>
@@ -938,15 +946,78 @@ export function StateEditorForm({
           description="Run every branch at the same time; each receives the same input."
         >
           <div className="space-y-4">
-            <JsonField
-              label="Branches"
-              value={state.Branches}
-              onCommit={(value) => setField('Branches', value)}
-              requireArray
-              rows={10}
-              hint="Array of nested state machines, each with StartAt and States."
-              monoFieldClass={monoFieldClass}
-            />
+            <div className="space-y-2">
+              {parallelBranches.map((branch, branchIndex) => {
+                const validBranch = isMachine(branch);
+                const branchStateCount = validBranch ? Object.keys(branch.States || {}).length : 0;
+                return (
+                  <div
+                    key={branchIndex}
+                    className="flex items-center gap-3 rounded-DEFAULT border border-border-subtle bg-surface-container-lowest px-3 py-3"
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-DEFAULT border border-secondary/30 bg-secondary-container/25 font-mono-sm text-[11px] text-secondary">
+                      {branchIndex + 1}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block font-mono-sm text-[11px] text-on-surface">Branch {branchIndex + 1}</span>
+                      <span className="block truncate text-[10px] text-on-surface-variant">
+                        {validBranch ? `${branchStateCount} states · starts at ${branch.StartAt || 'unset'}` : 'Invalid nested machine'}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onOpenNestedScope?.({ kind: 'parallel', stateName: name, branchIndex })}
+                      disabled={!validBranch || !onOpenNestedScope}
+                      className="flex h-8 items-center gap-1.5 rounded-DEFAULT border border-secondary/35 px-2.5 font-mono-sm text-[10px] text-secondary transition-colors hover:bg-secondary-container/25 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                      Open canvas
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (parallelBranches.length <= 1) return;
+                        if (!window.confirm(`Remove Branch ${branchIndex + 1} and all of its states?`)) return;
+                        setField('Branches', parallelBranches.filter((_, index) => index !== branchIndex));
+                      }}
+                      disabled={parallelBranches.length <= 1}
+                      className="flex h-8 w-8 items-center justify-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-status-error/10 hover:text-status-error disabled:cursor-not-allowed disabled:opacity-35"
+                      aria-label={`Remove Branch ${branchIndex + 1}`}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => {
+                  const branchIndex = parallelBranches.length;
+                  const branch = createNestedMachine(`Branch${branchIndex + 1}Start`);
+                  setField('Branches', [...parallelBranches, branch]);
+                  onOpenNestedScope?.({ kind: 'parallel', stateName: name, branchIndex });
+                }}
+                className="flex h-9 w-full items-center justify-center gap-2 rounded-DEFAULT border border-dashed border-secondary/35 font-mono-sm text-[10px] text-secondary transition-colors hover:bg-secondary-container/20"
+              >
+                <Plus size={13} /> Add branch
+              </button>
+            </div>
+            <details className="group rounded-DEFAULT border border-border-subtle bg-surface-container-lowest px-3 py-2.5">
+              <summary className="cursor-pointer list-none font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant [&::-webkit-details-marker]:hidden">
+                Advanced branch JSON
+              </summary>
+              <div className="mt-3">
+                <JsonField
+                  label="Branches"
+                  value={state.Branches}
+                  onCommit={(value) => setField('Branches', value)}
+                  requireArray
+                  rows={10}
+                  hint="Array of closed nested machines. Transitions cannot leave a branch."
+                  monoFieldClass={monoFieldClass}
+                />
+              </div>
+            </details>
             <JsonField
               label="Arguments"
               value={state.Arguments}
@@ -965,6 +1036,38 @@ export function StateEditorForm({
           description="Run the processor once for each item in a collection."
         >
           <div className="space-y-4">
+            <div className="rounded-DEFAULT border border-border-subtle bg-surface-container-lowest p-3">
+              <div className="flex items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-DEFAULT border border-secondary/30 bg-secondary-container/25 text-secondary">
+                  <span className="material-symbols-outlined text-[17px]">account_tree</span>
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-mono-sm text-[11px] text-on-surface">Item processor</span>
+                  <span className="block truncate text-[10px] text-on-surface-variant">
+                    {isMachine(state.ItemProcessor)
+                      ? `${Object.keys(state.ItemProcessor.States || {}).length} states · starts at ${state.ItemProcessor.StartAt || 'unset'}`
+                      : 'Create an INLINE processor machine'}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isMachine(state.ItemProcessor)) {
+                      onChange({ ...state, ItemProcessor: createNestedMachine('ProcessItem') });
+                    }
+                    onOpenNestedScope?.({ kind: 'map', stateName: name });
+                  }}
+                  disabled={!onOpenNestedScope}
+                  className="flex h-8 items-center gap-1.5 rounded-DEFAULT border border-secondary/35 px-2.5 font-mono-sm text-[10px] text-secondary transition-colors hover:bg-secondary-container/25 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                  {isMachine(state.ItemProcessor) ? 'Open canvas' : 'Create canvas'}
+                </button>
+              </div>
+              <p className="mt-2 text-[10px] leading-5 text-on-surface-variant/75">
+                Processor mode is INLINE. Each iteration has its own closed transition and variable scope.
+              </p>
+            </div>
             <JsonField
               label="Items"
               value={state.Items}
@@ -981,15 +1084,22 @@ export function StateEditorForm({
               hint="Optional transform applied to each item before processing."
               monoFieldClass={monoFieldClass}
             />
-            <JsonField
-              label="ItemProcessor"
-              value={state.ItemProcessor}
-              onCommit={(value) => setField('ItemProcessor', value)}
-              requireObject
-              rows={10}
-              hint="Nested state machine with StartAt and States, run once per item."
-              monoFieldClass={monoFieldClass}
-            />
+            <details className="group rounded-DEFAULT border border-border-subtle bg-surface-container-lowest px-3 py-2.5">
+              <summary className="cursor-pointer list-none font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant [&::-webkit-details-marker]:hidden">
+                Advanced processor JSON
+              </summary>
+              <div className="mt-3">
+                <JsonField
+                  label="ItemProcessor"
+                  value={state.ItemProcessor}
+                  onCommit={(value) => setField('ItemProcessor', value)}
+                  requireObject
+                  rows={10}
+                  hint="Nested INLINE machine with its own StartAt and States."
+                  monoFieldClass={monoFieldClass}
+                />
+              </div>
+            </details>
             <IntegerField
               label="MaxConcurrency"
               value={state.MaxConcurrency}

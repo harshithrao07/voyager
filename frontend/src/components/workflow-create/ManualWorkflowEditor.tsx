@@ -1,16 +1,35 @@
 import Editor from '@monaco-editor/react';
 import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { AlertCircle, Braces, FlaskConical, ListPlus, Loader2, PanelRightClose, PanelRightOpen, Save, Wand2, X } from 'lucide-react';
+import { AlertCircle, Braces, ChevronRight, FlaskConical, ListPlus, Loader2, PanelRightClose, PanelRightOpen, Plus, Save, Wand2, X } from 'lucide-react';
 import type { DefinitionStatus, WorkflowPreview } from './types';
 import { AslGraphViewer } from '../AslGraphViewer';
-import type { AslDefinition } from './stateBuilder';
+import { updateState, type AslDefinition } from './stateBuilder';
 import { StateCanvasBuilder } from './StateCanvasBuilder';
 import type { TaskResourceOption } from './StateEditorForm';
+import {
+  canvasPositionsForScope,
+  createNestedMachine,
+  getMachineAtPath,
+  machinePathKey,
+  mergeCanvasPositionsForScope,
+  scopeSegmentLabel,
+  updateMachineAtPath,
+  type MachinePath,
+  type MachinePathSegment,
+} from './nestedMachine';
 import { WorkflowPreviewPanel } from './WorkflowPreviewPanel';
 import { WorkflowMetadataForm } from './WorkflowMetadataForm';
 import { WorkflowDraftTestBench } from './WorkflowDraftTestBench';
+import type { CanvasNodePositions } from '../../types/workflowCanvas';
 
 type EditorView = 'code' | 'builder';
+
+type RevisionEditDetails = {
+  baseRevision: number;
+  recurring: boolean;
+  baseRevisionActive: boolean;
+  hasUnsavedChanges: boolean;
+};
 
 type Props = {
   definitionText: string;
@@ -22,6 +41,9 @@ type Props = {
   saving: boolean;
   canSave: boolean;
   onSave: () => void;
+  onSaveWithoutActivation?: () => void;
+  revisionEdit?: RevisionEditDetails;
+  onCancelRevisionEdit?: () => void;
   name: string;
   onNameChange: (value: string) => void;
   maxAttempts: number;
@@ -36,6 +58,8 @@ type Props = {
   monoFieldClass: string;
   taskResourceOptions?: TaskResourceOption[];
   reserveTopControlsSpace?: boolean;
+  initialNodePositions?: CanvasNodePositions;
+  onNodePositionsChange?: (positions: CanvasNodePositions) => void;
 };
 
 export function ManualWorkflowEditor({
@@ -48,6 +72,9 @@ export function ManualWorkflowEditor({
   saving,
   canSave,
   onSave,
+  onSaveWithoutActivation,
+  revisionEdit,
+  onCancelRevisionEdit,
   name,
   onNameChange,
   maxAttempts,
@@ -62,13 +89,16 @@ export function ManualWorkflowEditor({
   monoFieldClass,
   taskResourceOptions,
   reserveTopControlsSpace,
+  initialNodePositions,
+  onNodePositionsChange,
 }: Props) {
   const [selectedStateName, setSelectedStateName] = useState('');
   const [editorView, setEditorView] = useState<EditorView>('builder');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(Boolean(revisionEdit));
   const [sidebarWidth, setSidebarWidth] = useState(360);
   const [layoutVersion, setLayoutVersion] = useState(0);
   const [testBenchOpen, setTestBenchOpen] = useState(false);
+  const [machinePath, setMachinePath] = useState<MachinePath>([]);
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const startSidebarResize = (event: ReactPointerEvent) => {
@@ -105,8 +135,91 @@ export function ManualWorkflowEditor({
     }
   }, [definitionText]);
 
-  const handleBuilderChange = (nextDefinition: AslDefinition) => {
+  const currentMachine = useMemo(() => (
+    parsedDefinition ? getMachineAtPath(parsedDefinition, machinePath) : null
+  ), [machinePath, parsedDefinition]);
+  const currentScopeKey = machinePathKey(machinePath);
+  const scopedNodePositions = useMemo(() => (
+    currentMachine
+      ? canvasPositionsForScope(initialNodePositions, machinePath, currentMachine)
+      : {}
+  ), [currentMachine, initialNodePositions, machinePath]);
+
+  const navigateToMachine = (nextPath: MachinePath) => {
+    if (!parsedDefinition) return;
+    const machine = getMachineAtPath(parsedDefinition, nextPath);
+    if (!machine) return;
+    setMachinePath(nextPath);
+    setSelectedStateName(machine.StartAt || Object.keys(machine.States || {})[0] || '');
+    setTestBenchOpen(false);
+  };
+
+  const handleOpenNestedScope = (segment: MachinePathSegment) => {
+    const nextPath = [...machinePath, segment];
+    setMachinePath(nextPath);
+    const nested = parsedDefinition ? getMachineAtPath(parsedDefinition, nextPath) : null;
+    const createdStateName = segment.kind === 'parallel'
+      ? `Branch${segment.branchIndex + 1}Start`
+      : 'ProcessItem';
+    setSelectedStateName(nested?.StartAt || Object.keys(nested?.States || {})[0] || createdStateName);
+    setTestBenchOpen(false);
+  };
+
+  const handleDefinitionTextUpdate = (value: string) => {
+    onDefinitionTextChange(value);
+    try {
+      const nextDefinition = JSON.parse(value) as AslDefinition;
+      if (machinePath.length > 0 && !getMachineAtPath(nextDefinition, machinePath)) {
+        setMachinePath([]);
+        setSelectedStateName(nextDefinition.StartAt || Object.keys(nextDefinition.States || {})[0] || '');
+      }
+    } catch {
+      // Keep the current scope while the code editor contains incomplete JSON.
+    }
+  };
+
+  const handleBuilderChange = (nextMachine: AslDefinition) => {
+    if (!parsedDefinition) return;
+    const nextDefinition = updateMachineAtPath(parsedDefinition, machinePath, nextMachine);
     onDefinitionTextChange(JSON.stringify(nextDefinition, null, 2));
+  };
+
+  const handleScopedNodePositionsChange = (positions: CanvasNodePositions) => {
+    onNodePositionsChange?.(mergeCanvasPositionsForScope(
+      initialNodePositions,
+      machinePath,
+      positions,
+    ));
+  };
+
+  const currentSegment = machinePath[machinePath.length - 1];
+  const parentMachinePath = machinePath.slice(0, -1);
+  const parentMachine = parsedDefinition && currentSegment
+    ? getMachineAtPath(parsedDefinition, parentMachinePath)
+    : null;
+  const siblingBranches: unknown[] = currentSegment?.kind === 'parallel'
+    ? (Array.isArray(parentMachine?.States?.[currentSegment.stateName]?.Branches)
+      ? parentMachine.States[currentSegment.stateName].Branches
+      : [])
+    : [];
+
+  const handleAddSiblingBranch = () => {
+    if (!parsedDefinition || !parentMachine || currentSegment?.kind !== 'parallel') return;
+    const ownerState = parentMachine.States?.[currentSegment.stateName];
+    if (!ownerState) return;
+    const branches = Array.isArray(ownerState.Branches) ? ownerState.Branches : [];
+    const branchIndex = branches.length;
+    const nextParent = updateState(parentMachine, currentSegment.stateName, {
+      ...ownerState,
+      Branches: [...branches, createNestedMachine(`Branch${branchIndex + 1}Start`)],
+    });
+    const nextDefinition = updateMachineAtPath(parsedDefinition, parentMachinePath, nextParent);
+    onDefinitionTextChange(JSON.stringify(nextDefinition, null, 2));
+    setMachinePath([
+      ...parentMachinePath,
+      { kind: 'parallel', stateName: currentSegment.stateName, branchIndex },
+    ]);
+    setSelectedStateName(`Branch${branchIndex + 1}Start`);
   };
 
   const handleFormat = () => {
@@ -116,6 +229,7 @@ export function ManualWorkflowEditor({
     } catch {
       // Keep invalid JSON untouched; the canvas layout can still be reset if a previous parse exists.
     }
+    onNodePositionsChange?.({});
     setLayoutVersion((version) => version + 1);
   };
 
@@ -149,8 +263,23 @@ export function ManualWorkflowEditor({
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2 font-mono-sm text-[13px] text-on-surface">
                 <span className="material-symbols-outlined text-[18px]">description</span>
-                definition.json
+                {revisionEdit ? `revision-${revisionEdit.baseRevision}.json` : 'definition.json'}
+                {revisionEdit && (
+                  <span className="rounded-full border border-status-info/35 bg-status-info/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-status-info">
+                    New revision
+                  </span>
+                )}
               </div>
+              {revisionEdit && onCancelRevisionEdit && (
+                <button
+                  type="button"
+                  onClick={onCancelRevisionEdit}
+                  className="flex h-8 items-center gap-1.5 rounded-DEFAULT border border-border-subtle px-2.5 font-mono-sm text-[11px] text-on-surface-variant transition-colors hover:border-secondary hover:text-secondary"
+                >
+                  <span className="material-symbols-outlined text-[15px]">arrow_back</span>
+                  Back
+                </button>
+              )}
               {viewToggle}
               <button
                 type="button"
@@ -164,10 +293,13 @@ export function ManualWorkflowEditor({
               <button
                 type="button"
                 onClick={() => setTestBenchOpen((open) => !open)}
+                disabled={machinePath.length > 0}
                 className={`flex h-8 items-center gap-1.5 rounded-DEFAULT border px-3 font-mono-sm text-[11px] transition-colors ${testBenchOpen
                   ? 'border-secondary/50 bg-secondary-container/35 text-secondary'
-                  : 'border-border-subtle text-on-surface-variant hover:border-secondary hover:text-secondary'}`}
-                title="Test draft states without saving an execution"
+                  : 'border-border-subtle text-on-surface-variant hover:border-secondary hover:text-secondary'} disabled:cursor-not-allowed disabled:opacity-40`}
+                title={machinePath.length > 0
+                  ? 'Return to the workflow scope to test draft states'
+                  : 'Test draft states without saving an execution'}
               >
                 {testBenchOpen ? <X size={13} /> : <FlaskConical size={13} />}
                 {testBenchOpen ? 'Close test' : 'Test draft'}
@@ -185,6 +317,64 @@ export function ManualWorkflowEditor({
               {definitionStatus.message}
             </span>
           </div>
+          {parsedDefinition && currentMachine && machinePath.length > 0 && (
+            <div className="flex min-h-12 shrink-0 items-center gap-3 border-b border-secondary/20 bg-secondary-container/[0.08] px-5">
+              <button
+                type="button"
+                onClick={() => navigateToMachine([])}
+                className="flex h-8 items-center gap-1.5 rounded-DEFAULT px-2 font-mono-sm text-[10px] text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface"
+              >
+                <span className="material-symbols-outlined text-[15px]">account_tree</span>
+                Workflow
+              </button>
+              {machinePath.map((segment, index) => (
+                <div key={`${segment.stateName}-${index}`} className="flex min-w-0 items-center gap-2">
+                  <ChevronRight size={12} className="shrink-0 text-on-surface-variant/55" />
+                  <button
+                    type="button"
+                    onClick={() => navigateToMachine(machinePath.slice(0, index + 1))}
+                    className={`max-w-[190px] truncate rounded-DEFAULT px-2 py-1.5 font-mono-sm text-[10px] transition-colors ${index === machinePath.length - 1
+                      ? 'bg-secondary-container/35 text-secondary'
+                      : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'}`}
+                    title={`${segment.stateName} · ${scopeSegmentLabel(segment)}`}
+                  >
+                    {segment.stateName} · {scopeSegmentLabel(segment)}
+                  </button>
+                </div>
+              ))}
+              <span className="ml-auto shrink-0 font-mono-sm text-[9px] uppercase tracking-[0.12em] text-secondary/75">
+                Closed scope · {Object.keys(currentMachine.States || {}).length} states
+              </span>
+              {currentSegment?.kind === 'parallel' && (
+                <div className="flex shrink-0 items-center gap-1 rounded-DEFAULT border border-border-subtle bg-surface-container-lowest p-1">
+                  {siblingBranches.map((_, branchIndex) => (
+                    <button
+                      key={branchIndex}
+                      type="button"
+                      onClick={() => navigateToMachine([
+                        ...parentMachinePath,
+                        { kind: 'parallel', stateName: currentSegment.stateName, branchIndex },
+                      ])}
+                      className={`h-6 rounded-[3px] px-2 font-mono-sm text-[9px] transition-colors ${branchIndex === currentSegment.branchIndex
+                        ? 'bg-secondary-container/40 text-secondary'
+                        : 'text-on-surface-variant hover:text-on-surface'}`}
+                    >
+                      Branch {branchIndex + 1}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={handleAddSiblingBranch}
+                    className="flex h-6 w-6 items-center justify-center rounded-[3px] text-on-surface-variant transition-colors hover:bg-secondary-container/25 hover:text-secondary"
+                    aria-label="Add parallel branch"
+                    title="Add branch"
+                  >
+                    <Plus size={11} />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <div className="flex min-h-0 flex-1 flex-col">
             {editorView === 'code' ? (
               <div className="grid min-h-0 flex-1 grid-cols-[minmax(360px,46%)_minmax(420px,1fr)]">
@@ -194,7 +384,7 @@ export function ManualWorkflowEditor({
                     defaultLanguage="json"
                     theme="vs-dark"
                     value={definitionText}
-                    onChange={(value) => onDefinitionTextChange(value || '')}
+                    onChange={(value) => handleDefinitionTextUpdate(value || '')}
                     options={{
                       minimap: { enabled: false },
                       scrollBeyondLastLine: false,
@@ -213,11 +403,14 @@ export function ManualWorkflowEditor({
                     canvas
                   </div>
                   <div className="min-h-0 flex-1">
-                    {parsedDefinition ? (
+                    {currentMachine ? (
                       <AslGraphViewer
-                        definition={parsedDefinition}
+                        definition={currentMachine}
                         selectedStateName={selectedStateName}
                         onStateSelect={setSelectedStateName}
+                        preserveNodePositions
+                        initialNodePositions={scopedNodePositions}
+                        onNodePositionsChange={handleScopedNodePositionsChange}
                         layoutVersion={layoutVersion}
                       />
                     ) : (
@@ -228,9 +421,10 @@ export function ManualWorkflowEditor({
                   </div>
                 </div>
               </div>
-            ) : parsedDefinition ? (
+            ) : currentMachine ? (
               <StateCanvasBuilder
-                definition={parsedDefinition}
+                key={currentScopeKey}
+                definition={currentMachine}
                 onDefinitionChange={handleBuilderChange}
                 selectedStateName={selectedStateName}
                 onStateSelect={setSelectedStateName}
@@ -238,6 +432,9 @@ export function ManualWorkflowEditor({
                 monoFieldClass={monoFieldClass}
                 taskResourceOptions={taskResourceOptions}
                 layoutVersion={layoutVersion}
+                initialNodePositions={scopedNodePositions}
+                onNodePositionsChange={handleScopedNodePositionsChange}
+                onOpenNestedScope={handleOpenNestedScope}
               />
             ) : (
               <div className="flex flex-1 items-center justify-center px-6 text-center font-mono-sm text-[12px] text-on-surface-variant">
@@ -245,7 +442,7 @@ export function ManualWorkflowEditor({
               </div>
             )}
           </div>
-          {testBenchOpen && parsedDefinition && (
+          {testBenchOpen && parsedDefinition && machinePath.length === 0 && (
             <WorkflowDraftTestBench
               definition={parsedDefinition}
               selectedStateName={selectedStateName}
@@ -294,6 +491,17 @@ export function ManualWorkflowEditor({
                 <PanelRightClose size={16} />
               </button>
             </div>
+            {revisionEdit?.recurring && onSaveWithoutActivation && (
+              <button
+                type="button"
+                onClick={onSaveWithoutActivation}
+                disabled={!canSave}
+                className="mb-2 flex h-10 w-full items-center justify-center gap-2 rounded-DEFAULT border border-border-subtle bg-surface-container-low px-4 font-body-sm text-[12px] font-medium text-on-surface transition-colors hover:border-secondary/55 hover:text-secondary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+                Save revision
+              </button>
+            )}
             <button
               type="button"
               onClick={onSave}
@@ -301,8 +509,13 @@ export function ManualWorkflowEditor({
               className="flex h-10 w-full items-center justify-center gap-2 rounded-DEFAULT bg-primary px-4 font-body-sm text-[12px] font-medium text-on-primary shadow-[0_12px_30px_rgba(242,121,90,0.18)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
-              Save draft
+              {revisionEdit?.recurring ? 'Save & activate' : revisionEdit ? 'Save revision' : 'Save workflow'}
             </button>
+            {revisionEdit && !revisionEdit.hasUnsavedChanges && (
+              <p className="mt-2 text-center font-mono-sm text-[10px] text-on-surface-variant">
+                Change the definition or canvas before saving.
+              </p>
+            )}
             <WorkflowPreviewPanel
               preview={definitionStats}
               className="-mx-6 mt-6 border-t"
@@ -333,28 +546,65 @@ export function ManualWorkflowEditor({
               </div>
             ) : (
               <div className="mt-5 rounded-DEFAULT border border-secondary/35 bg-secondary-container/45 p-4 text-body-sm text-secondary-fixed">
-                Ready to save as a draft.
+                {revisionEdit
+                  ? revisionEdit.recurring
+                    ? 'Ready to save as a draft revision or save and activate it.'
+                    : 'Ready to save. Manual workflow revisions activate immediately.'
+                  : cronExpression.trim()
+                    ? 'Ready to save. Activate the schedule from workflow details.'
+                    : 'Ready to save and execute manually.'}
                 <span className="mt-1 block text-[11px] text-secondary-fixed/70">
-                  Structure checks pass. JSONata expressions and runtime behavior aren't verified.
+                  ASL structure, graph, JSONata placement, and runtime-support checks pass. The server performs the final expression parse when saved.
                 </span>
               </div>
             )}
           </div>
           <div className="p-8">
-            <WorkflowMetadataForm
-              name={name}
-              onNameChange={onNameChange}
-              maxAttempts={maxAttempts}
-              onMaxAttemptsChange={onMaxAttemptsChange}
-              idempotencyKey={idempotencyKey}
-              onIdempotencyKeyChange={onIdempotencyKeyChange}
-              cronExpression={cronExpression}
-              onCronExpressionChange={onCronExpressionChange}
-              timezone={timezone}
-              onTimezoneChange={onTimezoneChange}
-              fieldClass={fieldClass}
-              monoFieldClass={monoFieldClass}
-            />
+            {revisionEdit ? (
+              <div>
+                <div className="font-mono-sm text-[11px] uppercase tracking-[0.08em] text-on-surface-variant">
+                  Revision source
+                </div>
+                <div className="mt-4 overflow-hidden rounded-DEFAULT border border-border-subtle bg-surface-container-low/55">
+                  <div className="border-b border-border-subtle px-4 py-3">
+                    <div className="text-[10px] uppercase tracking-[0.08em] text-on-surface-variant">Workflow</div>
+                    <div className="mt-1 text-body-sm font-medium text-on-surface">{name}</div>
+                  </div>
+                  <div className="grid grid-cols-2 divide-x divide-border-subtle">
+                    <div className="px-4 py-3">
+                      <div className="text-[10px] uppercase tracking-[0.08em] text-on-surface-variant">Based on</div>
+                      <div className="mt-1 font-mono-sm text-[11px] text-on-surface">
+                        Rev {revisionEdit.baseRevision} · {revisionEdit.baseRevisionActive ? 'Active' : 'Inactive'}
+                      </div>
+                    </div>
+                    <div className="px-4 py-3">
+                      <div className="text-[10px] uppercase tracking-[0.08em] text-on-surface-variant">Schedule</div>
+                      <div className="mt-1 font-mono-sm text-[11px] text-on-surface">
+                        {revisionEdit.recurring ? 'Recurring' : 'Manual'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <p className="mt-3 text-[11px] leading-relaxed text-on-surface-variant">
+                  The source revision stays unchanged. Workflow name, schedule, and retry attempts are managed separately from definition revisions.
+                </p>
+              </div>
+            ) : (
+              <WorkflowMetadataForm
+                name={name}
+                onNameChange={onNameChange}
+                maxAttempts={maxAttempts}
+                onMaxAttemptsChange={onMaxAttemptsChange}
+                idempotencyKey={idempotencyKey}
+                onIdempotencyKeyChange={onIdempotencyKeyChange}
+                cronExpression={cronExpression}
+                onCronExpressionChange={onCronExpressionChange}
+                timezone={timezone}
+                onTimezoneChange={onTimezoneChange}
+                fieldClass={fieldClass}
+                monoFieldClass={monoFieldClass}
+              />
+            )}
           </div>
         </aside>
         )}

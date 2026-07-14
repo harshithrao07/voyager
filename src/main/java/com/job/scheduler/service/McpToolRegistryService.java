@@ -9,6 +9,7 @@ import com.job.scheduler.repository.McpToolRepository;
 import io.modelcontextprotocol.spec.McpSchema;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -26,12 +27,15 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class McpToolRegistryService {
     private static final String MCP_SERVER_NOT_FOUND_MESSAGE = "MCP server does not exist";
-    private static final Duration TOOL_SYNC_TIMEOUT = Duration.ofSeconds(30);
 
     private final McpServerRepository mcpServerRepository;
     private final McpToolRepository mcpToolRepository;
     private final McpClientService mcpClientService;
     private final ObjectMapper objectMapper;
+
+    /** Default upper bound for a blocking tool sync when a server has no override. */
+    @Value("${scheduler.mcp.sync-timeout-ms:30000}")
+    private long syncTimeoutMs = 30000;
 
     public List<McpToolResponseDTO> getKnownTools(String serverId, boolean enabledOnly) {
         McpServer server = findServer(serverId);
@@ -46,7 +50,12 @@ public class McpToolRegistryService {
 
     public McpToolSyncResultDTO syncTools(String serverId) {
         McpServer server = findServer(serverId);
-        McpSchema.ListToolsResult listToolsResult = mcpClientService.listTools(serverId).block(TOOL_SYNC_TIMEOUT);
+        // Never cut the sync short of the server's own per-request timeout.
+        long blockMs = server.getRequestTimeoutMs() != null
+                ? Math.max(syncTimeoutMs, server.getRequestTimeoutMs())
+                : syncTimeoutMs;
+        McpSchema.ListToolsResult listToolsResult =
+                mcpClientService.listTools(serverId).block(Duration.ofMillis(blockMs));
         List<McpSchema.Tool> discoveredTools = listToolsResult == null ? List.of() : listToolsResult.tools();
         Instant syncedAt = Instant.now();
 

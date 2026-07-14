@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test:asl": "node --experimental-strip-types --test tests/aslValidation.test.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },

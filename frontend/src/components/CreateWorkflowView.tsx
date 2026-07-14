@@ -5,6 +5,7 @@ import {
   acceptWorkflowAiPlan,
   continueWorkflowAiConversation,
   createWorkflow,
+  createWorkflowRevision,
   deleteAiModel,
   discoverAiModels,
   getWorkflowAiConversation,
@@ -16,11 +17,13 @@ import {
   setAiModelEnabled,
   startWorkflowAiConversation,
   testAiModel,
+  updateWorkflowCanvasLayout,
   type FunctionDefinitionDTO,
   type WorkflowAiMessageDTO,
   type WorkflowAiConversationSummaryDTO,
   type WorkflowAiResponse,
   type WorkflowAiStage,
+  type WorkflowDefinitionResponseDTO,
   type WorkflowResponseDTO,
 } from '../api';
 import { AslReviewPanel } from './workflow-create/AslReviewPanel';
@@ -31,6 +34,7 @@ import { ModelSettingsModal } from './workflow-create/ModelSettingsModal';
 import { WorkflowAiEmptyState } from './workflow-create/WorkflowAiEmptyState';
 import { WorkflowStageStrip } from './workflow-create/WorkflowStageStrip';
 import type { TaskResourceOption } from './workflow-create/StateEditorForm';
+import { filterCanvasPositionsForDefinition } from './workflow-create/nestedMachine';
 import { collectAslIssues } from '../utils/aslValidation';
 import { validateCron } from '../utils/cronValidation';
 import type {
@@ -41,18 +45,35 @@ import type {
   ModelSettingsTab,
   WorkflowPreview,
 } from './workflow-create/types';
+import type { CanvasNodePositions } from '../types/workflowCanvas';
 
 const starterDefinition = {
   StartAt: '',
   States: {},
 };
 
+export type WorkflowRevisionEditContext = {
+  workflow: WorkflowResponseDTO;
+  baseRevision: {
+    revision: number;
+    definition: unknown;
+    canvasLayout: CanvasNodePositions;
+    active: boolean;
+  };
+};
+
 type Props = {
   onWorkflowCreated: (workflow: WorkflowResponseDTO) => void;
+  onWorkflowRevisionSaved?: (
+    workflowId: string,
+    revision: WorkflowDefinitionResponseDTO,
+  ) => void | Promise<void>;
+  onUnsavedChangesChange?: (dirty: boolean) => void;
   onNavigate?: (path: string, options?: { replace?: boolean }) => void;
   routeChatId?: string;
   onChatStarted?: (chat: WorkflowAiConversationSummaryDTO) => void;
   onChatUpdated?: (previousId: string | null, chat: WorkflowAiConversationSummaryDTO) => void;
+  revisionEdit?: WorkflowRevisionEditContext;
 };
 
 function newIdempotencyKey() {
@@ -79,6 +100,32 @@ function parseDefinition(value: string) {
   }
 
   return parsed;
+}
+
+function stableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableJsonValue);
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, stableJsonValue(entry)]),
+    );
+  }
+  return value;
+}
+
+function stableJson(value: unknown) {
+  return JSON.stringify(stableJsonValue(value));
+}
+
+function definitionFingerprint(value: string) {
+  try {
+    return stableJson(JSON.parse(value));
+  } catch {
+    return value;
+  }
 }
 
 function newChatMessageId() {
@@ -191,15 +238,18 @@ function endpointHost(endpoint: string) {
 }
 
 function functionTaskResource(fn: FunctionDefinitionDTO) {
-  return `voyager://${fn.namespace}/${fn.name}@v${fn.activeVersion}`;
+  return `voyager://function/${fn.name}@v${fn.activeVersion}`;
 }
 
 export function CreateWorkflowView({
   onWorkflowCreated,
+  onWorkflowRevisionSaved,
+  onUnsavedChangesChange,
   onNavigate,
   routeChatId,
   onChatStarted,
   onChatUpdated,
+  revisionEdit,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -209,12 +259,14 @@ export function CreateWorkflowView({
   const [editingMessageContent, setEditingMessageContent] = useState('');
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [chatEntered, setChatEntered] = useState(false);
-  const [mode, setMode] = useState<DefinitionMode>('ai');
-  const [name, setName] = useState('');
-  const [maxAttempts, setMaxAttempts] = useState(3);
-  const [cronExpression, setCronExpression] = useState('');
-  const [timezone, setTimezone] = useState('UTC');
-  const [idempotencyKey, setIdempotencyKey] = useState(newIdempotencyKey);
+  const [mode, setMode] = useState<DefinitionMode>(revisionEdit ? 'manual' : 'ai');
+  const [name, setName] = useState(revisionEdit?.workflow.name || '');
+  const [maxAttempts, setMaxAttempts] = useState(revisionEdit?.workflow.maxAttempts ?? 3);
+  const [cronExpression, setCronExpression] = useState(revisionEdit?.workflow.cronExpression || '');
+  const [timezone, setTimezone] = useState(revisionEdit?.workflow.timezone || 'UTC');
+  const [idempotencyKey, setIdempotencyKey] = useState(
+    revisionEdit?.workflow.idempotencyKey || newIdempotencyKey(),
+  );
   const [instruction, setInstruction] = useState('');
   const [previewPrompt, setPreviewPrompt] = useState<string | null>(null);
   const [models, setModels] = useState<AiModel[]>([]);
@@ -241,12 +293,18 @@ export function CreateWorkflowView({
   const [discoveredModelNames, setDiscoveredModelNames] = useState<string[]>([]);
   const [expandedEndpoint, setExpandedEndpoint] = useState<string | null>(null);
   const [managingModels, setManagingModels] = useState(false);
-  const [definitionText, setDefinitionText] = useState(formatJson(starterDefinition));
+  const [definitionText, setDefinitionText] = useState(() => formatJson(
+    revisionEdit?.baseRevision.definition || starterDefinition,
+  ));
+  const [canvasNodePositions, setCanvasNodePositions] = useState<CanvasNodePositions>(
+    revisionEdit?.baseRevision.canvasLayout || {},
+  );
   const [validationIssues, setValidationIssues] = useState<string[]>([]);
   const [generating, setGenerating] = useState(false);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [accepting, setAccepting] = useState(false);
+  const [revisionSaveCompleted, setRevisionSaveCompleted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedThinkingMessageIds, setExpandedThinkingMessageIds] = useState<Set<string>>(() => new Set());
   const modelPickerRef = useRef<HTMLDivElement | null>(null);
@@ -260,7 +318,7 @@ export function CreateWorkflowView({
 
   const hasSelectedModel = models.some((model) => model.id === modelId);
   const canGenerate = instruction.trim().length > 0 && !generating && !saving && !accepting && hasSelectedModel;
-  const definitionStatus = useMemo(() => {
+  const definitionJsonStatus = useMemo(() => {
     try {
       parseDefinition(definitionText);
       return { valid: true, message: 'Definition JSON is well-formed' };
@@ -268,19 +326,12 @@ export function CreateWorkflowView({
       return { valid: false, message: err.message || 'Definition JSON is invalid' };
     }
   }, [definitionText]);
-  const canSave = name.trim().length > 0
-    && idempotencyKey.trim().length > 0
-    && definitionStatus.valid
-    && validateCron(cronExpression) === null
-    && !saving
-    && !generating;
-
   const taskResourceOptions = useMemo<TaskResourceOption[]>(() => (
     customFunctions
       .filter((fn) => fn.status === 'ENABLED' && fn.activeVersion !== null)
       .map((fn) => ({
         value: functionTaskResource(fn),
-        label: `${fn.namespace}/${fn.name}`,
+        label: fn.name,
         description: `Function v${fn.activeVersion}`,
       }))
   ), [customFunctions]);
@@ -350,8 +401,8 @@ export function CreateWorkflowView({
     }
   }, [definitionText]);
 
-  // Shallow semantic checks (dangling transitions, unreachable states, placeholder
-  // resources). Only runs when the JSON parses; parse errors surface via definitionStatus.
+  // Full client-side structural, graph, JSONata-dialect, and state-field checks.
+  // The backend remains authoritative for parsing the JSONata expression body.
   const localValidationIssues = useMemo<string[]>(() => {
     try {
       return collectAslIssues(parseDefinition(definitionText));
@@ -363,6 +414,65 @@ export function CreateWorkflowView({
   const builderValidationIssues = useMemo<string[]>(() => (
     [...new Set([...validationIssues, ...localValidationIssues])]
   ), [validationIssues, localValidationIssues]);
+
+  const definitionStatus = useMemo(() => {
+    if (!definitionJsonStatus.valid) return definitionJsonStatus;
+    if (localValidationIssues.length > 0) {
+      const suffix = localValidationIssues.length === 1 ? 'issue' : 'issues';
+      return {
+        valid: false,
+        message: `${localValidationIssues.length} ASL validation ${suffix}`,
+      };
+    }
+    return { valid: true, message: 'Frontend ASL checks pass' };
+  }, [definitionJsonStatus, localValidationIssues]);
+
+  const revisionDefinitionDirty = useMemo(() => (
+    revisionEdit
+      ? definitionFingerprint(definitionText) !== stableJson(revisionEdit.baseRevision.definition)
+      : false
+  ), [definitionText, revisionEdit]);
+  const revisionLayoutDirty = useMemo(() => (
+    revisionEdit
+      ? stableJson(canvasNodePositions) !== stableJson(revisionEdit.baseRevision.canvasLayout || {})
+      : false
+  ), [canvasNodePositions, revisionEdit]);
+  const hasUnsavedRevisionChanges = Boolean(
+    revisionEdit
+    && !revisionSaveCompleted
+    && (revisionDefinitionDirty || revisionLayoutDirty),
+  );
+
+  const canSave = name.trim().length > 0
+    && idempotencyKey.trim().length > 0
+    && definitionStatus.valid
+    && builderValidationIssues.length === 0
+    && validateCron(cronExpression) === null
+    && (!revisionEdit || hasUnsavedRevisionChanges)
+    && !saving
+    && !generating;
+
+  useEffect(() => {
+    onUnsavedChangesChange?.(hasUnsavedRevisionChanges);
+    return () => onUnsavedChangesChange?.(false);
+  }, [hasUnsavedRevisionChanges, onUnsavedChangesChange]);
+
+  useEffect(() => {
+    if (!hasUnsavedRevisionChanges) return undefined;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [hasUnsavedRevisionChanges]);
+
+  const handleDefinitionTextChange = (value: string) => {
+    setDefinitionText(value);
+    // Backend/AI issues describe the previous definition. The local validator
+    // immediately recomputes the current definition as the user edits it.
+    setValidationIssues([]);
+  };
 
   const applyModelLists = (enabledDtos: Parameters<typeof aiModelFromDto>[0][], allDtos: Parameters<typeof aiModelFromDto>[0][]) => {
     const nextModels = enabledDtos.map(aiModelFromDto);
@@ -906,9 +1016,13 @@ export function CreateWorkflowView({
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (activateRevision = false) => {
     if (!definitionStatus.valid) {
       setError(definitionStatus.message);
+      return;
+    }
+    if (builderValidationIssues.length > 0) {
+      setError('Fix the ASL validation issues before saving the workflow.');
       return;
     }
 
@@ -917,6 +1031,42 @@ export function CreateWorkflowView({
 
     try {
       const definition = parseDefinition(definitionText);
+      const positions = filterCanvasPositionsForDefinition(definition, canvasNodePositions);
+
+      if (revisionEdit) {
+        let savedRevision = await createWorkflowRevision(revisionEdit.workflow.id, {
+          definition,
+          activate: activateRevision,
+        });
+        try {
+          savedRevision = await updateWorkflowCanvasLayout(
+            revisionEdit.workflow.id,
+            savedRevision.revision,
+            positions,
+          );
+        } catch (layoutError) {
+          toast.error(layoutError instanceof Error
+            ? `Revision saved, but its canvas layout could not be saved: ${layoutError.message}`
+            : 'Revision saved, but its canvas layout could not be saved.');
+        }
+
+        const createdNewRevision = savedRevision.revision !== revisionEdit.baseRevision.revision;
+        setRevisionSaveCompleted(true);
+        onUnsavedChangesChange?.(false);
+        await onWorkflowRevisionSaved?.(revisionEdit.workflow.id, savedRevision);
+        if (createdNewRevision) {
+          toast.success(savedRevision.active
+            ? `Revision ${savedRevision.revision} saved and activated.`
+            : `Revision ${savedRevision.revision} saved.`);
+        } else {
+          toast.success(savedRevision.active
+            ? `Revision ${savedRevision.revision} is active; its canvas layout is saved.`
+            : `Revision ${savedRevision.revision} canvas layout saved.`);
+        }
+        onNavigate?.(`/workflows/${encodeURIComponent(revisionEdit.workflow.id)}`);
+        return;
+      }
+
       const workflow = await createWorkflow({
         name: name.trim(),
         cronExpression: cronExpression.trim() || null,
@@ -925,9 +1075,22 @@ export function CreateWorkflowView({
         idempotencyKey: idempotencyKey.trim(),
         definition,
       });
+      if (Object.keys(positions).length > 0) {
+        try {
+          await updateWorkflowCanvasLayout(
+            workflow.id,
+            workflow.activeDefinition?.revision || 1,
+            positions,
+          );
+        } catch (layoutError) {
+          toast.error(layoutError instanceof Error
+            ? `Workflow created, but its canvas layout could not be saved: ${layoutError.message}`
+            : 'Workflow created, but its canvas layout could not be saved.');
+        }
+      }
       onWorkflowCreated(workflow);
     } catch (err: any) {
-      setError(err.message || 'Failed to create workflow.');
+      setError(err.message || (revisionEdit ? 'Failed to save workflow revision.' : 'Failed to create workflow.'));
     } finally {
       setSaving(false);
     }
@@ -1308,6 +1471,7 @@ export function CreateWorkflowView({
     try {
       const parsed = parseDefinition(raw);
       setDefinitionText(formatJson(parsed));
+      setCanvasNodePositions({});
       setValidationIssues([]);
       setError(null);
       setMode('manual');
@@ -1352,7 +1516,7 @@ export function CreateWorkflowView({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col text-on-surface">
-      {messages.length === 0 && (
+      {!revisionEdit && messages.length === 0 && (
         <header className="pointer-events-none absolute right-10 top-1 z-30 flex justify-end">
           <div className="pointer-events-auto">
             {modeSwitch}
@@ -1418,7 +1582,7 @@ export function CreateWorkflowView({
               definitionStatus={definitionStatus}
               workflowPreview={definitionStats}
               definitionText={definitionText}
-              onDefinitionTextChange={setDefinitionText}
+              onDefinitionTextChange={handleDefinitionTextChange}
               onReviewAsl={handleReviewAsl}
               onAcceptPlan={handleAcceptPlan}
               onClose={() => setIsEditorOpen(false)}
@@ -1473,14 +1637,24 @@ export function CreateWorkflowView({
       ) : (
         <ManualWorkflowEditor
           definitionText={definitionText}
-          onDefinitionTextChange={setDefinitionText}
+          onDefinitionTextChange={handleDefinitionTextChange}
           definitionStatus={definitionStatus}
           definitionStats={definitionStats}
           error={error}
           validationIssues={builderValidationIssues}
           saving={saving}
           canSave={canSave}
-          onSave={handleSave}
+          onSave={() => void handleSave(Boolean(revisionEdit?.workflow.cronExpression))}
+          onSaveWithoutActivation={revisionEdit ? () => void handleSave(false) : undefined}
+          revisionEdit={revisionEdit ? {
+            baseRevision: revisionEdit.baseRevision.revision,
+            recurring: Boolean(revisionEdit.workflow.cronExpression),
+            baseRevisionActive: revisionEdit.baseRevision.active,
+            hasUnsavedChanges: hasUnsavedRevisionChanges,
+          } : undefined}
+          onCancelRevisionEdit={revisionEdit
+            ? () => onNavigate?.(`/workflows/${encodeURIComponent(revisionEdit.workflow.id)}`)
+            : undefined}
           name={name}
           onNameChange={setName}
           maxAttempts={maxAttempts}
@@ -1494,7 +1668,9 @@ export function CreateWorkflowView({
           fieldClass={fieldClass}
           monoFieldClass={monoFieldClass}
           taskResourceOptions={taskResourceOptions}
-          reserveTopControlsSpace={messages.length === 0}
+          reserveTopControlsSpace={!revisionEdit && messages.length === 0}
+          initialNodePositions={canvasNodePositions}
+          onNodePositionsChange={setCanvasNodePositions}
         />
       )}
     </div>

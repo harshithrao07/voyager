@@ -66,6 +66,10 @@ public class McpServer {
     @Column(name = "status", nullable = false)
     private McpServerStatus status;
 
+    /** Per-request timeout in ms for this server; null falls back to the app default. */
+    @Column(name = "request_timeout_ms")
+    private Integer requestTimeoutMs;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

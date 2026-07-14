@@ -10,14 +10,15 @@ import java.net.URI;
 @Component
 @RequiredArgsConstructor
 public class FunctionTaskResource implements TaskResource {
+    /** The {@code function} category under the {@code voyager} scheme. */
+    private static final String CATEGORY = "function";
+
     private final FunctionInvocationService functionInvocationService;
 
     @Override
     public boolean supports(URI resource) {
-        String path = trimSlashes(resource.getPath());
         return "voyager".equals(resource.getScheme())
-                && path != null
-                && !path.isBlank();
+                && CATEGORY.equals(resource.getHost());
     }
 
     @Override
@@ -29,7 +30,6 @@ public class FunctionTaskResource implements TaskResource {
     public JsonNode execute(URI resource, JsonNode arguments, TaskExecutionContext context) {
         FunctionResourceRef ref = parse(resource);
         return functionInvocationService.invokeForTask(
-                ref.namespace(),
                 ref.name(),
                 ref.version(),
                 arguments,
@@ -38,13 +38,11 @@ public class FunctionTaskResource implements TaskResource {
     }
 
     private FunctionResourceRef parse(URI resource) {
-        String namespace = resource.getHost();
         String path = trimSlashes(resource.getPath());
-        if (namespace == null || namespace.isBlank()
-                || path == null || path.isBlank()) {
+        if (path == null || path.isBlank()) {
             throw new TaskResourceException(
                     TaskResourceErrors.TASK_FAILED,
-                    "Function Task resource must be voyager://namespace/name@version"
+                    "Function Task resource must be voyager://function/name@version"
             );
         }
 
@@ -62,7 +60,7 @@ public class FunctionTaskResource implements TaskResource {
                     "Function Task resource must include a function name"
             );
         }
-        return new FunctionResourceRef(namespace, name, version);
+        return new FunctionResourceRef(name, version);
     }
 
     private Integer parseVersion(String rawVersion) {
@@ -89,7 +87,6 @@ public class FunctionTaskResource implements TaskResource {
     }
 
     private record FunctionResourceRef(
-            String namespace,
             String name,
             Integer version
     ) {

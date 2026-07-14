@@ -1,3 +1,5 @@
+import type { CanvasNodePositions } from './types/workflowCanvas';
+
 export interface WorkflowGenerationRequest {
   instruction: string;
   modelId?: string;
@@ -153,11 +155,25 @@ export interface GetWorkflowRevisionsRequest {
   workflowId: string;
 }
 
+export interface CreateWorkflowRevisionRequest {
+  definition: unknown;
+  activate: boolean;
+}
+
+export interface UpdateWorkflowMetadataRequest {
+  expectedVersion: number;
+  name?: string;
+  cronExpression?: string | null;
+  timezone?: string;
+  maxAttempts?: number;
+}
+
 export interface WorkflowDefinitionResponseDTO {
   id: string;
   revision: number;
   definitionHash: string;
   definition: any;
+  canvasLayout: CanvasNodePositions;
   active: boolean;
   createdAt: string;
 }
@@ -337,7 +353,6 @@ export type FunctionInvocationStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED';
 
 export interface FunctionDefinitionDTO {
   id: string;
-  namespace: string;
   name: string;
   description: string | null;
   activeVersion: number | null;
@@ -347,7 +362,6 @@ export interface FunctionDefinitionDTO {
 }
 
 export interface FunctionDefinitionRequest {
-  namespace: string;
   name: string;
   description?: string | null;
   status?: FunctionStatus | null;
@@ -588,6 +602,75 @@ export function getWorkflowRevisions(
   request: GetWorkflowRevisionsRequest,
 ): Promise<WorkflowDefinitionResponseDTO[]> {
   return getJson<WorkflowDefinitionResponseDTO[]>(`/app/v1/workflows/${request.workflowId}/revisions`);
+}
+
+export function createWorkflowRevision(
+  workflowId: string,
+  request: CreateWorkflowRevisionRequest,
+): Promise<WorkflowDefinitionResponseDTO> {
+  return sendJson<WorkflowDefinitionResponseDTO>(
+    `/app/v1/workflows/${workflowId}/revisions`,
+    'POST',
+    request,
+  );
+}
+
+export function updateWorkflowMetadata(
+  workflowId: string,
+  request: UpdateWorkflowMetadataRequest,
+): Promise<WorkflowResponseDTO> {
+  return sendJson<WorkflowResponseDTO>(
+    `/app/v1/workflows/${workflowId}`,
+    'PATCH',
+    request,
+  );
+}
+
+export function pauseWorkflow(workflowId: string): Promise<WorkflowResponseDTO> {
+  return sendJson<WorkflowResponseDTO>(
+    `/app/v1/workflows/${workflowId}/pause`,
+    'POST',
+    {},
+  );
+}
+
+export function resumeWorkflow(workflowId: string): Promise<WorkflowResponseDTO> {
+  return sendJson<WorkflowResponseDTO>(
+    `/app/v1/workflows/${workflowId}/resume`,
+    'POST',
+    {},
+  );
+}
+
+export function archiveWorkflow(workflowId: string): Promise<WorkflowResponseDTO> {
+  return sendJson<WorkflowResponseDTO>(
+    `/app/v1/workflows/${workflowId}/archive`,
+    'POST',
+    {},
+  );
+}
+
+export function activateWorkflowRevision(
+  workflowId: string,
+  revision: number,
+): Promise<WorkflowDefinitionResponseDTO> {
+  return sendJson<WorkflowDefinitionResponseDTO>(
+    `/app/v1/workflows/${workflowId}/revisions/${revision}/activate`,
+    'POST',
+    {},
+  );
+}
+
+export function updateWorkflowCanvasLayout(
+  workflowId: string,
+  revision: number,
+  positions: CanvasNodePositions,
+): Promise<WorkflowDefinitionResponseDTO> {
+  return sendJson<WorkflowDefinitionResponseDTO>(
+    `/app/v1/workflows/${workflowId}/revisions/${revision}/canvas-layout`,
+    'PUT',
+    { positions },
+  );
 }
 
 export function listAiModels(): Promise<AiModelConfigDTO[]> {

@@ -11,7 +11,7 @@ export const STATE_TYPES = ['Task', 'Pass', 'Choice', 'Wait', 'Parallel', 'Map',
 export type StateType = (typeof STATE_TYPES)[number];
 
 export const STATE_TYPE_DESCRIPTIONS: Record<StateType, string> = {
-  Task: 'Invoke a resource such as voyager://webhook, voyager://namespace/name or mcp://',
+  Task: 'Invoke a resource such as voyager://function/name, voyager://system/webhook or voyager://mcp/server/tool',
   Pass: 'Forward input to output, optionally reshaping it',
   Choice: 'Route to the first branch whose condition is true',
   Wait: 'Pause for a duration or until a timestamp',
@@ -91,7 +91,7 @@ export function uniqueStateName(states: Record<string, AslState>, base: string) 
 }
 
 export function isValidStateName(name: string) {
-  return name.trim().length > 0 && name.length <= 80;
+  return name.trim().length > 0 && [...name].length <= 80;
 }
 
 function replaceTargets(state: AslState, replace: (target: string) => string): AslState {
