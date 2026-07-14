@@ -1,5 +1,8 @@
 package com.job.scheduler.enums;
 
 public enum McpTransport {
-    HTTP
+    /** Remote server over streamable HTTP. */
+    HTTP,
+    /** Local child process communicating over stdin/stdout. */
+    STDIO
 }

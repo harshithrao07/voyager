@@ -12,6 +12,9 @@ import java.util.Map;
 
 @Component
 public class AslJsonataEvaluator {
+    private static final Object RUNTIME_INITIALIZATION_MONITOR = new Object();
+    private static volatile boolean runtimeInitialized;
+
     private final ObjectMapper objectMapper;
     private final com.fasterxml.jackson.databind.ObjectMapper jsonataMapper =
             new com.fasterxml.jackson.databind.ObjectMapper();
@@ -20,7 +23,7 @@ public class AslJsonataEvaluator {
 
     public AslJsonataEvaluator(
             ObjectMapper objectMapper,
-            @Value("${scheduler.workflow.mapping-timeout-ms:100}")
+            @Value("${scheduler.workflow.mapping-timeout-ms:1000}")
             long evaluationTimeoutMs,
             @Value("${scheduler.workflow.mapping-max-depth:100}")
             int maximumDepth
@@ -31,6 +34,7 @@ public class AslJsonataEvaluator {
         this.objectMapper = objectMapper;
         this.evaluationTimeoutMs = evaluationTimeoutMs;
         this.maximumDepth = maximumDepth;
+        ensureRuntimeInitialized();
     }
 
     public JsonNode evaluate(
@@ -95,10 +99,72 @@ public class AslJsonataEvaluator {
             );
         } catch (Exception exception) {
             throw new IllegalArgumentException(
-                    "Could not evaluate ASL JSONata expression",
+                    "Could not evaluate ASL JSONata expression: "
+                            + rootCauseMessage(exception),
                     exception
             );
         }
+    }
+
+    /**
+     * JSONata4Java initializes parser and visitor classes lazily. Run a
+     * representative Choice expression once, without the per-expression
+     * timebox, so class loading and JIT warm-up cannot consume the first
+     * workflow state's runtime budget.
+     */
+    private static void ensureRuntimeInitialized() {
+        if (runtimeInitialized) {
+            return;
+        }
+        synchronized (RUNTIME_INITIALIZATION_MONITOR) {
+            if (runtimeInitialized) {
+                return;
+            }
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper mapper =
+                        new com.fasterxml.jackson.databind.ObjectMapper();
+                com.fasterxml.jackson.databind.node.ObjectNode states =
+                        mapper.createObjectNode();
+                states.set(
+                        "input",
+                        mapper.createObjectNode().put("approved", true)
+                );
+                Expressions expression = Expressions.parse(
+                        "$states.input.approved = true"
+                );
+                expression.getEnvironment().setVariable("$states", states);
+                com.fasterxml.jackson.databind.JsonNode result =
+                        expression.evaluateSynced(mapper.createObjectNode());
+                if (result == null
+                        || !result.isBoolean()
+                        || !result.booleanValue()) {
+                    throw new IllegalStateException(
+                            "JSONata warm-up returned an unexpected result"
+                    );
+                }
+                runtimeInitialized = true;
+            } catch (Exception exception) {
+                throw new IllegalStateException(
+                        "Could not initialize the ASL JSONata runtime: "
+                                + rootCauseMessage(exception),
+                        exception
+                );
+            }
+        }
+    }
+
+    private static String rootCauseMessage(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        String message = current.getMessage();
+        if (message == null || message.isBlank()) {
+            message = throwable.getMessage();
+        }
+        return message == null || message.isBlank()
+                ? current.getClass().getSimpleName()
+                : message;
     }
 
     private JsonNode statesValue(StateExecutionContext context) {

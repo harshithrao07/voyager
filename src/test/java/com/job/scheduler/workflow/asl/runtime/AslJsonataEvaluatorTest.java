@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AslJsonataEvaluatorTest {
     private ObjectMapper objectMapper;
@@ -32,5 +33,30 @@ class AslJsonataEvaluatorTest {
 
         assertThat(result.get("message").stringValue()).isEqualTo("hello Ada");
         assertThat(result.get("state").stringValue()).isEqualTo("Welcome");
+    }
+
+    @Test
+    void preservesJsonataTimeoutDetails() {
+        AslJsonataEvaluator timeboxedEvaluator =
+                new AslJsonataEvaluator(objectMapper, 1, 100);
+        var values = objectMapper.createArrayNode();
+        for (int index = 0; index < 100_000; index++) {
+            values.add(index);
+        }
+        var input = objectMapper.createObjectNode().set("values", values);
+        var expression = objectMapper.getNodeFactory().textNode(
+                "{% $sum($states.input.values) %}"
+        );
+
+        assertThatThrownBy(() -> timeboxedEvaluator.evaluate(
+                expression,
+                new StateExecutionContext(
+                        input,
+                        objectMapper.createObjectNode(),
+                        objectMapper.createObjectNode()
+                )
+        )).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Could not evaluate ASL JSONata expression")
+                .hasMessageContaining("Expression evaluation timeout");
     }
 }

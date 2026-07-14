@@ -5,6 +5,7 @@ import com.job.scheduler.enums.McpAuthType;
 import com.job.scheduler.enums.McpServerStatus;
 import com.job.scheduler.enums.McpTransport;
 import com.job.scheduler.enums.McpTrustLevel;
+import com.job.scheduler.exception.McpConnectionException;
 import com.job.scheduler.repository.McpServerRepository;
 import jakarta.persistence.EntityNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
@@ -61,6 +62,31 @@ class McpClientServiceTest {
         assertThatThrownBy(() -> mcpClientService.listTools("local-tools").block())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("No token configured for MCP server: local-tools");
+    }
+
+    @Test
+    void surfacesClearErrorWhenStdioProcessCannotLaunch() {
+        when(mcpServerRepository.findByServerId("local-cli"))
+                .thenReturn(Optional.of(stdioServer("voyager-no-such-command-zzz")));
+
+        assertThatThrownBy(() -> mcpClientService.listTools("local-cli").block())
+                .isInstanceOf(McpConnectionException.class)
+                .hasMessageContaining("Could not launch MCP process 'voyager-no-such-command-zzz'")
+                .hasMessageContaining("use HTTP transport or install the runtime");
+    }
+
+    private McpServer stdioServer(String command) {
+        McpServer server = new McpServer();
+        server.setServerId("local-cli");
+        server.setDisplayName("Local CLI");
+        server.setTransport(McpTransport.STDIO);
+        server.setCommand(command);
+        server.setArgs(java.util.List.of());
+        server.setEnv(java.util.Map.of());
+        server.setAuthType(McpAuthType.NONE);
+        server.setTrustLevel(McpTrustLevel.READ_ONLY);
+        server.setStatus(McpServerStatus.ENABLED);
+        return server;
     }
 
     private McpServer server(McpServerStatus status, McpAuthType authType) {

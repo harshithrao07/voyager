@@ -74,6 +74,7 @@ export function WorkflowAiEmptyState({
         <input
           ref={fileInputRef}
           type="file"
+          data-testid="workflow-template-file"
           accept=".json,.asl,application/json"
           className="hidden"
           onChange={handleTemplateFile}

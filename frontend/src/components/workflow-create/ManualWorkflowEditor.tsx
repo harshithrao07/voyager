@@ -242,6 +242,7 @@ export function ManualWorkflowEditor({
         <button
           key={view}
           type="button"
+          data-testid={`workflow-editor-${view}`}
           onClick={() => setEditorView(view)}
           className={`flex h-7 items-center gap-1.5 rounded-[3px] px-2.5 font-mono-sm text-[11px] transition-colors ${editorView === view
             ? 'bg-surface-container-highest text-on-surface'
@@ -310,6 +311,7 @@ export function ManualWorkflowEditor({
             <span>{definitionStats.stateCount} states</span>
             <span>{definitionStats.taskCount} tasks</span>
             <span
+              data-testid="workflow-definition-status"
               className={`min-w-0 flex-1 truncate ${definitionStatus.valid ? 'text-secondary' : 'text-status-error'}`}
               title={definitionStatus.message}
               aria-live="polite"
@@ -454,6 +456,7 @@ export function ManualWorkflowEditor({
           {!sidebarOpen && (
             <button
               type="button"
+              data-testid="workflow-show-panel"
               onClick={() => setSidebarOpen(true)}
               title="Show panel"
               className="absolute right-0 top-1/2 z-20 hidden -translate-y-1/2 items-center rounded-l-DEFAULT border border-r-0 border-border-subtle bg-surface-container-highest px-1.5 py-3 text-on-surface-variant shadow-lg transition-colors hover:text-on-surface xl:flex"
@@ -504,6 +507,7 @@ export function ManualWorkflowEditor({
             )}
             <button
               type="button"
+              data-testid="workflow-save"
               onClick={onSave}
               disabled={!canSave}
               className="flex h-10 w-full items-center justify-center gap-2 rounded-DEFAULT bg-primary px-4 font-body-sm text-[12px] font-medium text-on-primary shadow-[0_12px_30px_rgba(242,121,90,0.18)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"

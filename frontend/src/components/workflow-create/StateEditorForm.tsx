@@ -166,6 +166,7 @@ function JsonField({ label, value, onCommit, hint, placeholder, rows = 4, requir
     <div>
       <label className={labelClass}>{label}</label>
       <textarea
+        aria-label={label}
         value={text}
         onChange={(event) => handleChange(event.target.value)}
         placeholder={placeholder}

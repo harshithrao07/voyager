@@ -3,7 +3,6 @@ import { toast } from 'sonner';
 import type { WorkflowSummary } from './components/WorkflowListView';
 import { WorkspaceState } from './components/WorkspaceState';
 import { WorkflowSettingsPanel } from './components/WorkflowSettingsPanel';
-import { DashboardPage } from './pages/DashboardPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { CreateWorkflowPage } from './pages/CreateWorkflowPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -277,7 +276,6 @@ function ChatHistoryModal({
 }
 
 type AppRoute =
-  | { page: 'dashboard' }
   | { page: 'workflows' }
   | { page: 'create' }
   | { page: 'chat'; chatId: string }
@@ -290,7 +288,6 @@ type AppRoute =
 function parseRoute(pathname: string): AppRoute {
   const normalized = pathname.replace(/\/+$/, '') || '/';
   if (normalized === '/') return { page: 'create' };
-  if (normalized === '/dashboard') return { page: 'dashboard' };
   if (normalized === '/workflows/new') return { page: 'create' };
   if (normalized === '/workflows') return { page: 'workflows' };
   if (normalized === '/settings') return { page: 'settings' };
@@ -329,7 +326,9 @@ function workflowRevisionEditPath(workflowId: string, revision: number) {
 
 function canonicalPath(pathname: string) {
   const normalized = pathname.replace(/\/+$/, '') || '/';
-  return normalized === '/workflows/new' ? '/' : pathname;
+  if (normalized === '/workflows/new') return '/';
+  if (normalized === '/dashboard') return '/workflows';
+  return pathname;
 }
 
 function App() {
@@ -998,16 +997,6 @@ function App() {
             )}
             <div className="mx-2 my-3 h-px bg-border-subtle" />
             <button
-              onClick={() => navigate('/dashboard')}
-              className={navItemClass(route.page === 'dashboard')}
-              aria-label="Dashboard"
-              title="Dashboard"
-            >
-              <span className="material-symbols-outlined shrink-0 text-[18px]">dashboard</span>
-              {route.page === 'dashboard' && navActiveBar}
-              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Dashboard</span>
-            </button>
-            <button
               onClick={() => navigate('/workflows')}
               className={navItemClass(route.page === 'workflows' || route.page === 'workflow')}
               aria-label="Workflows"
@@ -1079,7 +1068,7 @@ function App() {
                   </div>
                 ) : (
                   <span className="font-display text-[16px] font-semibold leading-6 text-primary">
-                {route.page === 'dashboard' ? 'Dashboard' : route.page === 'settings' ? 'Settings' : route.page === 'functions' ? 'Functions' : route.page === 'mcp' ? 'MCP Servers' : 'Workflow Executions'}
+                {route.page === 'settings' ? 'Settings' : route.page === 'functions' ? 'Functions' : route.page === 'mcp' ? 'MCP Servers' : 'Workflow Executions'}
                   </span>
                 )}
               </div>
@@ -1134,6 +1123,7 @@ function App() {
                     && workflowDetail?.status !== 'ARCHIVED' && (
                     <button
                       type="button"
+                      data-testid="workflow-edit-revision"
                       onClick={() => navigate(workflowRevisionEditPath(
                         selectedWorkflow.id,
                         Number(selectedRevision.id),
@@ -1220,11 +1210,6 @@ function App() {
                   title="Workflow API unavailable"
                   message={workflowListError}
                   action={{ label: 'Retry', onClick: loadWorkflows }}
-                />
-              ) : route.page === 'dashboard' ? (
-                <DashboardPage
-                  workflows={workflowSummaries}
-                  onSelect={handleWorkflowSelected}
                 />
               ) : (
                 <WorkflowsPage

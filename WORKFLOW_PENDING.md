@@ -126,6 +126,10 @@ Implemented:
   `$states.errorOutput`.
 - Manual workflow execution.
 - Durable Wait resumption.
+- Playwright browser E2E coverage for builder creation, manual JSONata ASL
+  template import, workflow-list persistence, immutable revision creation, and
+  creator-to-runtime execution inspection. Test-created workflows are archived
+  after each scenario.
 
 - Nested execution-scope foundation (Phase 1), `Parallel` runtime (Phase 2),
   and core `Map` runtime (Phase 3).

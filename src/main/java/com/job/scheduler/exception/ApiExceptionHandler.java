@@ -5,6 +5,8 @@ import com.job.scheduler.dto.ApiFieldErrorDTO;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -22,6 +24,8 @@ import java.util.List;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
     @ExceptionHandler(AslDefinitionValidationException.class)
     public ResponseEntity<ApiErrorDTO> handleAslDefinitionValidation(
@@ -103,6 +107,14 @@ public class ApiExceptionHandler {
         return build(HttpStatus.CONFLICT, "INVALID_STATE", exception.getMessage(), request);
     }
 
+    @ExceptionHandler(McpConnectionException.class)
+    public ResponseEntity<ApiErrorDTO> handleMcpConnection(
+            McpConnectionException exception,
+            HttpServletRequest request
+    ) {
+        return build(HttpStatus.BAD_GATEWAY, "MCP_CONNECTION_ERROR", exception.getMessage(), request);
+    }
+
     @ExceptionHandler(OptimisticLockingFailureException.class)
     public ResponseEntity<ApiErrorDTO> handleOptimisticLock(
             OptimisticLockingFailureException exception,
@@ -118,6 +130,7 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiErrorDTO> handleUnexpected(Exception exception, HttpServletRequest request) {
+        log.error("Unhandled exception for {} {}", request.getMethod(), request.getRequestURI(), exception);
         return build(
                 HttpStatus.INTERNAL_SERVER_ERROR,
                 "INTERNAL_SERVER_ERROR",

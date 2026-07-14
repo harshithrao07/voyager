@@ -41,6 +41,8 @@ export function WorkflowListView({ workflows, onSelect }: Props) {
           ) : workflows.map((workflow) => (
             <button
               key={workflow.id}
+              data-testid={`workflow-card-${workflow.id}`}
+              data-workflow-name={workflow.name}
               onClick={() => onSelect(workflow)}
               className="w-full p-4 rounded-md hover:bg-surface-container border border-border-subtle bg-surface-lowest/40 hover:border-border-muted transition-all relative overflow-hidden group text-left"
             >

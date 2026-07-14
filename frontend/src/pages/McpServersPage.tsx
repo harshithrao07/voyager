@@ -45,6 +45,7 @@ import {
   type McpToolExecutionDTO,
   type McpToolExecutionStatus,
   type McpToolSyncResultDTO,
+  type McpTransport,
   type McpTrustLevel,
 } from '../api';
 
@@ -258,6 +259,35 @@ function ErrorNote({ message }: { message: string }) {
   );
 }
 
+// STDIO args are edited one-per-line; env as KEY=VALUE lines.
+function parseArgsText(text: string): string[] {
+  return text.split('\n').map((line) => line.trim()).filter((line) => line.length > 0);
+}
+
+function parseEnvText(text: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const separator = trimmed.indexOf('=');
+    if (separator <= 0) continue;
+    env[trimmed.slice(0, separator).trim()] = trimmed.slice(separator + 1).trim();
+  }
+  return env;
+}
+
+function formatEnv(env: Record<string, string> | null | undefined): string {
+  return Object.entries(env ?? {}).map(([key, value]) => `${key}=${value}`).join('\n');
+}
+
+/** Human-readable address: base URL + endpoint for HTTP, the command line for STDIO. */
+function serverAddress(server: McpServerDTO): string {
+  if (server.transport === 'STDIO') {
+    return [server.command ?? '', ...(server.args ?? [])].join(' ').trim();
+  }
+  return `${server.baseUrl ?? ''}${server.endpoint ?? ''}`;
+}
+
 type ServerFormModalProps = {
   mode: 'create' | 'edit';
   initial?: McpServerDTO;
@@ -269,8 +299,13 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
   const [displayName, setDisplayName] = useState(initial?.displayName ?? '');
   const [serverId, setServerId] = useState(initial?.serverId ?? '');
   const [serverIdTouched, setServerIdTouched] = useState(mode === 'edit');
+  const [transport, setTransport] = useState<McpTransport>(initial?.transport ?? 'HTTP');
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? '');
   const [endpoint, setEndpoint] = useState(initial?.endpoint ?? '/mcp');
+  const [command, setCommand] = useState(initial?.command ?? '');
+  const [argsText, setArgsText] = useState((initial?.args ?? []).join('\n'));
+  const [envText, setEnvText] = useState(formatEnv(initial?.env));
+  const [authEnvVar, setAuthEnvVar] = useState(initial?.authEnvVar ?? '');
   const [authType, setAuthType] = useState<McpAuthType>(initial?.authType ?? 'NONE');
   const [authTokenRef, setAuthTokenRef] = useState(initial?.authTokenRef ?? '');
   const [trustLevel, setTrustLevel] = useState<McpTrustLevel>(initial?.trustLevel ?? 'UNTRUSTED');
@@ -282,13 +317,20 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
   const validate = (): string | null => {
     if (!displayName.trim()) return 'Display name is required.';
     if (!serverIdPattern.test(serverId)) return 'Server ID must use lowercase letters, numbers, and hyphens.';
-    try {
-      const parsed = new URL(baseUrl);
-      if (!parsed.protocol || !parsed.host) return 'Base URL must be an absolute URL.';
-    } catch {
-      return 'Base URL must be an absolute URL, e.g. https://mcp.example.com';
+    if (transport === 'HTTP') {
+      try {
+        const parsed = new URL(baseUrl);
+        if (!parsed.protocol || !parsed.host) return 'Base URL must be an absolute URL.';
+      } catch {
+        return 'Base URL must be an absolute URL, e.g. https://mcp.example.com';
+      }
+      if (!endpoint.startsWith('/')) return 'Endpoint must start with /';
+    } else {
+      if (!command.trim()) return 'Command is required for STDIO transport.';
+      if (authType === 'BEARER_TOKEN' && !authEnvVar.trim()) {
+        return 'A token env var is required to inject the token for STDIO bearer auth.';
+      }
     }
-    if (!endpoint.startsWith('/')) return 'Endpoint must start with /';
     if (authType === 'BEARER_TOKEN' && !authTokenRef.trim()) {
       return 'A token reference is required for bearer token auth.';
     }
@@ -305,12 +347,17 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
       setError(validationError);
       return;
     }
+    const isStdio = transport === 'STDIO';
     const request: McpServerRequest = {
       serverId,
       displayName: displayName.trim(),
-      baseUrl: baseUrl.trim(),
-      endpoint: endpoint.trim(),
-      transport: 'HTTP',
+      transport,
+      baseUrl: isStdio ? null : baseUrl.trim(),
+      endpoint: isStdio ? null : endpoint.trim(),
+      command: isStdio ? command.trim() : null,
+      args: isStdio ? parseArgsText(argsText) : null,
+      env: isStdio ? parseEnvText(envText) : null,
+      authEnvVar: isStdio && authType === 'BEARER_TOKEN' ? authEnvVar.trim() : null,
       authType,
       authTokenRef: authType === 'BEARER_TOKEN' ? authTokenRef.trim() : null,
       trustLevel,
@@ -405,30 +452,74 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
               </span>
             )}
           </label>
-          <label>
-            <span className={labelClass}>Base URL</span>
-            <input
-              value={baseUrl}
-              onChange={(event) => setBaseUrl(event.target.value)}
-              placeholder="https://mcp.example.com"
-              className={`${fieldClass} font-mono-sm`}
-            />
-          </label>
-          <label>
-            <span className={labelClass}>Endpoint</span>
-            <input
-              value={endpoint}
-              onChange={(event) => setEndpoint(event.target.value)}
-              placeholder="/mcp"
-              className={`${fieldClass} font-mono-sm`}
-            />
-          </label>
-          <label>
+          <label className="sm:col-span-2">
             <span className={labelClass}>Transport</span>
-            <select value="HTTP" disabled className={`${selectFieldClass} opacity-70`}>
+            <select
+              value={transport}
+              onChange={(event) => setTransport(event.target.value as McpTransport)}
+              className={selectFieldClass}
+            >
               <option value="HTTP">HTTP (streamable)</option>
+              <option value="STDIO">STDIO (local process)</option>
             </select>
           </label>
+          {transport === 'HTTP' ? (
+            <>
+              <label>
+                <span className={labelClass}>Base URL</span>
+                <input
+                  value={baseUrl}
+                  onChange={(event) => setBaseUrl(event.target.value)}
+                  placeholder="https://mcp.example.com"
+                  className={`${fieldClass} font-mono-sm`}
+                />
+              </label>
+              <label>
+                <span className={labelClass}>Endpoint</span>
+                <input
+                  value={endpoint}
+                  onChange={(event) => setEndpoint(event.target.value)}
+                  placeholder="/mcp"
+                  className={`${fieldClass} font-mono-sm`}
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="sm:col-span-2">
+                <span className={labelClass}>Command</span>
+                <input
+                  value={command}
+                  onChange={(event) => setCommand(event.target.value)}
+                  placeholder="npx"
+                  className={`${fieldClass} font-mono-sm`}
+                />
+              </label>
+              <label className="sm:col-span-2">
+                <span className={labelClass}>Arguments (one per line)</span>
+                <textarea
+                  value={argsText}
+                  onChange={(event) => setArgsText(event.target.value)}
+                  placeholder={'-y\n@modelcontextprotocol/server-filesystem\n/data'}
+                  rows={3}
+                  className={`${fieldClass} font-mono-sm`}
+                />
+              </label>
+              <label className="sm:col-span-2">
+                <span className={labelClass}>Environment (KEY=VALUE per line)</span>
+                <textarea
+                  value={envText}
+                  onChange={(event) => setEnvText(event.target.value)}
+                  placeholder={'LOG_LEVEL=info'}
+                  rows={2}
+                  className={`${fieldClass} font-mono-sm`}
+                />
+                <span className="mt-1 block text-[10.5px] leading-4 text-on-surface-variant/70">
+                  Non-secret config only — a bearer token is injected separately at call time.
+                </span>
+              </label>
+            </>
+          )}
           <label>
             <span className={labelClass}>Request timeout (ms)</span>
             <input
@@ -468,6 +559,23 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
             </label>
           ) : (
             <div />
+          )}
+          {transport === 'STDIO' && authType === 'BEARER_TOKEN' && (
+            <label>
+              <span className={labelClass}>
+                <KeyRound size={11} />
+                Token env var
+              </span>
+              <input
+                value={authEnvVar}
+                onChange={(event) => setAuthEnvVar(event.target.value)}
+                placeholder="GITHUB_PERSONAL_ACCESS_TOKEN"
+                className={`${fieldClass} font-mono-sm`}
+              />
+              <span className="mt-1 block text-[10.5px] leading-4 text-on-surface-variant/70">
+                The resolved token is passed to the process in this environment variable.
+              </span>
+            </label>
           )}
         </div>
 
@@ -1284,8 +1392,11 @@ function ServerDetail({
               <div className="min-w-0 pt-1">
                 <h2 className="truncate text-[22px] font-semibold tracking-[-0.01em] text-on-surface">{server.displayName}</h2>
                 <div className="mt-1 truncate font-mono-sm text-[13px] text-on-surface">
-                  {server.baseUrl}
-                  <span className="text-secondary">{server.endpoint}</span>
+                  {server.transport === 'STDIO' ? (
+                    serverAddress(server)
+                  ) : (
+                    <>{server.baseUrl}<span className="text-secondary">{server.endpoint}</span></>
+                  )}
                 </div>
                 <p className="mt-2 max-w-3xl text-[13px] leading-5 text-on-surface-variant">
                   Registered {formatDateTime(server.createdAt)} · {formatUpdated(server.updatedAt).toLowerCase()}
@@ -1414,7 +1525,7 @@ function ServerList({
     return (
       server.displayName.toLowerCase().includes(needle)
       || server.serverId.toLowerCase().includes(needle)
-      || server.baseUrl.toLowerCase().includes(needle)
+      || serverAddress(server).toLowerCase().includes(needle)
     );
   });
 
@@ -1528,7 +1639,7 @@ function ServerList({
                 </div>
                 <div className="mt-2 truncate font-mono-sm text-[11px] text-on-surface-variant">{server.serverId}</div>
                 <div className="truncate font-mono-sm text-[11px] text-on-surface-variant/70">
-                  {server.baseUrl}{server.endpoint}
+                  {serverAddress(server)}
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-1.5">
                   <span className="rounded-md border border-border-subtle bg-surface-container-low px-1.5 py-0.5 font-mono-sm text-[9px] uppercase tracking-[0.06em] text-on-surface-variant">

@@ -46,6 +46,10 @@ class McpServerRegistryServiceTest {
                 "Local Tools",
                 "http://localhost:8081/",
                 "/mcp",
+                null,
+                null,
+                null,
+                null,
                 McpTransport.HTTP,
                 McpAuthType.NONE,
                 null,
@@ -98,6 +102,10 @@ class McpServerRegistryServiceTest {
                 "GitHub Tools",
                 "https://mcp.example.com",
                 "/mcp",
+                null,
+                null,
+                null,
+                null,
                 McpTransport.HTTP,
                 McpAuthType.BEARER_TOKEN,
                 null,
@@ -109,6 +117,75 @@ class McpServerRegistryServiceTest {
         assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("authTokenRef is required for BEARER_TOKEN auth");
+    }
+
+    @Test
+    void registersStdioServerWithCommandArgsAndEnv() {
+        McpServerRequestDTO request = new McpServerRequestDTO(
+                "local-fs", "Local FS", null, null,
+                "npx", List.of("-y", "@modelcontextprotocol/server-filesystem", "/data"),
+                java.util.Map.of("LOG_LEVEL", "info"), null,
+                McpTransport.STDIO, McpAuthType.NONE, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null
+        );
+        when(mcpServerRepository.existsByServerId("local-fs")).thenReturn(false);
+        when(mcpServerRepository.save(any(McpServer.class))).thenAnswer(invocation -> {
+            McpServer server = invocation.getArgument(0);
+            server.setId(UUID.randomUUID());
+            server.setCreatedAt(Instant.parse("2026-06-17T00:00:00Z"));
+            server.setUpdatedAt(Instant.parse("2026-06-17T00:00:00Z"));
+            return server;
+        });
+
+        McpServerResponseDTO response = mcpServerRegistryService.registerServer(request);
+
+        assertThat(response.transport()).isEqualTo(McpTransport.STDIO);
+        assertThat(response.command()).isEqualTo("npx");
+        assertThat(response.args())
+                .containsExactly("-y", "@modelcontextprotocol/server-filesystem", "/data");
+        assertThat(response.env()).containsEntry("LOG_LEVEL", "info");
+    }
+
+    @Test
+    void rejectsStdioServerWithoutCommand() {
+        McpServerRequestDTO request = new McpServerRequestDTO(
+                "local-fs", "Local FS", null, null,
+                null, null, null, null,
+                McpTransport.STDIO, McpAuthType.NONE, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null
+        );
+
+        assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("command is required for STDIO transport");
+    }
+
+    @Test
+    void rejectsStdioBearerWithoutAuthEnvVar() {
+        McpServerRequestDTO request = new McpServerRequestDTO(
+                "gh", "GitHub", null, null,
+                "gh-mcp", null, null, null,
+                McpTransport.STDIO, McpAuthType.BEARER_TOKEN, "GH_TOKEN_REF",
+                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null
+        );
+
+        assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("authEnvVar is required for STDIO BEARER_TOKEN auth");
+    }
+
+    @Test
+    void rejectsHttpServerWithoutBaseUrl() {
+        McpServerRequestDTO request = new McpServerRequestDTO(
+                "remote", "Remote", null, "/mcp",
+                null, null, null, null,
+                McpTransport.HTTP, McpAuthType.NONE, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null
+        );
+
+        assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("baseUrl is required for HTTP transport");
     }
 
     @Test
@@ -150,6 +227,10 @@ class McpServerRegistryServiceTest {
                 "Local Tools",
                 "http://localhost:8081",
                 "/mcp",
+                null,
+                null,
+                null,
+                null,
                 McpTransport.HTTP,
                 McpAuthType.NONE,
                 null,

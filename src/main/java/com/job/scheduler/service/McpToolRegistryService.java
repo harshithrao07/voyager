@@ -34,8 +34,8 @@ public class McpToolRegistryService {
     private final ObjectMapper objectMapper;
 
     /** Default upper bound for a blocking tool sync when a server has no override. */
-    @Value("${scheduler.mcp.sync-timeout-ms:30000}")
-    private long syncTimeoutMs = 30000;
+    @Value("${scheduler.mcp.sync-timeout-ms:60000}")
+    private long syncTimeoutMs = 60000;
 
     public List<McpToolResponseDTO> getKnownTools(String serverId, boolean enabledOnly) {
         McpServer server = findServer(serverId);

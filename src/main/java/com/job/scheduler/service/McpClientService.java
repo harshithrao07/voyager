@@ -4,10 +4,15 @@ import com.job.scheduler.entity.McpServer;
 import com.job.scheduler.enums.McpAuthType;
 import com.job.scheduler.enums.McpServerStatus;
 import com.job.scheduler.enums.McpTransport;
+import com.job.scheduler.exception.McpConnectionException;
 import com.job.scheduler.repository.McpServerRepository;
 import io.modelcontextprotocol.client.McpAsyncClient;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
+import io.modelcontextprotocol.client.transport.ServerParameters;
+import io.modelcontextprotocol.client.transport.StdioClientTransport;
+import io.modelcontextprotocol.json.McpJsonDefaults;
+import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
 import jakarta.annotation.PreDestroy;
 import jakarta.persistence.EntityNotFoundException;
@@ -21,6 +26,8 @@ import reactor.core.publisher.Mono;
 import java.net.http.HttpRequest;
 import java.time.Duration;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
@@ -36,8 +43,8 @@ public class McpClientService {
     private final McpTokenResolver tokenResolver;
 
     /** Default per-request timeout when a server does not override it. */
-    @Value("${scheduler.mcp.request-timeout-ms:10000}")
-    private long defaultRequestTimeoutMs = 10000;
+    @Value("${scheduler.mcp.request-timeout-ms:30000}")
+    private long defaultRequestTimeoutMs = 30000;
 
     // One initialized client per server, reused across calls so every invocation
     // no longer pays a fresh connect+initialize+close handshake. An entry is
@@ -70,8 +77,50 @@ public class McpClientService {
             PooledClient pooled = acquire(serverId, server);
             return pooled.ready()
                     .flatMap(operation)
-                    .doOnError(error -> evict(serverId, pooled));
+                    .doOnError(error -> evict(serverId, pooled))
+                    .onErrorMap(error -> mapConnectionError(server, error));
         });
+    }
+
+    /**
+     * Turns an opaque STDIO process-launch failure into an actionable
+     * {@link McpConnectionException}; every other error passes through unchanged.
+     */
+    private Throwable mapConnectionError(McpServer server, Throwable error) {
+        if (server.getTransport() == McpTransport.STDIO && isProcessLaunchFailure(error)) {
+            return new McpConnectionException(
+                    "Could not launch MCP process '" + server.getCommand() + "' for server '"
+                            + server.getServerId() + "'. The command must exist in the backend's "
+                            + "environment. If Voyager runs in a container, use HTTP transport or "
+                            + "install the runtime (e.g. Node/Python) in the image. Cause: "
+                            + rootMessage(error),
+                    error);
+        }
+        return error;
+    }
+
+    private boolean isProcessLaunchFailure(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            String message = cause.getMessage();
+            if (message != null && (message.contains("Failed to start process")
+                    || message.contains("Cannot run program")
+                    || message.contains("CreateProcess error=2")
+                    || message.contains("No such file or directory"))) {
+                return true;
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return false;
+    }
+
+    private String rootMessage(Throwable error) {
+        Throwable root = error;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root.getMessage();
     }
 
     /**
@@ -125,6 +174,10 @@ public class McpClientService {
                 server.getTransport() == null ? "" : server.getTransport().name(),
                 server.getBaseUrl() == null ? "" : server.getBaseUrl(),
                 server.getEndpoint() == null ? "" : server.getEndpoint(),
+                server.getCommand() == null ? "" : server.getCommand(),
+                server.getArgs() == null ? "" : server.getArgs().toString(),
+                server.getEnv() == null ? "" : server.getEnv().toString(),
+                server.getAuthEnvVar() == null ? "" : server.getAuthEnvVar(),
                 server.getAuthType() == null ? "" : server.getAuthType().name(),
                 server.getAuthTokenRef() == null ? "" : server.getAuthTokenRef(),
                 server.getRequestTimeoutMs() == null ? "" : server.getRequestTimeoutMs().toString());
@@ -165,25 +218,11 @@ public class McpClientService {
     }
 
     private McpAsyncClient buildClient(McpServer server) {
-        if (server.getTransport() != McpTransport.HTTP) {
-            throw new IllegalArgumentException("Unsupported MCP transport: " + server.getTransport());
-        }
-
-        var transportBuilder = HttpClientStreamableHttpTransport
-                .builder(server.getBaseUrl())
-                .endpoint(server.getEndpoint());
-
-        if (server.getAuthType() == McpAuthType.BEARER_TOKEN) {
-            String token = tokenResolver.resolve(server)
-                    .orElseThrow(() -> new IllegalStateException(
-                            "No token configured for MCP server: " + server.getServerId()));
-            // The transport copies this seed builder per request, so the
-            // Authorization header rides on every call while it adds its own headers.
-            transportBuilder.requestBuilder(
-                    HttpRequest.newBuilder().header("Authorization", "Bearer " + token));
-        }
-
-        return McpClient.async(transportBuilder.build())
+        McpClientTransport transport = switch (server.getTransport()) {
+            case HTTP -> buildHttpTransport(server);
+            case STDIO -> buildStdioTransport(server);
+        };
+        return McpClient.async(transport)
                 .requestTimeout(requestTimeout(server))
                 .toolsChangeConsumer(tools -> Mono.fromRunnable(() ->
                         log.info("MCP tools updated for {}: {}", server.getServerId(), tools)
@@ -192,5 +231,42 @@ public class McpClientService {
                         log.info("MCP progress for {}: {}", server.getServerId(), progress)
                 ))
                 .build();
+    }
+
+    private McpClientTransport buildHttpTransport(McpServer server) {
+        var transportBuilder = HttpClientStreamableHttpTransport
+                .builder(server.getBaseUrl())
+                .endpoint(server.getEndpoint());
+
+        if (server.getAuthType() == McpAuthType.BEARER_TOKEN) {
+            // The transport copies this seed builder per request, so the
+            // Authorization header rides on every call while it adds its own headers.
+            transportBuilder.requestBuilder(
+                    HttpRequest.newBuilder().header("Authorization", "Bearer " + resolveToken(server)));
+        }
+        return transportBuilder.build();
+    }
+
+    private McpClientTransport buildStdioTransport(McpServer server) {
+        Map<String, String> env = new LinkedHashMap<>();
+        if (server.getEnv() != null) {
+            env.putAll(server.getEnv());
+        }
+        if (server.getAuthType() == McpAuthType.BEARER_TOKEN) {
+            // The resolved secret is injected into the child process environment,
+            // never persisted — same tiering as the HTTP bearer header.
+            env.put(server.getAuthEnvVar(), resolveToken(server));
+        }
+        ServerParameters params = ServerParameters.builder(server.getCommand())
+                .args(server.getArgs() == null ? List.of() : server.getArgs())
+                .env(env)
+                .build();
+        return new StdioClientTransport(params, McpJsonDefaults.getMapper());
+    }
+
+    private String resolveToken(McpServer server) {
+        return tokenResolver.resolve(server)
+                .orElseThrow(() -> new IllegalStateException(
+                        "No token configured for MCP server: " + server.getServerId()));
     }
 }

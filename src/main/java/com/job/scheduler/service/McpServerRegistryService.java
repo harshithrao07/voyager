@@ -5,6 +5,7 @@ import com.job.scheduler.dto.McpServerResponseDTO;
 import com.job.scheduler.entity.McpServer;
 import com.job.scheduler.enums.McpAuthType;
 import com.job.scheduler.enums.McpServerStatus;
+import com.job.scheduler.enums.McpTransport;
 import com.job.scheduler.enums.McpTrustLevel;
 import com.job.scheduler.repository.McpServerRepository;
 import jakarta.persistence.EntityNotFoundException;
@@ -13,6 +14,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 
 @Service
@@ -76,8 +79,12 @@ public class McpServerRegistryService {
 
     private void applyRequest(McpServer server, McpServerRequestDTO request) {
         server.setDisplayName(request.displayName());
-        server.setBaseUrl(trimTrailingSlash(request.baseUrl()));
-        server.setEndpoint(request.endpoint());
+        server.setBaseUrl(trimTrailingSlash(blankToNull(request.baseUrl())));
+        server.setEndpoint(blankToNull(request.endpoint()));
+        server.setCommand(blankToNull(request.command()));
+        server.setArgs(request.args() == null ? new ArrayList<>() : new ArrayList<>(request.args()));
+        server.setEnv(request.env() == null ? new LinkedHashMap<>() : new LinkedHashMap<>(request.env()));
+        server.setAuthEnvVar(blankToNull(request.authEnvVar()));
         server.setTransport(request.transport());
         server.setAuthType(request.authType());
         server.setAuthTokenRef(blankToNull(request.authTokenRef()));
@@ -87,9 +94,27 @@ public class McpServerRegistryService {
     }
 
     private void validateRequest(McpServerRequestDTO request) {
-        URI baseUri = URI.create(request.baseUrl());
-        if (baseUri.getScheme() == null || baseUri.getHost() == null) {
-            throw new IllegalArgumentException("baseUrl must be an absolute URL");
+        if (request.transport() == McpTransport.HTTP) {
+            String baseUrl = blankToNull(request.baseUrl());
+            if (baseUrl == null) {
+                throw new IllegalArgumentException("baseUrl is required for HTTP transport");
+            }
+            URI baseUri = URI.create(baseUrl);
+            if (baseUri.getScheme() == null || baseUri.getHost() == null) {
+                throw new IllegalArgumentException("baseUrl must be an absolute URL");
+            }
+            if (blankToNull(request.endpoint()) == null) {
+                throw new IllegalArgumentException("endpoint is required for HTTP transport");
+            }
+        } else if (request.transport() == McpTransport.STDIO) {
+            if (blankToNull(request.command()) == null) {
+                throw new IllegalArgumentException("command is required for STDIO transport");
+            }
+            if (request.authType() == McpAuthType.BEARER_TOKEN
+                    && blankToNull(request.authEnvVar()) == null) {
+                throw new IllegalArgumentException(
+                        "authEnvVar is required for STDIO BEARER_TOKEN auth");
+            }
         }
         if (request.authType() == McpAuthType.BEARER_TOKEN && blankToNull(request.authTokenRef()) == null) {
             throw new IllegalArgumentException("authTokenRef is required for BEARER_TOKEN auth");
@@ -100,6 +125,9 @@ public class McpServerRegistryService {
     }
 
     private String trimTrailingSlash(String value) {
+        if (value == null) {
+            return null;
+        }
         if (value.endsWith("/")) {
             return value.substring(0, value.length() - 1);
         }
@@ -120,6 +148,10 @@ public class McpServerRegistryService {
                 server.getDisplayName(),
                 server.getBaseUrl(),
                 server.getEndpoint(),
+                server.getCommand(),
+                server.getArgs(),
+                server.getEnv(),
+                server.getAuthEnvVar(),
                 server.getTransport(),
                 server.getAuthType(),
                 server.getAuthTokenRef(),

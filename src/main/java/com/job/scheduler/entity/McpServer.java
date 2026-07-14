@@ -1,10 +1,13 @@
 package com.job.scheduler.entity;
 
+import com.job.scheduler.entity.converter.StringListJsonConverter;
+import com.job.scheduler.entity.converter.StringMapJsonConverter;
 import com.job.scheduler.enums.McpAuthType;
 import com.job.scheduler.enums.McpServerStatus;
 import com.job.scheduler.enums.McpTransport;
 import com.job.scheduler.enums.McpTrustLevel;
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -18,6 +21,8 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Entity
@@ -41,11 +46,31 @@ public class McpServer {
     @Column(name = "display_name", nullable = false)
     private String displayName;
 
-    @Column(name = "base_url", nullable = false)
+    /** HTTP transport: base URL. Null for STDIO. */
+    @Column(name = "base_url")
     private String baseUrl;
 
-    @Column(name = "endpoint", nullable = false)
+    /** HTTP transport: request path. Null for STDIO. */
+    @Column(name = "endpoint")
     private String endpoint;
+
+    /** STDIO transport: executable to launch. Null for HTTP. */
+    @Column(name = "command")
+    private String command;
+
+    /** STDIO transport: command-line arguments. */
+    @Convert(converter = StringListJsonConverter.class)
+    @Column(name = "args", columnDefinition = "TEXT")
+    private List<String> args;
+
+    /** STDIO transport: non-secret environment variables for the child process. */
+    @Convert(converter = StringMapJsonConverter.class)
+    @Column(name = "env", columnDefinition = "TEXT")
+    private Map<String, String> env;
+
+    /** STDIO + BEARER_TOKEN: env var the resolved token is injected into. */
+    @Column(name = "auth_env_var")
+    private String authEnvVar;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "transport", nullable = false)

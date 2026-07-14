@@ -1505,6 +1505,45 @@ public class WorkflowInterpreter {
      * error name differs ({@code States.BranchFailed} for Parallel, a
      * Map-specific error for Map), so callers pass it in.
      */
+    /**
+     * Whether a compound state (Parallel/Map) contains any mutating MCP task,
+     * directly or in a further-nested compound state. Such a compound cannot be
+     * safely auto-retried because re-forking would re-run the mutating call.
+     */
+    static boolean containsMutatingMcpTask(JsonNode stateDefinition) {
+        JsonNode branches = stateDefinition.path("Branches");
+        if (branches.isArray()) {
+            for (JsonNode branch : branches) {
+                if (statesContainMutatingMcpTask(branch.path("States"))) {
+                    return true;
+                }
+            }
+        }
+        JsonNode itemProcessor = stateDefinition.path("ItemProcessor");
+        return itemProcessor.isObject()
+                && statesContainMutatingMcpTask(itemProcessor.path("States"));
+    }
+
+    private static boolean statesContainMutatingMcpTask(JsonNode states) {
+        if (!states.isObject()) {
+            return false;
+        }
+        for (JsonNode state : states) {
+            JsonNode typeNode = state.path("Type");
+            if ("Task".equals(typeNode.isString() ? typeNode.stringValue() : null)) {
+                JsonNode resourceNode = state.path("Resource");
+                if (resourceNode.isString()
+                        && McpTaskResource.isMutatingResource(resourceNode.stringValue())) {
+                    return true;
+                }
+            }
+            if (containsMutatingMcpTask(state)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private InterpreterOutcome resolveCompoundFailure(
             ExecutionScope scope,
             WorkflowExecution workflowExecution,
@@ -1527,8 +1566,15 @@ public class WorkflowInterpreter {
         }
         priorErrors.add(error);
 
+        // A compound retry re-forks the whole generation, re-running every nested
+        // state — including any mutating MCP task. Suppress the retry in that case
+        // so a WRITE/DESTRUCTIVE call is not duplicated. Catch still applies as a
+        // routing escape without re-executing anything.
+        JsonNode retryConfig = containsMutatingMcpTask(stateDefinition)
+                ? null
+                : stateDefinition.get("Retry");
         AslRetryResolver.RetryDecision retry = retryResolver.resolveFromErrors(
-                stateDefinition.get("Retry"),
+                retryConfig,
                 error,
                 priorErrors
         );

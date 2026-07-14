@@ -212,6 +212,83 @@ class ParallelWorkflowIntegrationTest {
     }
 
     @Test
+    void nestedJsonataChoiceCompletesWithoutSpuriousParallelRetry() {
+        UUID rootScopeId = persistParallel("""
+                {
+                  "StartAt": "Fork",
+                  "States": {
+                    "Fork": {
+                      "Type": "Parallel",
+                      "Branches": [
+                        {
+                          "StartAt": "Route",
+                          "States": {
+                            "Route": {
+                              "Type": "Choice",
+                              "Choices": [
+                                {
+                                  "Condition": "{% $states.input.approved = true %}",
+                                  "Next": "Approved"
+                                }
+                              ],
+                              "Default": "Rejected"
+                            },
+                            "Approved": {
+                              "Type": "Succeed",
+                              "Output": "{% 'approved' %}"
+                            },
+                            "Rejected": {
+                              "Type": "Succeed",
+                              "Output": "{% 'rejected' %}"
+                            }
+                          }
+                        },
+                        {
+                          "StartAt": "Sibling",
+                          "States": {
+                            "Sibling": {
+                              "Type": "Succeed",
+                              "Output": "{% 'sibling' %}"
+                            }
+                          }
+                        }
+                      ],
+                      "Retry": [
+                        {
+                          "ErrorEquals": ["States.BranchFailed"],
+                          "MaxAttempts": 1,
+                          "IntervalSeconds": 0
+                        }
+                      ],
+                      "End": true
+                    }
+                  }
+                }
+                """, "{\"approved\":true}");
+        WorkflowExecution execution = currentExecution();
+
+        WorkflowExecutionResponseDTO response =
+                runner.resume(execution.getId(), rootScopeId);
+
+        assertThat(response.status())
+                .isEqualTo(WorkflowExecutionStatus.SUCCEEDED);
+        JsonNode output = objectMapper.readTree(
+                reload(execution.getId()).getOutput()
+        );
+        assertThat(output.get(0).stringValue()).isEqualTo("approved");
+        assertThat(output.get(1).stringValue()).isEqualTo("sibling");
+
+        ExecutionScope root = reloadScope(rootScopeId);
+        assertThat(executionScopeRepository
+                .findByParentScopeOrderByScopePathAsc(root))
+                .hasSize(2)
+                .allMatch(scope -> scope.getScopePath().contains("/g1/"));
+        var rootStates = stateExecutionRepository
+                .findByExecutionScopeOrderBySequenceNumberAsc(root);
+        assertThat(rootStates).hasSize(1);
+    }
+
+    @Test
     void unhandledBranchFailureFailsParallelAndCancelsSiblings() {
         UUID rootScopeId = persistParallel("""
                 {
@@ -519,6 +596,13 @@ class ParallelWorkflowIntegrationTest {
     }
 
     private UUID persistParallel(String definitionJson) {
+        return persistParallel(definitionJson, "{}");
+    }
+
+    private UUID persistParallel(
+            String definitionJson,
+            String executionInput
+    ) {
         Workflow workflow = new Workflow();
         workflow.setName("Parallel runtime test");
         workflow.setStatus(WorkflowStatus.ACTIVE);
@@ -544,7 +628,7 @@ class ParallelWorkflowIntegrationTest {
         execution.setRunNumber(1);
         execution.setScheduledFor(Instant.parse("2026-06-21T06:00:00Z"));
         execution.setStatus(WorkflowExecutionStatus.PENDING);
-        execution.setInput("{}");
+        execution.setInput(executionInput);
         execution = workflowExecutionRepository.saveAndFlush(execution);
 
         ExecutionScope root = new ExecutionScope();
@@ -564,7 +648,7 @@ class ParallelWorkflowIntegrationTest {
                     exception
             );
         }
-        root.setCurrentStateInput("{}");
+        root.setCurrentStateInput(executionInput);
         root = executionScopeRepository.saveAndFlush(root);
 
         this.currentExecutionId = execution.getId();

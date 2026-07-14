@@ -6,6 +6,8 @@ import com.job.scheduler.enums.McpTransport;
 import com.job.scheduler.enums.McpTrustLevel;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public record McpServerResponseDTO(
@@ -14,6 +16,10 @@ public record McpServerResponseDTO(
         String displayName,
         String baseUrl,
         String endpoint,
+        String command,
+        List<String> args,
+        Map<String, String> env,
+        String authEnvVar,
         McpTransport transport,
         McpAuthType authType,
         String authTokenRef,

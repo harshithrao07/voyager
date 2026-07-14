@@ -9,6 +9,9 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 
+import java.util.List;
+import java.util.Map;
+
 public record McpServerRequestDTO(
         @NotBlank
         @Pattern(regexp = "^[a-z0-9][a-z0-9-]*$", message = "must use lowercase letters, numbers, and hyphens")
@@ -17,12 +20,20 @@ public record McpServerRequestDTO(
         @NotBlank
         String displayName,
 
-        @NotBlank
+        // HTTP transport fields (required for HTTP, validated in the service).
         String baseUrl,
 
-        @NotBlank
         @Pattern(regexp = "^/.*", message = "must start with /")
         String endpoint,
+
+        // STDIO transport fields (command required for STDIO, validated in the service).
+        String command,
+
+        List<String> args,
+
+        Map<String, String> env,
+
+        String authEnvVar,
 
         @NotNull
         McpTransport transport,

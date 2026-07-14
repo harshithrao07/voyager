@@ -276,6 +276,7 @@ export function StateCanvasBuilder({
                 <button
                   key={type}
                   type="button"
+                  data-testid={`workflow-add-state-${type.toLowerCase()}`}
                   onClick={() => handleAddState(type)}
                   title={STATE_TYPE_DESCRIPTIONS[type]}
                   className={`flex h-[58px] flex-col items-start justify-center rounded-DEFAULT border px-2.5 text-left transition-colors hover:bg-surface-container ${visual.borderClass} ${visual.softBgClass}`}
@@ -320,6 +321,7 @@ export function StateCanvasBuilder({
               <button
                 key={stateName}
                 type="button"
+                data-testid={`workflow-state-${stateName}`}
                 onClick={() => selectState(stateName)}
                 onContextMenu={(event) => {
                   event.preventDefault();

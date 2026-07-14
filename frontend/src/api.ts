@@ -914,7 +914,7 @@ export async function regenerateWorkflowAiMessage(
   return response.json();
 }
 
-export type McpTransport = 'HTTP';
+export type McpTransport = 'HTTP' | 'STDIO';
 export type McpAuthType = 'NONE' | 'BEARER_TOKEN';
 export type McpTrustLevel = 'UNTRUSTED' | 'READ_ONLY' | 'WRITE' | 'DESTRUCTIVE';
 export type McpServerStatus = 'ENABLED' | 'DISABLED';
@@ -924,8 +924,14 @@ export interface McpServerDTO {
   id: string;
   serverId: string;
   displayName: string;
-  baseUrl: string;
-  endpoint: string;
+  // HTTP transport
+  baseUrl: string | null;
+  endpoint: string | null;
+  // STDIO transport
+  command: string | null;
+  args: string[];
+  env: Record<string, string>;
+  authEnvVar: string | null;
   transport: McpTransport;
   authType: McpAuthType;
   authTokenRef: string | null;
@@ -939,8 +945,14 @@ export interface McpServerDTO {
 export interface McpServerRequest {
   serverId: string;
   displayName: string;
-  baseUrl: string;
-  endpoint: string;
+  // HTTP transport (required when transport is HTTP)
+  baseUrl?: string | null;
+  endpoint?: string | null;
+  // STDIO transport (command required when transport is STDIO)
+  command?: string | null;
+  args?: string[] | null;
+  env?: Record<string, string> | null;
+  authEnvVar?: string | null;
   transport: McpTransport;
   authType: McpAuthType;
   authTokenRef?: string | null;

@@ -1377,6 +1377,7 @@ export function CreateWorkflowView({
       </button>
       <button
         type="button"
+        data-testid="workflow-mode-manual"
         onClick={() => setMode('manual')}
         className={`relative z-10 flex h-10 items-center justify-center gap-2 rounded-md font-mono-sm text-label-mono transition-colors ${mode === 'manual' ? 'text-primary' : 'text-on-surface-variant hover:text-on-surface'}`}
       >
