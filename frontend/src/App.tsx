@@ -8,6 +8,7 @@ import { WorkflowsPage } from './pages/WorkflowsPage';
 import { CreateWorkflowPage } from './pages/CreateWorkflowPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { FunctionsPage } from './pages/FunctionsPage';
+import { McpServersPage } from './pages/McpServersPage';
 import { WorkflowDetailPage, type WorkflowRevision } from './pages/WorkflowDetailPage';
 import {
   activateWorkflowRevision,
@@ -283,7 +284,8 @@ type AppRoute =
   | { page: 'workflow'; workflowId: string }
   | { page: 'workflow-edit'; workflowId: string; revision: number }
   | { page: 'settings' }
-  | { page: 'functions' };
+  | { page: 'functions' }
+  | { page: 'mcp' };
 
 function parseRoute(pathname: string): AppRoute {
   const normalized = pathname.replace(/\/+$/, '') || '/';
@@ -293,6 +295,7 @@ function parseRoute(pathname: string): AppRoute {
   if (normalized === '/workflows') return { page: 'workflows' };
   if (normalized === '/settings') return { page: 'settings' };
   if (normalized === '/functions') return { page: 'functions' };
+  if (normalized === '/mcp') return { page: 'mcp' };
 
   const chatMatch = normalized.match(/^\/c\/([^/]+)$/);
   if (chatMatch?.[1]) {
@@ -1024,6 +1027,16 @@ function App() {
               {route.page === 'functions' && navActiveBar}
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Functions</span>
             </button>
+            <button
+              onClick={() => navigate('/mcp')}
+              className={navItemClass(route.page === 'mcp')}
+              aria-label="MCP Servers"
+              title="MCP Servers"
+            >
+              <span className="material-symbols-outlined shrink-0 text-[18px]">cable</span>
+              {route.page === 'mcp' && navActiveBar}
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>MCP Servers</span>
+            </button>
             <div className="mx-2 my-3 h-px bg-border-subtle" />
             <button className={navItemClass(false)} aria-label="Docs" title="Docs">
               <span className="material-symbols-outlined shrink-0 text-[18px]">description</span>
@@ -1066,7 +1079,7 @@ function App() {
                   </div>
                 ) : (
                   <span className="font-display text-[16px] font-semibold leading-6 text-primary">
-                {route.page === 'dashboard' ? 'Dashboard' : route.page === 'settings' ? 'Settings' : route.page === 'functions' ? 'Functions' : 'Workflow Executions'}
+                {route.page === 'dashboard' ? 'Dashboard' : route.page === 'settings' ? 'Settings' : route.page === 'functions' ? 'Functions' : route.page === 'mcp' ? 'MCP Servers' : 'Workflow Executions'}
                   </span>
                 )}
               </div>
@@ -1198,6 +1211,8 @@ function App() {
                 <SettingsPage />
               ) : route.page === 'functions' ? (
                 <FunctionsPage onWorkbenchModeChange={setFunctionsWorkbenchActive} />
+              ) : route.page === 'mcp' ? (
+                <McpServersPage />
               ) : workflowListLoading ? (
                 <WorkspaceState title="Loading workflows" message="Fetching workflow list from /app/v1/workflows." />
               ) : workflowListError ? (

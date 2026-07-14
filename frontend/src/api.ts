@@ -913,3 +913,159 @@ export async function regenerateWorkflowAiMessage(
 
   return response.json();
 }
+
+export type McpTransport = 'HTTP';
+export type McpAuthType = 'NONE' | 'BEARER_TOKEN';
+export type McpTrustLevel = 'UNTRUSTED' | 'READ_ONLY' | 'WRITE' | 'DESTRUCTIVE';
+export type McpServerStatus = 'ENABLED' | 'DISABLED';
+export type McpToolExecutionStatus = 'RUNNING' | 'SUCCESS' | 'FAILED' | 'REJECTED';
+
+export interface McpServerDTO {
+  id: string;
+  serverId: string;
+  displayName: string;
+  baseUrl: string;
+  endpoint: string;
+  transport: McpTransport;
+  authType: McpAuthType;
+  authTokenRef: string | null;
+  trustLevel: McpTrustLevel;
+  status: McpServerStatus;
+  requestTimeoutMs: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpServerRequest {
+  serverId: string;
+  displayName: string;
+  baseUrl: string;
+  endpoint: string;
+  transport: McpTransport;
+  authType: McpAuthType;
+  authTokenRef?: string | null;
+  trustLevel?: McpTrustLevel | null;
+  status?: McpServerStatus | null;
+  requestTimeoutMs?: number | null;
+}
+
+export interface McpToolDTO {
+  id: string;
+  serverId: string;
+  toolName: string;
+  title: string | null;
+  description: string | null;
+  inputSchema: unknown;
+  outputSchema: unknown | null;
+  enabled: boolean;
+  lastSeenAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpToolSyncResultDTO {
+  serverId: string;
+  discoveredCount: number;
+  createdCount: number;
+  updatedCount: number;
+  disabledCount: number;
+  syncedAt: string;
+  tools: McpToolDTO[];
+}
+
+export interface McpToolExecutionDTO {
+  id: string;
+  serverId: string;
+  toolName: string;
+  arguments: unknown;
+  result: unknown | null;
+  status: McpToolExecutionStatus;
+  maxAllowedTrustLevel: McpTrustLevel | null;
+  errorMessage: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  durationMs: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpToolCallRequest {
+  arguments: Record<string, unknown>;
+  maxAllowedTrustLevel?: McpTrustLevel | null;
+}
+
+export interface McpLiveToolInfo {
+  name: string;
+  title?: string | null;
+  description?: string | null;
+  [key: string]: unknown;
+}
+
+export interface McpListToolsResult {
+  tools?: McpLiveToolInfo[];
+  nextCursor?: string | null;
+}
+
+export interface McpToolCallContentBlock {
+  type: string;
+  text?: string;
+  [key: string]: unknown;
+}
+
+export interface McpToolCallResult {
+  content?: McpToolCallContentBlock[];
+  structuredContent?: unknown;
+  isError?: boolean | null;
+}
+
+export function listMcpServers(status?: McpServerStatus): Promise<McpServerDTO[]> {
+  return getJson<McpServerDTO[]>(`/app/v1/mcp/servers${buildQuery({ status })}`);
+}
+
+export function getMcpServer(serverId: string): Promise<McpServerDTO> {
+  return getJson<McpServerDTO>(`/app/v1/mcp/servers/${encodeURIComponent(serverId)}`);
+}
+
+export function registerMcpServer(request: McpServerRequest): Promise<McpServerDTO> {
+  return sendJson<McpServerDTO>('/app/v1/mcp/servers', 'POST', request);
+}
+
+export function updateMcpServer(serverId: string, request: McpServerRequest): Promise<McpServerDTO> {
+  return sendJson<McpServerDTO>(`/app/v1/mcp/servers/${encodeURIComponent(serverId)}`, 'PUT', request);
+}
+
+export function updateMcpServerStatus(serverId: string, status: McpServerStatus): Promise<McpServerDTO> {
+  return sendJson<McpServerDTO>(`/app/v1/mcp/servers/${encodeURIComponent(serverId)}/status`, 'PATCH', { status });
+}
+
+export function listMcpLiveTools(serverId: string): Promise<McpListToolsResult> {
+  return getJson<McpListToolsResult>(`/app/v1/mcp/servers/${encodeURIComponent(serverId)}/tools`);
+}
+
+export function listMcpKnownTools(serverId: string, enabledOnly = false): Promise<McpToolDTO[]> {
+  return getJson<McpToolDTO[]>(
+    `/app/v1/mcp/servers/${encodeURIComponent(serverId)}/tools/known${buildQuery({ enabledOnly: String(enabledOnly) })}`,
+  );
+}
+
+export function syncMcpTools(serverId: string): Promise<McpToolSyncResultDTO> {
+  return sendJson<McpToolSyncResultDTO>(`/app/v1/mcp/servers/${encodeURIComponent(serverId)}/tools/sync`, 'POST', {});
+}
+
+export function listMcpExecutions(serverId: string, toolName?: string): Promise<McpToolExecutionDTO[]> {
+  return getJson<McpToolExecutionDTO[]>(
+    `/app/v1/mcp/servers/${encodeURIComponent(serverId)}/executions${buildQuery({ toolName })}`,
+  );
+}
+
+export function callMcpTool(
+  serverId: string,
+  toolName: string,
+  request: McpToolCallRequest,
+): Promise<McpToolCallResult> {
+  return sendJson<McpToolCallResult>(
+    `/app/v1/mcp/servers/${encodeURIComponent(serverId)}/tools/${encodeURIComponent(toolName)}/call`,
+    'POST',
+    request,
+  );
+}

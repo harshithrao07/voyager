@@ -7,6 +7,12 @@
       "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
       "port": 5173,
       "autoPort": true
+    },
+    {
+      "name": "design-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "http-server", "C:/Users/HarshithRao/AppData/Local/Temp/claude/C--harshith-voyager/15d98900-858c-4120-b7e0-dc0a6e35b800/scratchpad/design", "-p", "4173", "-c-1", "--silent"],
+      "port": 4173
     }
   ]
 }
