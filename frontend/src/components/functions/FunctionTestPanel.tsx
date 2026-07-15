@@ -278,6 +278,7 @@ export function FunctionTestPanel({ versions, activeVersion, onSaveTestCases }: 
           <label className="min-w-0 flex-1">
             <span className="mb-1.5 block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant/70">Version</span>
             <select
+              data-testid="function-test-version"
               value={versionChoice}
               onChange={(event) => setVersionChoice(event.target.value)}
               className="h-9 w-full rounded-lg border border-border-subtle bg-surface-container-lowest px-3 font-mono-sm text-[12px] text-on-surface outline-none focus:border-primary/50"
@@ -292,6 +293,7 @@ export function FunctionTestPanel({ versions, activeVersion, onSaveTestCases }: 
           </label>
           <button
             type="button"
+            data-testid="function-test-save"
             onClick={saveTests}
             disabled={!canSaveTests}
             className="flex h-9 items-center justify-center gap-2 rounded-lg border border-border-subtle px-4 text-[12px] font-semibold text-on-surface-variant transition-colors hover:border-primary/45 hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
@@ -302,6 +304,7 @@ export function FunctionTestPanel({ versions, activeVersion, onSaveTestCases }: 
           </button>
           <button
             type="button"
+            data-testid="function-test-run-selected"
             onClick={runChecked}
             disabled={running}
             className="flex h-9 items-center justify-center gap-2 rounded-lg border border-border-subtle px-4 text-[12px] font-semibold text-on-surface-variant transition-colors hover:border-primary/45 hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
@@ -312,6 +315,7 @@ export function FunctionTestPanel({ versions, activeVersion, onSaveTestCases }: 
           </button>
           <button
             type="button"
+            data-testid="function-test-run-all"
             onClick={runAll}
             disabled={running}
             className="flex h-9 items-center justify-center gap-2 rounded-lg border border-primary bg-primary px-4 text-[12px] font-semibold text-on-primary transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
@@ -344,6 +348,7 @@ export function FunctionTestPanel({ versions, activeVersion, onSaveTestCases }: 
               )}
               <button
                 type="button"
+                data-testid="function-test-add-case"
                 onClick={addCase}
                 className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] text-primary hover:bg-primary/10"
               >
@@ -365,7 +370,8 @@ export function FunctionTestPanel({ versions, activeVersion, onSaveTestCases }: 
                       : 'border-border-subtle bg-surface-container-lowest/50 hover:border-primary/35'
                   }`}
                 >
-                  <input
+                <input
+                  data-testid={`function-test-case-check-${testCase.id}`}
                     type="checkbox"
                     checked={testCase.checked}
                     onChange={(event) => updateCase(testCase.id, { checked: event.target.checked })}
@@ -405,6 +411,7 @@ export function FunctionTestPanel({ versions, activeVersion, onSaveTestCases }: 
             <div className="rounded-lg border border-border-subtle bg-surface-container-lowest/55 p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <input
+                  data-testid="function-test-case-name"
                   value={activeCase.name}
                   onChange={(event) => updateCase(activeCase.id, { name: event.target.value })}
                   className="h-8 min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-container-lowest px-2 text-[12px] font-semibold text-on-surface outline-none focus:border-primary/50"
@@ -431,6 +438,7 @@ export function FunctionTestPanel({ versions, activeVersion, onSaveTestCases }: 
               </div>
               <span className="mb-2 block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant/70">Input JSON</span>
               <textarea
+                data-testid="function-test-input"
                 value={activeCase.input}
                 onChange={(event) => updateCase(activeCase.id, { input: event.target.value })}
                 spellCheck={false}
@@ -438,6 +446,7 @@ export function FunctionTestPanel({ versions, activeVersion, onSaveTestCases }: 
               />
               <span className="mb-2 mt-3 block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant/70">Expected output JSON</span>
               <textarea
+                data-testid="function-test-expected-output"
                 value={activeCase.expectedOutput}
                 onChange={(event) => updateCase(activeCase.id, { expectedOutput: event.target.value })}
                 spellCheck={false}
@@ -454,7 +463,7 @@ export function FunctionTestPanel({ versions, activeVersion, onSaveTestCases }: 
                 Select cases and check them to see output
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-3" data-testid="function-test-result">
                 <div className="flex flex-wrap items-center gap-2">
                   {activeCase && caseStatus(activeCase) !== 'none' && (
                     <span className={`rounded-full border px-2.5 py-0.5 font-mono-sm text-[10px] uppercase tracking-[0.06em] ${

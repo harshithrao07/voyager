@@ -1,8 +1,11 @@
 package com.job.scheduler.service;
 
 import com.job.scheduler.dto.WorkflowGenerationResponseDTO;
+import com.job.scheduler.entity.FunctionDefinition;
 import com.job.scheduler.entity.McpServer;
 import com.job.scheduler.entity.McpTool;
+import com.job.scheduler.enums.FunctionStatus;
+import com.job.scheduler.repository.FunctionDefinitionRepository;
 import com.job.scheduler.repository.McpToolRepository;
 import com.job.scheduler.workflow.asl.validation.AslDefinitionValidator;
 import com.job.scheduler.workflow.asl.validation.AslValidationIssue;
@@ -39,6 +42,8 @@ class WorkflowGenerationServiceTest {
     @Mock
     private McpToolRepository mcpToolRepository;
     @Mock
+    private FunctionDefinitionRepository functionRepository;
+    @Mock
     private AslDefinitionValidator validator;
     private ObjectMapper objectMapper;
 
@@ -50,7 +55,7 @@ class WorkflowGenerationServiceTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        service = new WorkflowGenerationService(chatLanguageModelProvider, mcpToolRepository, validator, objectMapper);
+        service = new WorkflowGenerationService(chatLanguageModelProvider, mcpToolRepository, functionRepository, validator, objectMapper);
     }
 
     @Test
@@ -65,6 +70,14 @@ class WorkflowGenerationServiceTest {
         tool.setDescription("Lists PRs");
         
         when(mcpToolRepository.findByEnabledTrue()).thenReturn(List.of(tool));
+
+        FunctionDefinition function = new FunctionDefinition();
+        function.setName("calculate-tax");
+        function.setStatus(FunctionStatus.ENABLED);
+        function.setActiveVersion(3);
+        function.setDescription("Computes tax for an order");
+        when(functionRepository.findByStatusNotOrderByUpdatedAtDesc(FunctionStatus.ARCHIVED))
+                .thenReturn(List.of(function));
 
         String validJson = "{\"Type\": \"Task\", \"Resource\": \"voyager://system/webhook\", \"End\": true}";
         JsonNode parsed = objectMapper.readTree(validJson);
@@ -81,6 +94,8 @@ class WorkflowGenerationServiceTest {
         List<ChatMessage> messages = messagesCaptor.getValue();
         assertThat(messages).hasSize(2); // System, User
         assertThat(messages.get(0).text()).contains("voyager://mcp/github/list_prs");
+        assertThat(messages.get(0).text()).contains("voyager://function/calculate-tax@v3");
+        assertThat(messages.get(0).text()).contains("Computes tax for an order");
         assertThat(messages.get(1).text()).contains("do something");
     }
 

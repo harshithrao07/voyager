@@ -178,6 +178,7 @@ public class WorkflowInterpreter {
                 scope,
                 stateName,
                 stateType,
+                stateDefinition,
                 now
         );
 
@@ -224,6 +225,7 @@ public class WorkflowInterpreter {
             ExecutionScope scope,
             String stateName,
             AslStateType stateType,
+            JsonNode stateDefinition,
             Instant now
     ) {
         long sequenceNumber = stateExecutionRepository
@@ -237,6 +239,12 @@ public class WorkflowInterpreter {
         stateExecution.setStateName(stateName);
         stateExecution.setStateType(stateType);
         stateExecution.setStatus(StateExecutionStatus.RUNNING);
+        if (stateType == AslStateType.TASK) {
+            JsonNode resource = stateDefinition.path("Resource");
+            if (resource.isString()) {
+                stateExecution.setResource(resource.stringValue());
+            }
+        }
         stateExecution.setInput(scope.getCurrentStateInput());
         stateExecution.setStartedAt(now);
         return stateExecutionRepository.save(stateExecution);
@@ -299,7 +307,6 @@ public class WorkflowInterpreter {
 
         if (outcome instanceof StateOutcome.DispatchTask task) {
             stateExecution.setStatus(StateExecutionStatus.PENDING);
-            stateExecution.setResource(task.resource());
             stateExecutionRepository.save(stateExecution);
 
             StateExecutionAttempt attempt = new StateExecutionAttempt();
@@ -979,6 +986,7 @@ public class WorkflowInterpreter {
                 scope,
                 stateName,
                 AslStateType.PARALLEL,
+                stateDefinition,
                 now
         );
 
@@ -1260,6 +1268,7 @@ public class WorkflowInterpreter {
                 scope,
                 stateName,
                 AslStateType.MAP,
+                stateDefinition,
                 now
         );
         String unsupported = unsupportedMapFeature(stateDefinition);

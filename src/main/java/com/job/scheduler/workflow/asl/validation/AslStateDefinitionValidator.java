@@ -447,7 +447,8 @@ public class AslStateDefinitionValidator {
                     AslValidationCategory.RUNTIME_SUPPORT,
                     "PROCESSOR_MODE_RUNTIME_UNSUPPORTED",
                     "Map ItemProcessor ProcessorConfig Mode "
-                            + mode.stringValue() + " is not implemented yet"
+                            + mode.stringValue()
+                            + " is not supported; use INLINE"
             ));
         }
     }

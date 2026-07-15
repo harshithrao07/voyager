@@ -6,13 +6,13 @@ import com.job.scheduler.enums.McpServerStatus;
 import com.job.scheduler.enums.McpTransport;
 import com.job.scheduler.enums.McpTrustLevel;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import org.springframework.mock.env.MockEnvironment;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -36,7 +36,8 @@ class EnvironmentMcpTokenResolverTest {
     }
 
     @Test
-    void resolvesTokenFromMountedFile(@TempDir Path tempDir) throws IOException {
+    void resolvesTokenFromMountedFile() throws IOException {
+        Path tempDir = createTokenTempDir();
         Path tokenFile = tempDir.resolve("github-token");
         Files.writeString(tokenFile, "ghp_from_file\n");
         environment.setProperty("scheduler.mcp.token-files.GITHUB_MCP_TOKEN", tokenFile.toString());
@@ -46,7 +47,8 @@ class EnvironmentMcpTokenResolverTest {
     }
 
     @Test
-    void fileTokenTakesPrecedenceOverInlineToken(@TempDir Path tempDir) throws IOException {
+    void fileTokenTakesPrecedenceOverInlineToken() throws IOException {
+        Path tempDir = createTokenTempDir();
         Path tokenFile = tempDir.resolve("github-token");
         Files.writeString(tokenFile, "ghp_from_file");
         environment.setProperty("scheduler.mcp.tokens.GITHUB_MCP_TOKEN", "ghp_inline");
@@ -78,7 +80,8 @@ class EnvironmentMcpTokenResolverTest {
     }
 
     @Test
-    void rejectsEmptyTokenFile(@TempDir Path tempDir) throws IOException {
+    void rejectsEmptyTokenFile() throws IOException {
+        Path tempDir = createTokenTempDir();
         Path tokenFile = tempDir.resolve("empty-token");
         Files.writeString(tokenFile, "   \n");
         environment.setProperty("scheduler.mcp.token-files.GITHUB_MCP_TOKEN", tokenFile.toString());
@@ -86,6 +89,12 @@ class EnvironmentMcpTokenResolverTest {
         assertThatThrownBy(() -> resolver.resolve(server(McpAuthType.BEARER_TOKEN, "GITHUB_MCP_TOKEN")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("is empty");
+    }
+
+    private Path createTokenTempDir() throws IOException {
+        return Files.createDirectories(
+                Path.of("target", "test-token-files", UUID.randomUUID().toString())
+        );
     }
 
     private McpServer server(McpAuthType authType, String authTokenRef) {

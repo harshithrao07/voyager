@@ -103,6 +103,23 @@ test('nested machine references cannot escape their own scope', () => {
   assert.ok(issues.some((issue) => issue.includes('ItemProcessor.States.Inside.Next') && issue.includes('same States object')));
 });
 
+test('Distributed Map is rejected by the Inline-only runtime policy', () => {
+  const issues = collectAslIssues(machine('Each', {
+    Each: {
+      Type: 'Map',
+      Items: [],
+      ItemProcessor: {
+        ProcessorConfig: { Mode: 'DISTRIBUTED' },
+        ...machine('Done', { Done: { Type: 'Succeed' } }),
+      },
+      End: true,
+    },
+  }));
+
+  assert.ok(issues.some((issue) => issue.includes('ItemProcessor.ProcessorConfig.Mode')
+    && issue.includes('not supported; use INLINE')));
+});
+
 test('JSONPath-only fields and invalid JSONata placement are rejected', () => {
   const issues = collectAslIssues(machine('Route', {
     Route: {

@@ -1,5 +1,5 @@
 import Editor from '@monaco-editor/react';
-import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { AlertCircle, Braces, ChevronRight, FlaskConical, ListPlus, Loader2, PanelRightClose, PanelRightOpen, Plus, Save, Wand2, X } from 'lucide-react';
 import type { DefinitionStatus, WorkflowPreview } from './types';
 import { AslGraphViewer } from '../AslGraphViewer';
@@ -100,6 +100,23 @@ export function ManualWorkflowEditor({
   const [testBenchOpen, setTestBenchOpen] = useState(false);
   const [machinePath, setMachinePath] = useState<MachinePath>([]);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const validationTooltipId = useId();
+
+  const uniqueValidationIssues = useMemo(() => (
+    [...new Set(validationIssues.map((issue) => issue.trim()).filter(Boolean))]
+  ), [validationIssues]);
+  const definitionStatusDetails = useMemo(() => {
+    if (uniqueValidationIssues.length > 0) return uniqueValidationIssues;
+    if (!definitionStatus.valid && definitionStatus.message.trim()) {
+      return [definitionStatus.message.trim()];
+    }
+    return [];
+  }, [definitionStatus, uniqueValidationIssues]);
+  const displayedDefinitionStatus = uniqueValidationIssues.length > 0
+    ? `${uniqueValidationIssues.length} ASL validation ${uniqueValidationIssues.length === 1 ? 'issue' : 'issues'}`
+    : definitionStatus.message;
+  const definitionIsValid = definitionStatus.valid && uniqueValidationIssues.length === 0;
+  const showDefinitionStatusDetails = !definitionIsValid && definitionStatusDetails.length > 0;
 
   const startSidebarResize = (event: ReactPointerEvent) => {
     event.preventDefault();
@@ -310,14 +327,43 @@ export function ManualWorkflowEditor({
           <div className="flex min-h-9 shrink-0 items-center gap-x-4 gap-y-1 border-b border-border-subtle bg-surface-base px-6 py-2 font-mono-sm text-[12px] text-on-surface-variant">
             <span>{definitionStats.stateCount} states</span>
             <span>{definitionStats.taskCount} tasks</span>
-            <span
-              data-testid="workflow-definition-status"
-              className={`min-w-0 flex-1 truncate ${definitionStatus.valid ? 'text-secondary' : 'text-status-error'}`}
-              title={definitionStatus.message}
-              aria-live="polite"
-            >
-              {definitionStatus.message}
-            </span>
+            <div className="group relative min-w-0 flex-1">
+              <span
+                data-testid="workflow-definition-status"
+                className={`block truncate rounded-[3px] outline-none ${definitionIsValid
+                  ? 'text-secondary'
+                  : 'cursor-help text-status-error focus-visible:ring-1 focus-visible:ring-status-error/60'}`}
+                title={showDefinitionStatusDetails ? undefined : displayedDefinitionStatus}
+                tabIndex={showDefinitionStatusDetails ? 0 : undefined}
+                aria-describedby={showDefinitionStatusDetails ? validationTooltipId : undefined}
+                aria-live="polite"
+              >
+                {displayedDefinitionStatus}
+              </span>
+              {showDefinitionStatusDetails && (
+                <div
+                  id={validationTooltipId}
+                  role="tooltip"
+                  data-testid="workflow-definition-issues-tooltip"
+                  className="invisible absolute left-0 top-full z-[80] mt-2 w-[min(36rem,calc(100vw-3rem))] translate-y-1 overflow-hidden rounded-DEFAULT border border-status-error/30 bg-surface-container-highest text-on-surface opacity-0 shadow-[0_18px_55px_rgba(0,0,0,0.42)] transition-[opacity,transform,visibility] duration-150 group-hover:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:visible group-focus-within:translate-y-0 group-focus-within:opacity-100"
+                >
+                  <div className="flex items-center justify-between gap-3 border-b border-status-error/20 bg-status-error/10 px-4 py-3">
+                    <span className="flex items-center gap-2 font-mono-sm text-[11px] font-semibold uppercase tracking-[0.08em] text-status-error">
+                      <AlertCircle size={14} />
+                      ASL validation {definitionStatusDetails.length === 1 ? 'issue' : 'issues'}
+                    </span>
+                    <span className="rounded-full border border-status-error/30 bg-status-error/10 px-2 py-0.5 font-mono-sm text-[10px] text-status-error">
+                      {definitionStatusDetails.length}
+                    </span>
+                  </div>
+                  <ol className="max-h-[min(20rem,60vh)] list-decimal space-y-2 overflow-y-auto px-4 py-3 pl-9 text-[11px] leading-5 text-on-surface-variant marker:font-mono-sm marker:text-status-error">
+                    {definitionStatusDetails.map((issue) => (
+                      <li key={issue} className="break-words pl-1">{issue}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+            </div>
           </div>
           {parsedDefinition && currentMachine && machinePath.length > 0 && (
             <div className="flex min-h-12 shrink-0 items-center gap-3 border-b border-secondary/20 bg-secondary-container/[0.08] px-5">
@@ -497,6 +543,7 @@ export function ManualWorkflowEditor({
             {revisionEdit?.recurring && onSaveWithoutActivation && (
               <button
                 type="button"
+                data-testid="workflow-save-without-activation"
                 onClick={onSaveWithoutActivation}
                 disabled={!canSave}
                 className="mb-2 flex h-10 w-full items-center justify-center gap-2 rounded-DEFAULT border border-border-subtle bg-surface-container-low px-4 font-body-sm text-[12px] font-medium text-on-surface transition-colors hover:border-secondary/55 hover:text-secondary disabled:cursor-not-allowed disabled:opacity-50"

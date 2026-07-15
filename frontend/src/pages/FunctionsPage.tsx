@@ -412,7 +412,7 @@ export function FunctionsPage({ onWorkbenchModeChange }: FunctionsPageProps) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface-lowest text-on-surface">
       {creating ? (
-        <FunctionCreateWorkbench
+      <FunctionCreateWorkbench
           languages={languages}
           onCancel={() => setCreating(false)}
           onDone={handleFunctionCreated}
@@ -579,7 +579,8 @@ function FunctionListView({
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle bg-surface-base/60 px-5 py-3">
         <label className="flex h-9 min-w-[220px] flex-1 items-center gap-2 rounded-lg border border-border-subtle bg-surface-container-lowest px-3">
           <Search size={14} className="text-on-surface-variant" />
-          <input
+            <input
+            data-testid="function-search"
             value={search}
             onChange={(event) => onSearch(event.target.value)}
             placeholder="Search functions..."
@@ -588,6 +589,7 @@ function FunctionListView({
         </label>
         <button
           type="button"
+          data-testid="function-show-archived"
           onClick={onToggleArchived}
           className={`flex h-9 items-center gap-2 rounded-lg border px-3 text-[12px] transition-colors ${
             showArchived
@@ -600,6 +602,7 @@ function FunctionListView({
         </button>
         <button
           type="button"
+          data-testid="function-create-open"
           onClick={onCreate}
           className="flex h-9 items-center gap-2 rounded-lg border border-primary/45 bg-primary px-3 text-[13px] font-semibold text-on-primary shadow-[0_16px_42px_rgba(242,121,90,0.24)] transition-colors hover:bg-primary-fixed-dim"
         >
@@ -627,6 +630,9 @@ function FunctionListView({
               <button
                 key={fn.id}
                 type="button"
+                data-testid={`function-card-${fn.id}`}
+                data-function-name={fn.name}
+                data-function-status={fn.status}
                 onClick={() => onSelect(fn.id)}
                 className="group flex flex-col rounded-lg border border-border-subtle bg-surface-container-lowest/60 p-4 text-left transition-colors hover:border-primary/55 hover:bg-[linear-gradient(145deg,rgba(242,121,90,0.1),rgba(14,23,34,0.78))]"
               >
@@ -673,10 +679,11 @@ function FunctionCreateWorkbench({
   const validDefinition = slug.test(name);
   const metadata = (
     <div className="grid gap-3 lg:grid-cols-2">
-      <MetaInput label="Name" value={name} onChange={setName} placeholder="calculate-tax" />
+      <MetaInput label="Name" value={name} onChange={setName} placeholder="calculate-tax" testId="function-create-name" />
       <label>
         <span className={labelClass}>Language</span>
         <select
+          data-testid="function-create-language"
           value={languageId}
           onChange={(event) => setLanguageId(event.target.value)}
           className={selectFieldClass}
@@ -830,6 +837,7 @@ function FunctionDetail({
         <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
+            data-testid="function-new-version"
             onClick={onNewVersion}
             disabled={archived}
             className="flex h-9 items-center gap-2 rounded-lg border border-primary bg-primary px-3 text-[12px] font-semibold text-on-primary shadow-[0_16px_42px_rgba(242,121,90,0.24)] transition-colors hover:bg-primary-fixed-dim"
@@ -909,6 +917,7 @@ function FunctionDetail({
                 <button
                   key={tab.id}
                   type="button"
+                  data-testid={`function-tab-${tab.id}`}
                   onClick={() => setActiveTab(tab.id)}
                   className={`flex h-full items-center gap-2 border-b-2 text-[13px] transition-colors ${
                     activeTab === tab.id
@@ -1153,6 +1162,9 @@ function VersionHistoryPanel({
                 <button
                   key={version.id}
                   type="button"
+                  data-testid={`function-version-${version.version}`}
+                  data-version-active={current ? 'true' : 'false'}
+                  data-version-status={version.status}
                   onClick={() => setSelectedVersionNumber(version.version)}
                   className={`w-full rounded-lg border p-3 text-left transition-colors ${
                     selected
@@ -1240,6 +1252,7 @@ function VersionInspector({
             {version.status !== 'ARCHIVED' && (
               <button
                 type="button"
+                data-testid={`function-version-edit-${version.version}`}
                 onClick={() => onEditVersion(version)}
                 disabled={busy}
                 className="flex h-8 items-center gap-1.5 rounded-lg border border-border-subtle px-3 text-[12px] text-on-surface-variant transition-colors hover:border-primary/45 hover:text-on-surface disabled:opacity-50"
@@ -1252,6 +1265,7 @@ function VersionInspector({
             {!isActive && version.status === 'DRAFT' && (
               <button
                 type="button"
+                data-testid={`function-version-publish-${version.version}`}
                 onClick={() => onPublishDraft(version.version)}
                 disabled={busy}
                 className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] text-primary hover:bg-primary/10 disabled:opacity-50"
@@ -1263,6 +1277,7 @@ function VersionInspector({
             {!isActive && version.status === 'AVAILABLE' && (
               <button
                 type="button"
+                data-testid={`function-version-activate-${version.version}`}
                 onClick={() => onActivate(version.version)}
                 disabled={busy}
                 className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/45 px-3 text-[12px] text-primary hover:bg-primary/10 disabled:opacity-50"
@@ -1484,6 +1499,7 @@ function FunctionSettingsPanel({
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <button
                 type="button"
+                data-testid="function-toggle-status"
                 onClick={requestToggleStatus}
                 disabled={busy}
                 className={`flex h-9 items-center justify-center gap-2 rounded-lg border px-3 text-[12px] transition-colors disabled:opacity-50 ${
@@ -1497,6 +1513,7 @@ function FunctionSettingsPanel({
               </button>
               <button
                 type="button"
+                data-testid="function-archive"
                 onClick={requestDelete}
                 disabled={busy}
                 className="flex h-9 items-center justify-center gap-2 rounded-lg border border-status-error/35 px-3 text-[12px] text-status-error transition-colors hover:bg-status-error/10 disabled:opacity-50"
@@ -1530,6 +1547,7 @@ function FunctionSettingsPanel({
                 <span className="mt-0.5 block text-[11px] text-on-surface-variant">Outbound calls during execution.</span>
               </span>
               <input
+                data-testid="function-network-toggle"
                 type="checkbox"
                 checked={networkEnabled}
                 disabled={busy || archived}
@@ -1543,6 +1561,7 @@ function FunctionSettingsPanel({
             <div className="flex justify-end border-t border-border-subtle/70 pt-4">
               <button
                 type="button"
+                data-testid="function-save-settings"
                 onClick={requestSave}
                 disabled={busy || archived || hasFieldErrors}
                 className="flex h-9 items-center gap-2 rounded-lg border border-primary bg-primary px-4 text-[12px] font-semibold text-on-primary transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
@@ -1650,6 +1669,7 @@ function ConfirmDialog({
           </button>
           <button
             type="button"
+            data-testid="function-confirm-action"
             onClick={onConfirm}
             disabled={busy}
             className={`flex h-9 items-center gap-2 rounded-lg border px-4 text-[12px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
@@ -1917,17 +1937,20 @@ function MetaInput({
   onChange,
   placeholder,
   readOnly,
+  testId,
 }: {
   label: string;
   value: string;
   onChange?: (value: string) => void;
   placeholder?: string;
   readOnly?: boolean;
+  testId?: string;
 }) {
   return (
     <label>
       <span className={labelClass}>{label}</span>
       <input
+        data-testid={testId}
         value={value}
         onChange={(event) => onChange?.(event.target.value)}
         placeholder={placeholder}
