@@ -7,6 +7,7 @@ import jakarta.persistence.LockModeType;
 import jakarta.transaction.Transactional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -250,5 +251,14 @@ public interface ExecutionScopeRepository
             @Param("startedBefore") Instant startedBefore,
             @Param("statuses")
             List<com.job.scheduler.enums.ExecutionScopeStatus> statuses
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+            DELETE FROM execution_scopes
+            WHERE workflow_execution_id IN (:executionIds)
+            """, nativeQuery = true)
+    int deleteByWorkflowExecutionIds(
+            @Param("executionIds") List<UUID> executionIds
     );
 }

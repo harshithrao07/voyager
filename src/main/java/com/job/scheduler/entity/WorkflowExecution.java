@@ -49,6 +49,10 @@ import java.util.UUID;
                         columnList = "status,scheduled_for"
                 ),
                 @Index(
+                        name = "idx_workflow_executions_status_completed_at",
+                        columnList = "status,completed_at"
+                ),
+                @Index(
                         name = "idx_workflow_executions_definition_id",
                         columnList = "workflow_definition_id"
                 )

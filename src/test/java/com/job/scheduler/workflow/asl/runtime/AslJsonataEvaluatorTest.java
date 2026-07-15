@@ -14,7 +14,7 @@ class AslJsonataEvaluatorTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        evaluator = new AslJsonataEvaluator(objectMapper, 100, 100);
+        evaluator = new AslJsonataEvaluator(objectMapper, 2000, 100);
     }
 
     @Test

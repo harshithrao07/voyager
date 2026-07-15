@@ -15,6 +15,8 @@ import com.job.scheduler.dto.WorkflowPageDTO;
 import com.job.scheduler.dto.UpdateWorkflowMetadataRequestDTO;
 import com.job.scheduler.dto.UpdateWorkflowCanvasLayoutRequestDTO;
 import com.job.scheduler.enums.WorkflowStatus;
+import com.job.scheduler.enums.WorkflowExecutionStatus;
+import com.job.scheduler.enums.WorkflowExecutionTrigger;
 import com.job.scheduler.service.WorkflowExecutionInspectionService;
 import com.job.scheduler.service.WorkflowDraftTestService;
 import com.job.scheduler.service.WorkflowExecutionCancellationService;
@@ -140,13 +142,21 @@ public class WorkflowController {
     public ResponseEntity<WorkflowExecutionPageDTO> listExecutions(
             @PathVariable UUID workflowId,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) WorkflowExecutionStatus status,
+            @RequestParam(required = false) Long revision,
+            @RequestParam(required = false) WorkflowExecutionTrigger trigger,
+            @RequestParam(required = false) String search
     ) {
         return ResponseEntity.ok(
                 workflowExecutionInspectionService.listExecutions(
                         workflowId,
                         page,
-                        size
+                        size,
+                        status,
+                        revision,
+                        trigger,
+                        search
                 )
         );
     }

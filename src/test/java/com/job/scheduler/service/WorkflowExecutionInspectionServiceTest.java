@@ -12,6 +12,7 @@ import com.job.scheduler.enums.ExecutionScopeType;
 import com.job.scheduler.enums.StateExecutionAttemptStatus;
 import com.job.scheduler.enums.StateExecutionStatus;
 import com.job.scheduler.enums.WorkflowExecutionStatus;
+import com.job.scheduler.enums.WorkflowExecutionTrigger;
 import com.job.scheduler.repository.ExecutionScopeRepository;
 import com.job.scheduler.repository.StateExecutionAttemptRepository;
 import com.job.scheduler.repository.StateExecutionRepository;
@@ -32,6 +33,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -67,21 +69,90 @@ class WorkflowExecutionInspectionServiceTest {
         when(workflowRepository.findById(execution.getWorkflow().getId()))
                 .thenReturn(Optional.of(execution.getWorkflow()));
         when(workflowExecutionRepository
-                .findByWorkflowOrderByRunNumberDesc(
+                .findFiltered(
                         any(Workflow.class),
+                        eq(null),
+                        eq(null),
+                        eq(null),
+                        eq(false),
+                        eq(null),
+                        eq(null),
                         any(Pageable.class)
                 )).thenReturn(new PageImpl<>(List.of(execution)));
 
         var page = service.listExecutions(
                 execution.getWorkflow().getId(),
                 -1,
-                1000
+                1000,
+                null,
+                null,
+                null,
+                null
         );
 
         assertThat(page.content()).hasSize(1);
         assertThat(page.content().get(0).runNumber()).isEqualTo(4);
         assertThat(page.content().get(0).input().get("orderId").stringValue())
                 .isEqualTo("100");
+    }
+
+    @Test
+    void passesStatusRevisionTriggerAndRunSearchToRepository() {
+        WorkflowExecution execution = execution();
+        when(workflowRepository.findById(execution.getWorkflow().getId()))
+                .thenReturn(Optional.of(execution.getWorkflow()));
+        when(workflowExecutionRepository.findFiltered(
+                any(Workflow.class),
+                eq(WorkflowExecutionStatus.SUCCEEDED),
+                eq(2L),
+                eq(true),
+                eq(true),
+                eq(null),
+                eq(4L),
+                any(Pageable.class)
+        )).thenReturn(new PageImpl<>(List.of(execution)));
+
+        var page = service.listExecutions(
+                execution.getWorkflow().getId(),
+                0,
+                20,
+                WorkflowExecutionStatus.SUCCEEDED,
+                2L,
+                WorkflowExecutionTrigger.SCHEDULED,
+                " 4 "
+        );
+
+        assertThat(page.content()).hasSize(1);
+        assertThat(page.content().get(0).id()).isEqualTo(execution.getId());
+    }
+
+    @Test
+    void invalidExactSearchCannotFallBackToUnfilteredResults() {
+        WorkflowExecution execution = execution();
+        when(workflowRepository.findById(execution.getWorkflow().getId()))
+                .thenReturn(Optional.of(execution.getWorkflow()));
+        when(workflowExecutionRepository.findFiltered(
+                any(Workflow.class),
+                eq(null),
+                eq(null),
+                eq(false),
+                eq(true),
+                eq(null),
+                eq(null),
+                any(Pageable.class)
+        )).thenReturn(new PageImpl<>(List.of()));
+
+        var page = service.listExecutions(
+                execution.getWorkflow().getId(),
+                0,
+                20,
+                null,
+                null,
+                WorkflowExecutionTrigger.MANUAL,
+                "not-an-id-or-run"
+        );
+
+        assertThat(page.content()).isEmpty();
     }
 
     @Test

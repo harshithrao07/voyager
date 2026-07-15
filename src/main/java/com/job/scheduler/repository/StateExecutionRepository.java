@@ -5,6 +5,7 @@ import com.job.scheduler.entity.StateExecution;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -47,5 +48,16 @@ public interface StateExecutionRepository
             """)
     Optional<StateExecution> findByIdForUpdate(
             @Param("stateExecutionId") UUID stateExecutionId
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+            DELETE FROM state_executions state_execution
+            USING execution_scopes scope
+            WHERE state_execution.execution_scope_id = scope.id
+              AND scope.workflow_execution_id IN (:executionIds)
+            """, nativeQuery = true)
+    int deleteByWorkflowExecutionIds(
+            @Param("executionIds") List<UUID> executionIds
     );
 }

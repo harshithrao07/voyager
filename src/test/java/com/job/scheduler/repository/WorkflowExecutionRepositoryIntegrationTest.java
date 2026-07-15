@@ -796,6 +796,71 @@ class WorkflowExecutionRepositoryIntegrationTest {
     }
 
     @Test
+    void filtersWorkflowExecutionsBeforePagination() {
+        Workflow workflow = saveWorkflow("workflow-execution-filters");
+        WorkflowDefinition definition = saveDefinition(workflow);
+        WorkflowExecution manual = execution(
+                workflow,
+                definition,
+                1,
+                null
+        );
+        manual.setStatus(WorkflowExecutionStatus.SUCCEEDED);
+        manual = workflowExecutionRepository.saveAndFlush(manual);
+
+        WorkflowExecution scheduled = execution(
+                workflow,
+                definition,
+                2,
+                Instant.parse("2026-06-21T10:00:00Z")
+        );
+        scheduled.setStatus(WorkflowExecutionStatus.FAILED);
+        scheduled = workflowExecutionRepository.saveAndFlush(scheduled);
+        entityManager.clear();
+
+        var scheduledFailures = workflowExecutionRepository.findFiltered(
+                workflow,
+                WorkflowExecutionStatus.FAILED,
+                1L,
+                true,
+                false,
+                null,
+                null,
+                org.springframework.data.domain.PageRequest.of(0, 20)
+        );
+        var manualById = workflowExecutionRepository.findFiltered(
+                workflow,
+                null,
+                null,
+                false,
+                true,
+                manual.getId(),
+                null,
+                org.springframework.data.domain.PageRequest.of(0, 20)
+        );
+        var scheduledByRun = workflowExecutionRepository.findFiltered(
+                workflow,
+                null,
+                null,
+                null,
+                true,
+                null,
+                2L,
+                org.springframework.data.domain.PageRequest.of(0, 20)
+        );
+
+        assertThat(scheduledFailures.getContent())
+                .extracting(WorkflowExecution::getId)
+                .containsExactly(scheduled.getId());
+        assertThat(manualById.getContent())
+                .extracting(WorkflowExecution::getId)
+                .containsExactly(manual.getId());
+        assertThat(scheduledByRun.getContent())
+                .extracting(WorkflowExecution::getId)
+                .containsExactly(scheduled.getId());
+    }
+
+    @Test
     void cancellationPersistsAcrossExecutionRuntimeTree() {
         Workflow workflow = saveWorkflow("workflow-cancellation");
         WorkflowDefinition definition = saveDefinition(workflow);

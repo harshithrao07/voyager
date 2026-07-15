@@ -11,6 +11,8 @@ import com.job.scheduler.entity.StateExecution;
 import com.job.scheduler.entity.StateExecutionAttempt;
 import com.job.scheduler.entity.Workflow;
 import com.job.scheduler.entity.WorkflowExecution;
+import com.job.scheduler.enums.WorkflowExecutionStatus;
+import com.job.scheduler.enums.WorkflowExecutionTrigger;
 import com.job.scheduler.repository.ExecutionScopeRepository;
 import com.job.scheduler.repository.StateExecutionAttemptRepository;
 import com.job.scheduler.repository.StateExecutionRepository;
@@ -20,7 +22,6 @@ import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
@@ -45,19 +46,28 @@ public class WorkflowExecutionInspectionService {
     public WorkflowExecutionPageDTO listExecutions(
             UUID workflowId,
             int page,
-            int size
+            int size,
+            WorkflowExecutionStatus status,
+            Long revision,
+            WorkflowExecutionTrigger trigger,
+            String search
     ) {
         Workflow workflow = findWorkflow(workflowId);
         int normalizedPage = Math.max(page, 0);
         int normalizedSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        ExecutionSearch executionSearch = parseSearch(search);
         Page<WorkflowExecution> executions =
-                workflowExecutionRepository.findByWorkflowOrderByRunNumberDesc(
+                workflowExecutionRepository.findFiltered(
                         workflow,
-                        PageRequest.of(
-                                normalizedPage,
-                                normalizedSize,
-                                Sort.by(Sort.Direction.DESC, "runNumber")
-                        )
+                        status,
+                        revision,
+                        trigger == null
+                                ? null
+                                : trigger == WorkflowExecutionTrigger.SCHEDULED,
+                        executionSearch.provided(),
+                        executionSearch.executionId(),
+                        executionSearch.runNumber(),
+                        PageRequest.of(normalizedPage, normalizedSize)
                 );
         return new WorkflowExecutionPageDTO(
                 executions.getContent().stream()
@@ -70,6 +80,31 @@ public class WorkflowExecutionInspectionService {
                 executions.isFirst(),
                 executions.isLast()
         );
+    }
+
+    private ExecutionSearch parseSearch(String search) {
+        if (search == null || search.isBlank()) {
+            return new ExecutionSearch(false, null, null);
+        }
+        String normalized = search.trim();
+        try {
+            return new ExecutionSearch(
+                    true,
+                    UUID.fromString(normalized),
+                    null
+            );
+        } catch (IllegalArgumentException ignored) {
+            // A search term can target either an execution UUID or run number.
+        }
+        try {
+            return new ExecutionSearch(
+                    true,
+                    null,
+                    Long.parseLong(normalized)
+            );
+        } catch (NumberFormatException ignored) {
+            return new ExecutionSearch(true, null, null);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -221,5 +256,12 @@ public class WorkflowExecutionInspectionService {
                     exception
             );
         }
+    }
+
+    private record ExecutionSearch(
+            boolean provided,
+            UUID executionId,
+            Long runNumber
+    ) {
     }
 }

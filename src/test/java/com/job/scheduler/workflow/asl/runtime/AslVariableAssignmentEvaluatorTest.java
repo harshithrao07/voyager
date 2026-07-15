@@ -16,7 +16,7 @@ class AslVariableAssignmentEvaluatorTest {
     void setUp() {
         objectMapper = new ObjectMapper();
         evaluator = new AslVariableAssignmentEvaluator(
-                new AslJsonataEvaluator(objectMapper, 100, 100),
+                new AslJsonataEvaluator(objectMapper, 2000, 100),
                 objectMapper
         );
     }

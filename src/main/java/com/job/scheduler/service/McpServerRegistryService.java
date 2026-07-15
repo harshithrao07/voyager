@@ -88,6 +88,8 @@ public class McpServerRegistryService {
         server.setTransport(request.transport());
         server.setAuthType(request.authType());
         server.setAuthTokenRef(blankToNull(request.authTokenRef()));
+        server.setAuthHeaderName(blankToNull(request.authHeaderName()));
+        server.setAuthUsername(blankToNull(request.authUsername()));
         server.setTrustLevel(request.trustLevel() == null ? McpTrustLevel.UNTRUSTED : request.trustLevel());
         server.setStatus(request.status() == null ? McpServerStatus.DISABLED : request.status());
         server.setRequestTimeoutMs(request.requestTimeoutMs());
@@ -110,17 +112,34 @@ public class McpServerRegistryService {
             if (blankToNull(request.command()) == null) {
                 throw new IllegalArgumentException("command is required for STDIO transport");
             }
+            if (request.authType() != McpAuthType.NONE
+                    && request.authType() != McpAuthType.BEARER_TOKEN) {
+                throw new IllegalArgumentException(
+                        "STDIO transport supports only NONE or BEARER_TOKEN auth");
+            }
             if (request.authType() == McpAuthType.BEARER_TOKEN
                     && blankToNull(request.authEnvVar()) == null) {
                 throw new IllegalArgumentException(
                         "authEnvVar is required for STDIO BEARER_TOKEN auth");
             }
         }
-        if (request.authType() == McpAuthType.BEARER_TOKEN && blankToNull(request.authTokenRef()) == null) {
-            throw new IllegalArgumentException("authTokenRef is required for BEARER_TOKEN auth");
+        // A secret reference is required for any authenticated type, invalid for NONE.
+        if (request.authType() == McpAuthType.NONE) {
+            if (blankToNull(request.authTokenRef()) != null) {
+                throw new IllegalArgumentException("authTokenRef is only valid for authenticated servers");
+            }
+        } else if (blankToNull(request.authTokenRef()) == null) {
+            throw new IllegalArgumentException(
+                    "authTokenRef is required for " + request.authType() + " auth");
         }
-        if (request.authType() == McpAuthType.NONE && blankToNull(request.authTokenRef()) != null) {
-            throw new IllegalArgumentException("authTokenRef is only valid for authenticated servers");
+        // Per-type extra config.
+        if (request.authType() == McpAuthType.API_KEY
+                && blankToNull(request.authHeaderName()) == null) {
+            throw new IllegalArgumentException("authHeaderName is required for API_KEY auth");
+        }
+        if (request.authType() == McpAuthType.BASIC
+                && blankToNull(request.authUsername()) == null) {
+            throw new IllegalArgumentException("authUsername is required for BASIC auth");
         }
     }
 
@@ -155,6 +174,8 @@ public class McpServerRegistryService {
                 server.getTransport(),
                 server.getAuthType(),
                 server.getAuthTokenRef(),
+                server.getAuthHeaderName(),
+                server.getAuthUsername(),
                 server.getTrustLevel(),
                 server.getStatus(),
                 server.getRequestTimeoutMs(),

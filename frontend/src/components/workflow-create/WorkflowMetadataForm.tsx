@@ -158,6 +158,7 @@ export function ScheduleBuilder({
             <button
               key={mode}
               type="button"
+              data-testid={`workflow-schedule-mode-${mode}`}
               onClick={() => onCronExpressionChange(mode === 'manual' ? '' : scheduleToCron({ type: 'daily', minute: 0, hour: 9 }))}
               className={`h-8 rounded-[3px] font-mono-sm text-[11px] capitalize transition-colors ${
                 active ? 'bg-secondary-container/50 text-secondary-fixed' : 'text-on-surface-variant hover:text-on-surface'
@@ -323,7 +324,7 @@ export function WorkflowMetadataForm({
         {!isManual && (
           <label className="block">
             <span className="text-body-sm text-on-surface">Timezone</span>
-            <select value={timezone || 'UTC'} onChange={(event) => onTimezoneChange(event.target.value)} className={fieldClass}>
+            <select data-testid="workflow-timezone" value={timezone || 'UTC'} onChange={(event) => onTimezoneChange(event.target.value)} className={fieldClass}>
               <option value="UTC">UTC</option>
               {timezoneMissing && <option value={timezone}>{timezone}</option>}
               {TIMEZONE_GROUPS.map(([region, zones]) => (
@@ -338,8 +339,8 @@ export function WorkflowMetadataForm({
         )}
       </section>
       <div className="h-px bg-border-subtle" />
-      <details className="group">
-        <summary className="flex cursor-pointer list-none items-center gap-1.5 text-body-sm text-on-surface-variant [&::-webkit-details-marker]:hidden">
+      <details className="group" data-testid="workflow-schedule-advanced">
+        <summary data-testid="workflow-schedule-advanced-toggle" className="flex cursor-pointer list-none items-center gap-1.5 text-body-sm text-on-surface-variant [&::-webkit-details-marker]:hidden">
           <span className="material-symbols-outlined text-[18px] transition-transform group-open:rotate-90">chevron_right</span>
           Advanced
         </summary>
@@ -347,6 +348,7 @@ export function WorkflowMetadataForm({
           <div>
             <span className="text-body-sm text-on-surface">Cron expression</span>
             <input
+              data-testid="workflow-cron-expression"
               value={cronExpression}
               onChange={(event) => onCronExpressionChange(event.target.value)}
               className={`${monoFieldClass} ${cronError ? 'border-status-error' : ''}`}

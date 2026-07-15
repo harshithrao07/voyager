@@ -83,6 +83,14 @@ public class McpServer {
     @Column(name = "auth_token_ref")
     private String authTokenRef;
 
+    /** API_KEY auth: the header name the resolved secret is sent in (HTTP). */
+    @Column(name = "auth_header_name")
+    private String authHeaderName;
+
+    /** BASIC auth: the username paired with the resolved secret (HTTP). */
+    @Column(name = "auth_username")
+    private String authUsername;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "trust_level", nullable = false)
     private McpTrustLevel trustLevel;

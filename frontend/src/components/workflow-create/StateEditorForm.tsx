@@ -463,6 +463,8 @@ export function StateEditorForm({
   const systemResourceValues = new Set(systemTaskResourceOptions.map((option) => option.value));
   const visibleSystemResources = visibleTaskResourceOptions.filter((option) => systemResourceValues.has(option.value));
   const visibleCustomResources = visibleTaskResourceOptions.filter((option) => !systemResourceValues.has(option.value));
+  const visibleMcpResources = visibleCustomResources.filter((option) => option.value.startsWith('voyager://mcp/'));
+  const visibleFunctionResources = visibleCustomResources.filter((option) => !option.value.startsWith('voyager://mcp/'));
   const selectedTaskResourceOption = mergedTaskResourceOptions.find((option) => option.value === state.Resource);
   const selectedSystemResource = state.Resource === 'voyager://system/webhook' || state.Resource === 'voyager://system/send-email'
     ? state.Resource
@@ -668,13 +670,22 @@ export function StateEditorForm({
                     {visibleSystemResources.map(renderResourceOption)}
                   </div>
                 )}
-                {visibleCustomResources.length > 0 && (
+                {visibleFunctionResources.length > 0 && (
                   <div className={visibleSystemResources.length > 0 ? 'mt-1 border-t border-border-subtle/60 pt-1' : ''}>
                     <div className={resourceGroupLabelClass}>
                       <span className="material-symbols-outlined text-[12px] text-status-info">function</span>
                       Functions
                     </div>
-                    {visibleCustomResources.map(renderResourceOption)}
+                    {visibleFunctionResources.map(renderResourceOption)}
+                  </div>
+                )}
+                {visibleMcpResources.length > 0 && (
+                  <div className={(visibleSystemResources.length > 0 || visibleFunctionResources.length > 0) ? 'mt-1 border-t border-border-subtle/60 pt-1' : ''}>
+                    <div className={resourceGroupLabelClass}>
+                      <span className="material-symbols-outlined text-[12px] text-primary">cable</span>
+                      MCP tools
+                    </div>
+                    {visibleMcpResources.map(renderResourceOption)}
                   </div>
                 )}
                 {visibleTaskResourceOptions.length === 0 && (

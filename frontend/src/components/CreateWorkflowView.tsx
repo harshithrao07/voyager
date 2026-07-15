@@ -12,6 +12,8 @@ import {
   listFunctions,
   listAllAiModels,
   listAiModels,
+  listMcpServers,
+  listMcpKnownTools,
   regenerateWorkflowAiMessage,
   reviewWorkflowAiAsl,
   setAiModelEnabled,
@@ -19,6 +21,7 @@ import {
   testAiModel,
   updateWorkflowCanvasLayout,
   type FunctionDefinitionDTO,
+  type McpToolDTO,
   type WorkflowAiMessageDTO,
   type WorkflowAiConversationSummaryDTO,
   type WorkflowAiResponse,
@@ -272,6 +275,7 @@ export function CreateWorkflowView({
   const [models, setModels] = useState<AiModel[]>([]);
   const [allModels, setAllModels] = useState<AiModel[]>([]);
   const [customFunctions, setCustomFunctions] = useState<FunctionDefinitionDTO[]>([]);
+  const [mcpTools, setMcpTools] = useState<McpToolDTO[]>([]);
   const [modelId, setModelId] = useState('');
   const [modelSearch, setModelSearch] = useState('');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -326,15 +330,20 @@ export function CreateWorkflowView({
       return { valid: false, message: err.message || 'Definition JSON is invalid' };
     }
   }, [definitionText]);
-  const taskResourceOptions = useMemo<TaskResourceOption[]>(() => (
-    customFunctions
+  const taskResourceOptions = useMemo<TaskResourceOption[]>(() => ([
+    ...customFunctions
       .filter((fn) => fn.status === 'ENABLED' && fn.activeVersion !== null)
       .map((fn) => ({
         value: functionTaskResource(fn),
         label: fn.name,
         description: `Function v${fn.activeVersion}`,
-      }))
-  ), [customFunctions]);
+      })),
+    ...mcpTools.map((tool) => ({
+      value: `voyager://mcp/${tool.serverId}/${tool.toolName}`,
+      label: tool.toolName,
+      description: `MCP · ${tool.serverId}`,
+    })),
+  ]), [customFunctions, mcpTools]);
 
   useEffect(() => {
     let cancelled = false;
@@ -347,6 +356,19 @@ export function CreateWorkflowView({
       })
       .catch((err) => {
         console.warn('Function registry unavailable for workflow resource picker.', err);
+      });
+
+    listMcpServers('ENABLED')
+      .then((servers) => Promise.all(
+        servers.map((server) => listMcpKnownTools(server.serverId, true).catch(() => [])),
+      ))
+      .then((toolLists) => {
+        if (!cancelled) {
+          setMcpTools(toolLists.flat());
+        }
+      })
+      .catch((err) => {
+        console.warn('MCP registry unavailable for workflow resource picker.', err);
       });
 
     return () => {

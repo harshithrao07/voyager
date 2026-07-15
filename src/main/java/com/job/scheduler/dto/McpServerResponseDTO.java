@@ -23,6 +23,8 @@ public record McpServerResponseDTO(
         McpTransport transport,
         McpAuthType authType,
         String authTokenRef,
+        String authHeaderName,
+        String authUsername,
         McpTrustLevel trustLevel,
         McpServerStatus status,
         Integer requestTimeoutMs,

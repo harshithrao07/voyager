@@ -10,7 +10,7 @@ class TaskStateExecutorTest {
     void evaluatesArgumentsAndReturnsDurableDispatchRequest() {
         ObjectMapper objectMapper = new ObjectMapper();
         TaskStateExecutor executor = new TaskStateExecutor(
-                new AslJsonataEvaluator(objectMapper, 100, 100)
+                new AslJsonataEvaluator(objectMapper, 2000, 100)
         );
         var state = objectMapper.readTree("""
                 {

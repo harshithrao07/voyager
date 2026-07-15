@@ -10,6 +10,7 @@ import com.job.scheduler.dto.WorkflowExecutionCancellationResponseDTO;
 import com.job.scheduler.dto.WorkflowPageDTO;
 import com.job.scheduler.dto.DraftStateTestResponseDTO;
 import com.job.scheduler.enums.WorkflowExecutionStatus;
+import com.job.scheduler.enums.WorkflowExecutionTrigger;
 import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.exception.ApiExceptionHandler;
 import com.job.scheduler.service.WorkflowExecutionRunner;
@@ -34,6 +35,7 @@ import java.util.List;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -286,7 +288,11 @@ class WorkflowControllerTest {
         when(workflowExecutionInspectionService.listExecutions(
                 workflowId,
                 0,
-                20
+                20,
+                null,
+                null,
+                null,
+                null
         )).thenReturn(new WorkflowExecutionPageDTO(
                 List.of(summary(workflowId, executionId)),
                 0,
@@ -306,6 +312,51 @@ class WorkflowControllerTest {
                         .value(executionId.toString()))
                 .andExpect(jsonPath("$.content[0].runNumber").value(3))
                 .andExpect(jsonPath("$.totalElements").value(1));
+    }
+
+    @Test
+    void forwardsWorkflowExecutionFilters() throws Exception {
+        UUID workflowId = UUID.randomUUID();
+        when(workflowExecutionInspectionService.listExecutions(
+                workflowId,
+                2,
+                10,
+                WorkflowExecutionStatus.FAILED,
+                3L,
+                WorkflowExecutionTrigger.SCHEDULED,
+                "7"
+        )).thenReturn(new WorkflowExecutionPageDTO(
+                List.of(),
+                2,
+                10,
+                0,
+                0,
+                false,
+                true
+        ));
+
+        mockMvc.perform(get(
+                        "/app/v1/workflows/{workflowId}/executions",
+                        workflowId
+                )
+                .param("page", "2")
+                .param("size", "10")
+                .param("status", "FAILED")
+                .param("revision", "3")
+                .param("trigger", "SCHEDULED")
+                .param("search", "7"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").isEmpty());
+
+        verify(workflowExecutionInspectionService).listExecutions(
+                workflowId,
+                2,
+                10,
+                WorkflowExecutionStatus.FAILED,
+                3L,
+                WorkflowExecutionTrigger.SCHEDULED,
+                "7"
+        );
     }
 
     @Test

@@ -117,7 +117,7 @@ class ParallelWorkflowIntegrationTest {
     @BeforeEach
     void setUp() {
         AslJsonataEvaluator evaluator =
-                new AslJsonataEvaluator(objectMapper, 100, 100);
+                new AslJsonataEvaluator(objectMapper, 2000, 100);
         AslVariableAssignmentEvaluator assignmentEvaluator =
                 new AslVariableAssignmentEvaluator(evaluator, objectMapper);
         AslDefinitionNavigator navigator =

@@ -21,7 +21,7 @@ class AslJsonataEvaluatorConcurrencyTest {
             throws Exception {
         ObjectMapper objectMapper = new ObjectMapper();
         AslJsonataEvaluator evaluator =
-                new AslJsonataEvaluator(objectMapper, 100, 100);
+                new AslJsonataEvaluator(objectMapper, 2000, 100);
         int workers = 8;
         CountDownLatch ready = new CountDownLatch(workers);
         CountDownLatch start = new CountDownLatch(1);

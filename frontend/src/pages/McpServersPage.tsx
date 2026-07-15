@@ -288,6 +288,15 @@ function serverAddress(server: McpServerDTO): string {
   return `${server.baseUrl ?? ''}${server.endpoint ?? ''}`;
 }
 
+function authTypeLabel(authType: McpAuthType): string {
+  switch (authType) {
+    case 'BEARER_TOKEN': return 'Bearer';
+    case 'API_KEY': return 'API key';
+    case 'BASIC': return 'Basic';
+    default: return 'No auth';
+  }
+}
+
 type ServerFormModalProps = {
   mode: 'create' | 'edit';
   initial?: McpServerDTO;
@@ -308,6 +317,8 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
   const [authEnvVar, setAuthEnvVar] = useState(initial?.authEnvVar ?? '');
   const [authType, setAuthType] = useState<McpAuthType>(initial?.authType ?? 'NONE');
   const [authTokenRef, setAuthTokenRef] = useState(initial?.authTokenRef ?? '');
+  const [authHeaderName, setAuthHeaderName] = useState(initial?.authHeaderName ?? '');
+  const [authUsername, setAuthUsername] = useState(initial?.authUsername ?? '');
   const [trustLevel, setTrustLevel] = useState<McpTrustLevel>(initial?.trustLevel ?? 'UNTRUSTED');
   const [enabled, setEnabled] = useState(initial ? initial.status === 'ENABLED' : false);
   const [timeoutMs, setTimeoutMs] = useState(initial?.requestTimeoutMs ? String(initial.requestTimeoutMs) : '');
@@ -327,12 +338,21 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
       if (!endpoint.startsWith('/')) return 'Endpoint must start with /';
     } else {
       if (!command.trim()) return 'Command is required for STDIO transport.';
+      if (authType !== 'NONE' && authType !== 'BEARER_TOKEN') {
+        return 'STDIO transport supports only None or Bearer token auth.';
+      }
       if (authType === 'BEARER_TOKEN' && !authEnvVar.trim()) {
         return 'A token env var is required to inject the token for STDIO bearer auth.';
       }
     }
-    if (authType === 'BEARER_TOKEN' && !authTokenRef.trim()) {
-      return 'A token reference is required for bearer token auth.';
+    if (authType !== 'NONE' && !authTokenRef.trim()) {
+      return 'A secret reference is required for authenticated servers.';
+    }
+    if (authType === 'API_KEY' && !authHeaderName.trim()) {
+      return 'A header name is required for API key auth.';
+    }
+    if (authType === 'BASIC' && !authUsername.trim()) {
+      return 'A username is required for basic auth.';
     }
     if (timeoutMs.trim()) {
       const value = Number(timeoutMs);
@@ -359,7 +379,9 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
       env: isStdio ? parseEnvText(envText) : null,
       authEnvVar: isStdio && authType === 'BEARER_TOKEN' ? authEnvVar.trim() : null,
       authType,
-      authTokenRef: authType === 'BEARER_TOKEN' ? authTokenRef.trim() : null,
+      authTokenRef: authType !== 'NONE' ? authTokenRef.trim() : null,
+      authHeaderName: authType === 'API_KEY' ? authHeaderName.trim() : null,
+      authUsername: authType === 'BASIC' ? authUsername.trim() : null,
       trustLevel,
       status: enabled ? 'ENABLED' : 'DISABLED',
       requestTimeoutMs: timeoutMs.trim() ? Number(timeoutMs) : null,
@@ -539,13 +561,15 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
             >
               <option value="NONE">None</option>
               <option value="BEARER_TOKEN">Bearer token</option>
+              <option value="API_KEY">API key (header)</option>
+              <option value="BASIC">Basic</option>
             </select>
           </label>
-          {authType === 'BEARER_TOKEN' ? (
+          {authType !== 'NONE' ? (
             <label>
               <span className={labelClass}>
                 <KeyRound size={11} />
-                Token reference
+                Secret reference
               </span>
               <input
                 value={authTokenRef}
@@ -554,11 +578,35 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
                 className={`${fieldClass} font-mono-sm`}
               />
               <span className="mt-1 block text-[10.5px] leading-4 text-on-surface-variant/70">
-                Environment variable resolved at call time — the token itself is never stored.
+                {authType === 'BASIC'
+                  ? 'Env var holding the password, resolved at call time — never stored.'
+                  : 'Env var holding the token/key, resolved at call time — never stored.'}
               </span>
             </label>
           ) : (
             <div />
+          )}
+          {authType === 'API_KEY' && (
+            <label>
+              <span className={labelClass}>Header name</span>
+              <input
+                value={authHeaderName}
+                onChange={(event) => setAuthHeaderName(event.target.value)}
+                placeholder="X-API-Key"
+                className={`${fieldClass} font-mono-sm`}
+              />
+            </label>
+          )}
+          {authType === 'BASIC' && (
+            <label>
+              <span className={labelClass}>Username</span>
+              <input
+                value={authUsername}
+                onChange={(event) => setAuthUsername(event.target.value)}
+                placeholder="api-user"
+                className={`${fieldClass} font-mono-sm`}
+              />
+            </label>
           )}
           {transport === 'STDIO' && authType === 'BEARER_TOKEN' && (
             <label>
@@ -1405,9 +1453,9 @@ function ServerDetail({
                   <HeroChip icon={<Globe size={13} />} label={`${server.transport} transport`} />
                   <HeroChip
                     icon={<KeyRound size={13} />}
-                    label={server.authType === 'BEARER_TOKEN'
-                      ? <span>Bearer · <span className="font-mono-sm text-[11px]">{server.authTokenRef}</span></span>
-                      : 'No auth'}
+                    label={server.authType === 'NONE'
+                      ? 'No auth'
+                      : <span>{authTypeLabel(server.authType)} · <span className="font-mono-sm text-[11px]">{server.authTokenRef}</span></span>}
                   />
                   <HeroChip
                     icon={<Timer size={13} />}
@@ -1646,11 +1694,11 @@ function ServerList({
                     {server.transport}
                   </span>
                   <span className={`rounded-md border px-1.5 py-0.5 font-mono-sm text-[9px] uppercase tracking-[0.06em] ${
-                    server.authType === 'BEARER_TOKEN'
+                    server.authType !== 'NONE'
                       ? 'border-status-info/35 bg-status-info/10 text-status-info'
                       : 'border-border-subtle bg-surface-container-low text-on-surface-variant'
                   }`}>
-                    {server.authType === 'BEARER_TOKEN' ? 'Bearer' : 'No auth'}
+                    {authTypeLabel(server.authType)}
                   </span>
                   <span className={`ml-auto font-mono-sm text-[10px] ${TRUST_META[server.trustLevel].text}`}>
                     {server.trustLevel}

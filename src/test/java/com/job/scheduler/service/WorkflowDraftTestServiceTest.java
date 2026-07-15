@@ -32,7 +32,7 @@ class WorkflowDraftTestServiceTest {
         objectMapper = new ObjectMapper();
         AslJsonataEvaluator jsonataEvaluator = new AslJsonataEvaluator(
                 objectMapper,
-                100,
+                2000,
                 100
         );
         AslVariableAssignmentEvaluator assignmentEvaluator =

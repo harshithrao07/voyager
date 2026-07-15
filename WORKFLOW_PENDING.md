@@ -41,8 +41,15 @@ history remains in the phase sections below.
 - [x] Add configurable UTF-8 byte limits for persisted workflow/state input
   and output, Task arguments/results, error details, and variables. Oversized
   runtime data fails terminally with `States.DataLimitExceeded`.
-- [ ] Add retention and cleanup policies for completed executions, scopes,
-  state visits, and attempts.
+- [x] Add opt-in retention and cleanup for completed execution trees.
+  `WorkflowExecutionRetentionService` atomically claims bounded batches of
+  old `SUCCEEDED`/`FAILED`/`CANCELED`/`TIMED_OUT` executions with
+  `FOR UPDATE SKIP LOCKED`, deletes linked function invocations, attempts,
+  state visits, scopes, and executions in foreign-key order, and rolls the
+  entire batch back on failure. Active/recent executions are excluded. The
+  scheduled cleanup is disabled by default and has configurable age, batch,
+  initial-delay, and poll-delay settings. Unit and real-PostgreSQL tests cover
+  deletion, idempotency, active/recent preservation, and simultaneous nodes.
 
 ### Priority 2: Remaining product and ASL decisions
 
@@ -128,8 +135,15 @@ Implemented:
 - Durable Wait resumption.
 - Playwright browser E2E coverage for builder creation, manual JSONata ASL
   template import, workflow-list persistence, immutable revision creation, and
-  creator-to-runtime execution inspection. Test-created workflows are archived
-  after each scenario.
+  creator-to-runtime execution through the visible frontend. The execution UI
+  now starts runs with validated JSON input, polls persisted execution detail,
+  renders scopes/states/Task attempts, and cooperatively cancels active runs.
+  Recurring coverage creates and activates a scheduled workflow, observes its
+  scheduler-created execution in the UI, proves Pause suppresses new runs, and
+  proves Resume recalculates scheduling and creates a later run. Test-created
+  workflows are canceled when necessary and archived after each scenario. The
+  browser suite also exercises server-backed execution status, revision,
+  trigger, and exact ID/run filters through the visible execution UI.
 
 - Nested execution-scope foundation (Phase 1), `Parallel` runtime (Phase 2),
   and core `Map` runtime (Phase 3).
@@ -324,7 +338,9 @@ Status: COMPLETE.
 ## Phase 7: Workflow lifecycle and APIs
 
 - [x] Get one workflow execution.
-- [x] List executions for a workflow with bounded pagination.
+- [x] List executions for a workflow with bounded pagination and server-side
+  status, definition revision, manual/scheduled trigger, and exact execution
+  ID/run-number filters.
 - [x] Return execution scopes, ordered state visits, and attempts for
   inspection, including nested Parallel/Map scope identity and persisted JSON
   input/output/error details.
@@ -395,7 +411,10 @@ original revision.
 - [ ] Add database constraints where they materially protect runtime invariants.
 - [x] Add payload-size limits for persisted input, output, arguments, results,
   variables, and error details.
-- [ ] Add retention/cleanup for completed executions and attempts.
+- [x] Add retention/cleanup for terminal executions, scopes, state visits,
+  attempts, and linked function invocations. Cleanup is opt-in, bounded,
+  transactional, restart-safe, and multi-node safe through locked candidate
+  claims with `SKIP LOCKED`.
 
 ## Phase 9: Task-resource improvements
 
@@ -451,7 +470,8 @@ explicitly changed.
 
 ## Recommended implementation order
 
-1. Add runtime database constraints and retention.
+1. Freeze the production schema, then add the remaining runtime constraints
+   and indexes.
 2. Resolve manual-run, Distributed Map, Map item context, and cancellation
    policy decisions.
 3. Build the Task resource registry and stable error model.

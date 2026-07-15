@@ -43,6 +43,10 @@ public record McpServerRequestDTO(
 
         String authTokenRef,
 
+        String authHeaderName,
+
+        String authUsername,
+
         McpTrustLevel trustLevel,
 
         McpServerStatus status,

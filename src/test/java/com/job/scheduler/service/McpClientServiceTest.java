@@ -71,7 +71,7 @@ class McpClientServiceTest {
 
         assertThatThrownBy(() -> mcpClientService.listTools("local-cli").block())
                 .isInstanceOf(McpConnectionException.class)
-                .hasMessageContaining("Could not launch MCP process 'voyager-no-such-command-zzz'")
+                .hasMessageContaining("command 'voyager-no-such-command-zzz' was not found")
                 .hasMessageContaining("use HTTP transport or install the runtime");
     }
 

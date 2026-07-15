@@ -166,7 +166,6 @@ function mapWorkflowRevision(revision: WorkflowDefinitionResponseDTO): WorkflowR
     note: `Definition hash ${hash}`,
     definition: revision.definition,
     canvasLayout: revision.canvasLayout || {},
-    runs: [],
   };
 }
 
@@ -183,7 +182,6 @@ function buildGeneratedRevision(definition: any): WorkflowRevision {
     note: 'Generated locally from the prompt. Save it as a backend revision when ready.',
     definition,
     canvasLayout: {},
-    runs: [],
   };
 }
 
@@ -1086,7 +1084,7 @@ function App() {
                     <button onClick={() => setActiveTab('definition')} className={`relative z-10 w-24 py-1.5 font-body-sm text-body-sm transition-colors ${activeTab === 'definition' ? 'text-primary font-medium' : 'text-on-surface-variant hover:text-primary'}`}>
                       Definition
                     </button>
-                    <button onClick={() => setActiveTab('executions')} className={`relative z-10 w-24 py-1.5 font-body-sm text-body-sm transition-colors ${activeTab === 'executions' ? 'text-primary font-medium' : 'text-on-surface-variant hover:text-primary'}`}>
+                    <button data-testid="workflow-tab-executions" onClick={() => setActiveTab('executions')} className={`relative z-10 w-24 py-1.5 font-body-sm text-body-sm transition-colors ${activeTab === 'executions' ? 'text-primary font-medium' : 'text-on-surface-variant hover:text-primary'}`}>
                       Executions
                     </button>
                   </div>
@@ -1106,6 +1104,7 @@ function App() {
                   {workflowDetail && workflowDetail.status !== 'ARCHIVED' && (
                     <button
                       type="button"
+                      data-testid="workflow-settings-open"
                       onClick={() => {
                         setRevisionPanelOpen(false);
                         setDetailsPanelOpen(false);
@@ -1138,6 +1137,7 @@ function App() {
                   {workflowDetail?.status === 'DRAFT' && workflowDetail.cronExpression ? (
                     <button
                       type="button"
+                      data-testid="workflow-activate-schedule"
                       onClick={handleActivateSchedule}
                       disabled={workflowActionBusy || !selectedRevision}
                       className="flex h-9 items-center gap-2 rounded-DEFAULT border border-primary bg-primary px-3 font-body-sm text-body-sm font-medium text-surface-lowest transition-colors hover:bg-primary-fixed disabled:cursor-not-allowed disabled:opacity-60"
@@ -1221,7 +1221,6 @@ function App() {
             </div>
           ) : (
           <WorkflowDetailPage
-            workflowName={workflowDetail?.name || selectedWorkflow?.name || 'Workflow'}
             workflowDetail={workflowDetail}
             workflowRevisions={workflowRevisions}
             workflowDetailLoading={workflowDetailLoading}

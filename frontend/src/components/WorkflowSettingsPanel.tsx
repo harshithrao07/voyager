@@ -38,6 +38,20 @@ function statusTone(status: WorkflowResponseDTO['status']) {
   return 'border-primary/30 bg-primary/10 text-primary';
 }
 
+function formatNextRun(value?: string | null) {
+  if (!value) return 'No upcoming run';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'short',
+  }).format(date);
+}
+
 function isVersionConflict(error: unknown) {
   return error instanceof Error && /^409\s+-/i.test(error.message);
 }
@@ -226,7 +240,7 @@ export function WorkflowSettingsPanel({
           <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-border-subtle bg-surface-container-lowest">
             <div className="border-r border-border-subtle px-4 py-3">
               <div className="font-mono-sm text-[9px] uppercase tracking-[0.16em] text-on-surface-variant">Status</div>
-              <span className={`mt-2 inline-flex rounded-full border px-2 py-1 font-mono-sm text-[10px] font-semibold ${statusTone(workflow.status)}`}>
+              <span data-testid="workflow-settings-status" className={`mt-2 inline-flex rounded-full border px-2 py-1 font-mono-sm text-[10px] font-semibold ${statusTone(workflow.status)}`}>
                 {workflow.status}
               </span>
             </div>
@@ -290,7 +304,7 @@ export function WorkflowSettingsPanel({
             {recurring && (
               <label className="block">
                 <span className="text-body-sm text-on-surface">Timezone</span>
-                <select value={timezone || 'UTC'} onChange={(event) => setTimezone(event.target.value)} className={fieldClass}>
+                <select data-testid="workflow-timezone" value={timezone || 'UTC'} onChange={(event) => setTimezone(event.target.value)} className={fieldClass}>
                   <option value="UTC">UTC</option>
                   {storedTimezone && <option value={timezone}>{timezone}</option>}
                   {TIMEZONE_GROUPS.map(([region, zones]) => (
@@ -307,6 +321,7 @@ export function WorkflowSettingsPanel({
               </summary>
               <div className="mt-3">
                 <input
+                  data-testid="workflow-cron-expression"
                   value={cronExpression}
                   onChange={(event) => setCronExpression(event.target.value)}
                   className={`${monoFieldClass} ${cronError ? 'border-status-error' : ''}`}
@@ -337,6 +352,10 @@ export function WorkflowSettingsPanel({
             <div className="font-mono-sm text-[10px] uppercase tracking-[0.16em] text-secondary">Schedule lifecycle</div>
             {currentCron ? (
               <div className="mt-3 rounded-lg border border-border-subtle bg-surface-container-lowest p-4">
+                <div data-testid="workflow-next-run" className="mb-3 rounded-DEFAULT border border-border-muted bg-surface-container-low px-3 py-2">
+                  <div className="font-mono-sm text-[9px] uppercase tracking-[0.14em] text-on-surface-variant">Next scheduled run</div>
+                  <div className="mt-1 font-mono-sm text-[11px] text-on-surface">{formatNextRun(workflow.nextRunAt)}</div>
+                </div>
                 <p className="text-[11px] leading-5 text-on-surface-variant">
                   {workflow.status === 'PAUSED'
                     ? 'The schedule is paused. Manual executions are still allowed.'
@@ -347,6 +366,7 @@ export function WorkflowSettingsPanel({
                 {workflow.status === 'ACTIVE' && (
                   <button
                     type="button"
+                    data-testid="workflow-pause-schedule"
                     onClick={() => void handleScheduleLifecycle('pause')}
                     disabled={lifecycleBusy || dirty}
                     className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-DEFAULT border border-status-info/35 bg-status-info/10 text-body-sm font-medium text-status-info transition-colors hover:bg-status-info/15 disabled:cursor-not-allowed disabled:opacity-45"
@@ -358,6 +378,7 @@ export function WorkflowSettingsPanel({
                 {workflow.status === 'PAUSED' && (
                   <button
                     type="button"
+                    data-testid="workflow-resume-schedule"
                     onClick={() => void handleScheduleLifecycle('resume')}
                     disabled={lifecycleBusy || dirty}
                     className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-DEFAULT border border-status-success/35 bg-status-success/10 text-body-sm font-medium text-status-success transition-colors hover:bg-status-success/15 disabled:cursor-not-allowed disabled:opacity-45"

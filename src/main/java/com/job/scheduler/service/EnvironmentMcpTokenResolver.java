@@ -39,7 +39,7 @@ public class EnvironmentMcpTokenResolver implements McpTokenResolver {
 
     @Override
     public Optional<String> resolve(McpServer server) {
-        if (server.getAuthType() != McpAuthType.BEARER_TOKEN) {
+        if (server.getAuthType() == McpAuthType.NONE) {
             return Optional.empty();
         }
 
@@ -47,7 +47,7 @@ public class EnvironmentMcpTokenResolver implements McpTokenResolver {
         if (ref == null || ref.isBlank()) {
             throw new IllegalStateException(
                     "MCP server " + server.getServerId()
-                            + " uses BEARER_TOKEN auth but has no authTokenRef");
+                            + " uses " + server.getAuthType() + " auth but has no authTokenRef");
         }
         String normalizedRef = ref.trim();
 

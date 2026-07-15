@@ -4,7 +4,7 @@ import { AslCodeViewer } from '../components/AslCodeViewer';
 import { AslGraphViewer } from '../components/AslGraphViewer';
 import { StateDetailsPanel } from '../components/StateDetailsPanel';
 import { RevisionHistoryPanel } from '../components/RevisionHistoryPanel';
-import { ExecutionStatusView, type ExecutionRun } from '../components/ExecutionStatusView';
+import { ExecutionStatusView } from '../components/ExecutionStatusView';
 import { WorkspaceState } from '../components/WorkspaceState';
 import type { WorkflowResponseDTO } from '../api';
 import type { CanvasNodePositions } from '../types/workflowCanvas';
@@ -17,11 +17,9 @@ export type WorkflowRevision = {
   note: string;
   definition: any;
   canvasLayout: CanvasNodePositions;
-  runs: ExecutionRun[];
 };
 
 type Props = {
-  workflowName: string;
   workflowDetail: WorkflowResponseDTO | null;
   workflowRevisions: WorkflowRevision[];
   workflowDetailLoading: boolean;
@@ -43,7 +41,7 @@ type Props = {
 };
 
 export function WorkflowDetailPage({
-  workflowName,
+  workflowDetail,
   workflowRevisions,
   workflowDetailLoading,
   workflowDetailError,
@@ -73,8 +71,12 @@ export function WorkflowDetailPage({
             message={workflowDetailError}
             action={{ label: 'Retry', onClick: onRetry }}
           />
-        ) : activeTab === 'executions' ? (
-          <ExecutionStatusView workflowName={workflowName} revisionLabel={selectedRevision?.label || 'No revision'} runs={selectedRevision?.runs || []} />
+        ) : activeTab === 'executions' && workflowDetail ? (
+          <ExecutionStatusView
+            key={workflowDetail.id}
+            workflow={workflowDetail}
+            selectedRevisionNumber={selectedRevision ? Number(selectedRevision.id) : null}
+          />
         ) : activeTab === 'visualizer' ? (
           <AslGraphViewer
             definition={currentDefinition}

@@ -203,6 +203,161 @@ export interface WorkflowPageDTO {
   last: boolean;
 }
 
+export type WorkflowExecutionStatusDTO =
+  | 'PENDING'
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'WAITING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'CANCELED'
+  | 'TIMED_OUT';
+
+export type WorkflowExecutionTriggerDTO = 'MANUAL' | 'SCHEDULED';
+
+export interface ListWorkflowExecutionsRequest {
+  page?: number;
+  size?: number;
+  status?: WorkflowExecutionStatusDTO;
+  revision?: number;
+  trigger?: WorkflowExecutionTriggerDTO;
+  search?: string;
+}
+
+export type WorkflowRuntimeStatusDTO =
+  | 'PENDING'
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'WAITING'
+  | 'RETRY_WAIT'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'CANCELED'
+  | 'TIMED_OUT';
+
+export interface StartWorkflowExecutionRequest {
+  input: unknown;
+}
+
+export interface WorkflowExecutionResponseDTO {
+  workflowExecutionId: string;
+  status: WorkflowExecutionStatusDTO;
+  output: unknown;
+  error: string | null;
+  cause: string | null;
+  wakeAt: string | null;
+  stateExecutionAttemptId: string | null;
+}
+
+export interface WorkflowExecutionSummaryDTO {
+  id: string;
+  workflowId: string;
+  workflowDefinitionId: string;
+  definitionRevision: number;
+  runNumber: number;
+  status: WorkflowExecutionStatusDTO;
+  scheduledFor: string | null;
+  input: unknown;
+  output: unknown;
+  error: string | null;
+  cause: string | null;
+  deadlineAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowStateExecutionAttemptDTO {
+  id: string;
+  attemptNumber: number;
+  status: WorkflowRuntimeStatusDTO;
+  arguments: unknown;
+  result: unknown;
+  workerId: string | null;
+  availableAt: string | null;
+  queuedAt: string | null;
+  startedAt: string | null;
+  heartbeatAt: string | null;
+  timeoutSeconds: number | null;
+  heartbeatSeconds: number | null;
+  timeoutAt: string | null;
+  heartbeatDeadlineAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+  error: string | null;
+  cause: string | null;
+  dispatchAttemptCount: number;
+  lastDispatchError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowStateExecutionDTO {
+  id: string;
+  sequenceNumber: number;
+  stateName: string;
+  stateType: 'PASS' | 'TASK' | 'CHOICE' | 'WAIT' | 'SUCCEED' | 'FAIL' | 'PARALLEL' | 'MAP';
+  status: WorkflowRuntimeStatusDTO;
+  resource: string | null;
+  input: unknown;
+  output: unknown;
+  retryAt: string | null;
+  error: string | null;
+  cause: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  attempts: WorkflowStateExecutionAttemptDTO[];
+}
+
+export interface WorkflowExecutionScopeDTO {
+  id: string;
+  parentScopeId: string | null;
+  scopeType: 'ROOT' | 'PARALLEL_BRANCH' | 'MAP_ITERATION';
+  scopePath: string;
+  ownerStateName: string | null;
+  branchIndex: number | null;
+  itemIndex: number | null;
+  status: WorkflowRuntimeStatusDTO;
+  currentStateName: string | null;
+  currentStateInput: unknown;
+  variables: unknown;
+  output: unknown;
+  wakeAt: string | null;
+  error: string | null;
+  cause: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  stateExecutions: WorkflowStateExecutionDTO[];
+}
+
+export interface WorkflowExecutionDetailDTO {
+  execution: WorkflowExecutionSummaryDTO;
+  scopes: WorkflowExecutionScopeDTO[];
+}
+
+export interface WorkflowExecutionPageDTO {
+  content: WorkflowExecutionSummaryDTO[];
+  page: number;
+  size: number;
+  totalElements: number;
+  totalPages: number;
+  first: boolean;
+  last: boolean;
+}
+
+export interface WorkflowExecutionCancellationResponseDTO {
+  workflowExecutionId: string;
+  status: WorkflowExecutionStatusDTO;
+  error: string | null;
+  cause: string | null;
+  completedAt: string | null;
+}
+
 export type DraftStateTestStatus = 'SUCCEEDED' | 'FAILED' | 'WAITING' | 'TASK_PREVIEW';
 
 export interface DraftStateTestRequest {
@@ -286,6 +441,54 @@ export function listWorkflows(request: ListWorkflowsRequest = {}): Promise<Workf
 
 export function getWorkflow(request: GetWorkflowRequest): Promise<WorkflowResponseDTO> {
   return getJson<WorkflowResponseDTO>(`/app/v1/workflows/${request.workflowId}`);
+}
+
+export function startWorkflowExecution(
+  workflowId: string,
+  request: StartWorkflowExecutionRequest,
+): Promise<WorkflowExecutionResponseDTO> {
+  return sendJson<WorkflowExecutionResponseDTO>(
+    `/app/v1/workflows/${workflowId}/executions`,
+    'POST',
+    request,
+  );
+}
+
+export function listWorkflowExecutions(
+  workflowId: string,
+  request: ListWorkflowExecutionsRequest = {},
+): Promise<WorkflowExecutionPageDTO> {
+  const query = buildQuery({
+    page: request.page ?? 0,
+    size: request.size ?? 20,
+    status: request.status,
+    revision: request.revision,
+    trigger: request.trigger,
+    search: request.search,
+  });
+  return getJson<WorkflowExecutionPageDTO>(
+    `/app/v1/workflows/${workflowId}/executions${query}`,
+  );
+}
+
+export function getWorkflowExecution(
+  workflowId: string,
+  executionId: string,
+): Promise<WorkflowExecutionDetailDTO> {
+  return getJson<WorkflowExecutionDetailDTO>(
+    `/app/v1/workflows/${workflowId}/executions/${executionId}`,
+  );
+}
+
+export function cancelWorkflowExecution(
+  workflowId: string,
+  executionId: string,
+): Promise<WorkflowExecutionCancellationResponseDTO> {
+  return sendJson<WorkflowExecutionCancellationResponseDTO>(
+    `/app/v1/workflows/${workflowId}/executions/${executionId}/cancel`,
+    'POST',
+    {},
+  );
 }
 
 export function testDraftWorkflowState(
@@ -915,7 +1118,7 @@ export async function regenerateWorkflowAiMessage(
 }
 
 export type McpTransport = 'HTTP' | 'STDIO';
-export type McpAuthType = 'NONE' | 'BEARER_TOKEN';
+export type McpAuthType = 'NONE' | 'BEARER_TOKEN' | 'API_KEY' | 'BASIC';
 export type McpTrustLevel = 'UNTRUSTED' | 'READ_ONLY' | 'WRITE' | 'DESTRUCTIVE';
 export type McpServerStatus = 'ENABLED' | 'DISABLED';
 export type McpToolExecutionStatus = 'RUNNING' | 'SUCCESS' | 'FAILED' | 'REJECTED';
@@ -935,6 +1138,8 @@ export interface McpServerDTO {
   transport: McpTransport;
   authType: McpAuthType;
   authTokenRef: string | null;
+  authHeaderName: string | null;
+  authUsername: string | null;
   trustLevel: McpTrustLevel;
   status: McpServerStatus;
   requestTimeoutMs: number | null;
@@ -956,6 +1161,8 @@ export interface McpServerRequest {
   transport: McpTransport;
   authType: McpAuthType;
   authTokenRef?: string | null;
+  authHeaderName?: string | null;
+  authUsername?: string | null;
   trustLevel?: McpTrustLevel | null;
   status?: McpServerStatus | null;
   requestTimeoutMs?: number | null;

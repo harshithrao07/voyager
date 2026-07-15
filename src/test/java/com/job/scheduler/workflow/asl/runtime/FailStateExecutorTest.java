@@ -15,7 +15,7 @@ class FailStateExecutorTest {
     void setUp() {
         objectMapper = new ObjectMapper();
         executor = new FailStateExecutor(
-                new AslJsonataEvaluator(objectMapper, 100, 100)
+                new AslJsonataEvaluator(objectMapper, 2000, 100)
         );
     }
 

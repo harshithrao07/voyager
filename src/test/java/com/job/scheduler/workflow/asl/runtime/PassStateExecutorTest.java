@@ -17,7 +17,7 @@ class PassStateExecutorTest {
     void setUp() {
         objectMapper = new ObjectMapper();
         AslJsonataEvaluator jsonataEvaluator =
-                new AslJsonataEvaluator(objectMapper, 100, 100);
+                new AslJsonataEvaluator(objectMapper, 2000, 100);
         executor = new PassStateExecutor(
                 jsonataEvaluator,
                 new AslVariableAssignmentEvaluator(jsonataEvaluator, objectMapper)

@@ -23,8 +23,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
+import java.io.File;
 import java.net.http.HttpRequest;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -83,33 +89,86 @@ public class McpClientService {
     }
 
     /**
-     * Turns an opaque STDIO process-launch failure into an actionable
-     * {@link McpConnectionException}; every other error passes through unchanged.
+     * A launch of a resolvable STDIO command that still fails to start or finish
+     * the handshake is turned into an actionable {@link McpConnectionException};
+     * every other error (and already-mapped ones) passes through unchanged. The
+     * common "command not found" case is caught earlier by the pre-flight check.
      */
     private Throwable mapConnectionError(McpServer server, Throwable error) {
-        if (server.getTransport() == McpTransport.STDIO && isProcessLaunchFailure(error)) {
+        if (error instanceof McpConnectionException) {
+            return error;
+        }
+        if (server.getTransport() == McpTransport.STDIO && isStdioStartupFailure(error)) {
             return new McpConnectionException(
-                    "Could not launch MCP process '" + server.getCommand() + "' for server '"
-                            + server.getServerId() + "'. The command must exist in the backend's "
-                            + "environment. If Voyager runs in a container, use HTTP transport or "
-                            + "install the runtime (e.g. Node/Python) in the image. Cause: "
+                    "MCP server '" + server.getServerId() + "' (command '" + server.getCommand()
+                            + "') failed to start or complete the MCP handshake. Ensure the command "
+                            + "runs and speaks MCP over stdio in the backend's environment. Cause: "
                             + rootMessage(error),
                     error);
         }
         return error;
     }
 
-    private boolean isProcessLaunchFailure(Throwable error) {
+    private boolean isStdioStartupFailure(Throwable error) {
         for (Throwable cause = error; cause != null; cause = cause.getCause()) {
             String message = cause.getMessage();
-            if (message != null && (message.contains("Failed to start process")
-                    || message.contains("Cannot run program")
-                    || message.contains("CreateProcess error=2")
-                    || message.contains("No such file or directory"))) {
-                return true;
+            if (message != null) {
+                String lower = message.toLowerCase(java.util.Locale.ROOT);
+                if (lower.contains("failed to start process")
+                        || lower.contains("cannot run program")
+                        || lower.contains("failed to initialize")
+                        || lower.contains("failed during connect")
+                        || lower.contains("no such file")) {
+                    return true;
+                }
             }
             if (cause.getCause() == cause) {
                 break;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether {@code command} can be found in the backend's environment — a
+     * direct path that exists, or a bare name resolvable on PATH (honoring
+     * PATHEXT on Windows).
+     */
+    private boolean commandResolvable(String command) {
+        if (command == null || command.isBlank()) {
+            return false;
+        }
+        if (command.contains("/") || command.contains("\\")) {
+            return Files.exists(Path.of(command));
+        }
+        String pathEnv = System.getenv("PATH");
+        if (pathEnv == null || pathEnv.isBlank()) {
+            return false;
+        }
+        List<String> names = new ArrayList<>();
+        names.add(command);
+        boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
+        if (windows && command.indexOf('.') < 0) {
+            String pathext = System.getenv("PATHEXT");
+            String extensions = (pathext == null || pathext.isBlank()) ? ".COM;.EXE;.BAT;.CMD" : pathext;
+            for (String ext : extensions.split(";")) {
+                if (!ext.isBlank()) {
+                    names.add(command + ext.trim());
+                }
+            }
+        }
+        for (String dir : pathEnv.split(File.pathSeparator)) {
+            if (dir.isBlank()) {
+                continue;
+            }
+            for (String name : names) {
+                try {
+                    if (Files.exists(Path.of(dir, name))) {
+                        return true;
+                    }
+                } catch (RuntimeException ignored) {
+                    // Skip malformed PATH entries.
+                }
             }
         }
         return false;
@@ -180,6 +239,8 @@ public class McpClientService {
                 server.getAuthEnvVar() == null ? "" : server.getAuthEnvVar(),
                 server.getAuthType() == null ? "" : server.getAuthType().name(),
                 server.getAuthTokenRef() == null ? "" : server.getAuthTokenRef(),
+                server.getAuthHeaderName() == null ? "" : server.getAuthHeaderName(),
+                server.getAuthUsername() == null ? "" : server.getAuthUsername(),
                 server.getRequestTimeoutMs() == null ? "" : server.getRequestTimeoutMs().toString());
     }
 
@@ -238,16 +299,42 @@ public class McpClientService {
                 .builder(server.getBaseUrl())
                 .endpoint(server.getEndpoint());
 
-        if (server.getAuthType() == McpAuthType.BEARER_TOKEN) {
-            // The transport copies this seed builder per request, so the
-            // Authorization header rides on every call while it adds its own headers.
-            transportBuilder.requestBuilder(
-                    HttpRequest.newBuilder().header("Authorization", "Bearer " + resolveToken(server)));
+        HttpRequest.Builder authHeader = authHeader(server);
+        if (authHeader != null) {
+            // The transport copies this seed builder per request, so the auth
+            // header rides on every call while it adds its own headers.
+            transportBuilder.requestBuilder(authHeader);
         }
         return transportBuilder.build();
     }
 
+    /** The seeded request builder carrying this server's auth header, or null for NONE. */
+    private HttpRequest.Builder authHeader(McpServer server) {
+        return switch (server.getAuthType()) {
+            case NONE -> null;
+            case BEARER_TOKEN -> HttpRequest.newBuilder()
+                    .header("Authorization", "Bearer " + resolveToken(server));
+            case API_KEY -> HttpRequest.newBuilder()
+                    .header(server.getAuthHeaderName(), resolveToken(server));
+            case BASIC -> HttpRequest.newBuilder()
+                    .header("Authorization", "Basic " + Base64.getEncoder().encodeToString(
+                            (server.getAuthUsername() + ":" + resolveToken(server))
+                                    .getBytes(StandardCharsets.UTF_8)));
+        };
+    }
+
     private McpClientTransport buildStdioTransport(McpServer server) {
+        // Fail fast and clearly if the command isn't present in the backend's
+        // environment. Otherwise the SDK spawns on a background thread and only
+        // surfaces a generic "failed to initialize" after the request timeout.
+        if (!commandResolvable(server.getCommand())) {
+            throw new McpConnectionException(
+                    "Could not launch MCP server '" + server.getServerId() + "': command '"
+                            + server.getCommand() + "' was not found in the backend's environment. "
+                            + "If Voyager runs in a container, use HTTP transport or install the runtime "
+                            + "(e.g. Node/Python) in the image.",
+                    null);
+        }
         Map<String, String> env = new LinkedHashMap<>();
         if (server.getEnv() != null) {
             env.putAll(server.getEnv());

@@ -5,6 +5,7 @@ import com.job.scheduler.entity.StateExecutionAttempt;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -161,5 +162,18 @@ public interface StateExecutionAttemptRepository
             @Param("heartbeatDeadline") Instant heartbeatDeadline,
             @Param("runningStatus")
             com.job.scheduler.enums.StateExecutionAttemptStatus runningStatus
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+            DELETE FROM state_execution_attempts attempt
+            USING state_executions state_execution,
+                  execution_scopes scope
+            WHERE attempt.state_execution_id = state_execution.id
+              AND state_execution.execution_scope_id = scope.id
+              AND scope.workflow_execution_id IN (:executionIds)
+            """, nativeQuery = true)
+    int deleteByWorkflowExecutionIds(
+            @Param("executionIds") List<UUID> executionIds
     );
 }

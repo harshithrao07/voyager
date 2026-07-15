@@ -15,7 +15,7 @@ class ChoiceStateExecutorTest {
     void setUp() {
         objectMapper = new ObjectMapper();
         AslJsonataEvaluator evaluator =
-                new AslJsonataEvaluator(objectMapper, 100, 100);
+                new AslJsonataEvaluator(objectMapper, 2000, 100);
         executor = new ChoiceStateExecutor(
                 evaluator,
                 new AslVariableAssignmentEvaluator(evaluator, objectMapper)

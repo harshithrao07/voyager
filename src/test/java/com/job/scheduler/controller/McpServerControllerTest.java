@@ -268,6 +268,8 @@ class McpServerControllerTest {
                 McpTransport.HTTP,
                 McpAuthType.NONE,
                 null,
+                null,
+                null,
                 McpTrustLevel.READ_ONLY,
                 status,
                 null,
