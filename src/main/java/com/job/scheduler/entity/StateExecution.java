@@ -79,7 +79,10 @@ public class StateExecution {
     @Column(name = "status", nullable = false)
     private StateExecutionStatus status = StateExecutionStatus.PENDING;
 
-    @Column(name = "resource", updatable = false, length = 2048)
+    // Set when the interpreter handles DispatchTask — after the visit row is
+    // inserted — so the column must remain updatable or Hibernate silently
+    // drops the value and the worker later reads a null resource.
+    @Column(name = "resource", length = 2048)
     private String resource;
 
     @JdbcTypeCode(SqlTypes.JSON)

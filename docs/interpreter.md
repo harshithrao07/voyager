@@ -102,7 +102,7 @@ that scope.
 flowchart LR
     API["API:<br/>start execution"] --> R["runner.start<br/>/ resume"]
     W["worker finished a Task<br/>completeTaskSuccess"] --> R
-    T["wait scheduler:<br/>wakeAt is due"] --> R
+    T["timer pollers:<br/>wakeAt / availableAt due"] --> R
     WD["watchdog / recovery<br/>crash or expired lease"] --> R
     R --> D["drive loop §3"]
 ```
@@ -110,8 +110,10 @@ flowchart LR
 1. **API start** — `WorkflowController` → `runner.start(...)`.
 2. **Task completion** — `WorkflowTaskWorkerService` runs the resource, calls
    `completeTaskSuccess/Failure/Timeout`, then `resume(...)`.
-3. **Timer due** — `DueWorkflowWaitSchedulerService` polls ~1s for scopes whose
-   `wakeAt` passed and resumes them (Wait, retry backoff, Map poll backstop).
+3. **Timer due** — two ~1s pollers: `DueWorkflowWaitSchedulerService` resumes
+   scopes whose `wakeAt` passed (Wait, Map poll backstop);
+   `DueTaskAttemptSchedulerService` claims `PENDING` attempts whose
+   `availableAt` passed (retry backoff) and republishes them to Kafka.
 4. **Recovery** — watchdogs re-drive scopes/attempts dropped by a crash or
    expired heartbeat. Safe because `advance()` is idempotent (§7).
 
@@ -317,15 +319,21 @@ and resume the root, and the join would take the Retry → Catch → fail path
 When a Task attempt fails (`completeTaskFailure`):
 
 1. **Retry?** matching `Retry` with budget left → `scheduleRetry`: new attempt
-   with `availableAt = now + backoff`, scope → RETRY_WAIT (wait scheduler
-   redispatches).
+   with `availableAt = now + backoff`, scope → RETRY_WAIT
+   (`DueTaskAttemptSchedulerService` redispatches it when due). Exception: a
+   Task whose resource is a **mutating MCP call** (`?trust=WRITE` or
+   `DESTRUCTIVE`) is never auto-retried — the failure may have landed *after*
+   the side effect happened on the remote server — so its `Retry` block is
+   ignored and evaluation falls straight through to Catch.
 2. **Catch?** else matching `Catch` → `applyCatch`: bind `$states.errorOutput`,
    run the catcher's `Assign`/`Output`, move cursor to its `Next` (recorded
    SUCCEEDED — handled).
 3. **Neither** → `failState`: scope FAILED (execution FAILED if root).
 
 Compound states reuse this via `resolveCompoundFailure`, but "retry" means
-re-forking a fresh generation instead of redispatching an attempt.
+re-forking a fresh generation instead of redispatching an attempt — and the
+re-fork is likewise suppressed when any branch/iteration contains a mutating
+MCP task.
 
 ---
 
@@ -339,7 +347,7 @@ re-forking a fresh generation instead of redispatching an attempt.
 | Per-state logic | `*StateExecutor` |
 | Parallel/Map fork-join | `advanceParallel`, `advanceMap`, `ExecutionScopeCoordinator` |
 | Task completion | `completeTaskSuccess` / `completeTaskFailure` |
-| Resume triggers | `WorkflowTaskWorkerService`, `DueWorkflowWaitSchedulerService`, watchdogs |
+| Resume triggers | `WorkflowTaskWorkerService`, `DueWorkflowWaitSchedulerService`, `DueTaskAttemptSchedulerService`, watchdogs |
 | Retry / Catch | `AslRetryResolver`, `AslCatchResolver` |
 | Expressions | `AslJsonataEvaluator` |
 | Outcome types | `StateOutcome` (per-state), `InterpreterOutcome` (engine) |

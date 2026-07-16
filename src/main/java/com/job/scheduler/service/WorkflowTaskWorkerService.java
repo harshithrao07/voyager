@@ -9,11 +9,13 @@ import com.job.scheduler.workflow.task.TaskExecutionContext;
 import com.job.scheduler.workflow.task.TaskResourceException;
 import com.job.scheduler.workflow.task.TaskResourceRouter;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class WorkflowTaskWorkerService {
@@ -66,6 +68,14 @@ public class WorkflowTaskWorkerService {
             resumeAfterCatch(context, outcome);
             return;
         } catch (RuntimeException exception) {
+            // Unclassified failures surface to the workflow as an error name, but
+            // the stack is only visible here — log it or it is lost entirely.
+            log.warn(
+                    "Task resource execution failed for attempt {} ({})",
+                    attempt.getId(),
+                    context.resource(),
+                    exception
+            );
             InterpreterOutcome outcome = workflowInterpreter.completeTaskFailure(
                     attempt.getId(),
                     taskError(exception),

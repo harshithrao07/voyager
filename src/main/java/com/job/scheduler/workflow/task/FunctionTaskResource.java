@@ -28,7 +28,19 @@ public class FunctionTaskResource implements TaskResource {
 
     @Override
     public JsonNode execute(URI resource, JsonNode arguments, TaskExecutionContext context) {
-        FunctionResourceRef ref = parse(resource);
+        FunctionResourceRef ref;
+        try {
+            ref = parseFunctionResource(resource);
+        } catch (IllegalArgumentException exception) {
+            throw new TaskResourceException(
+                    TaskResourceErrors.TASK_FAILED, exception.getMessage(), exception);
+        }
+        if (ref == null) {
+            throw new TaskResourceException(
+                    TaskResourceErrors.TASK_FAILED,
+                    "Function Task resource must be voyager://function/name@version"
+            );
+        }
         return functionInvocationService.invokeForTask(
                 ref.name(),
                 ref.version(),
@@ -37,13 +49,41 @@ public class FunctionTaskResource implements TaskResource {
         );
     }
 
-    private FunctionResourceRef parse(URI resource) {
-        String path = trimSlashes(resource.getPath());
+    /**
+     * Parses a {@code voyager://function/name[@version]} resource. Returns
+     * {@code null} for any non-function resource. Throws
+     * {@link IllegalArgumentException} with a human-readable message when the
+     * resource is a function resource but malformed. Shared by execution and
+     * save-time validation so the two can never disagree.
+     */
+    public static FunctionResourceRef parseFunctionResource(String resource) {
+        if (resource == null || resource.isBlank()) {
+            return null;
+        }
+        URI uri;
+        try {
+            uri = URI.create(resource);
+        } catch (IllegalArgumentException exception) {
+            // A syntactically invalid URI only matters when it looks like ours.
+            if (resource.startsWith("voyager://" + CATEGORY)) {
+                throw new IllegalArgumentException(
+                        "Function Task resource must be voyager://function/name@version");
+            }
+            return null;
+        }
+        return parseFunctionResource(uri);
+    }
+
+    public static FunctionResourceRef parseFunctionResource(URI uri) {
+        if (uri == null
+                || !"voyager".equals(uri.getScheme())
+                || !CATEGORY.equals(uri.getHost())) {
+            return null;
+        }
+        String path = trimPathSlashes(uri.getPath());
         if (path == null || path.isBlank()) {
-            throw new TaskResourceException(
-                    TaskResourceErrors.TASK_FAILED,
-                    "Function Task resource must be voyager://function/name@version"
-            );
+            throw new IllegalArgumentException(
+                    "Function Task resource must be voyager://function/name@version");
         }
 
         String name = path;
@@ -55,15 +95,13 @@ public class FunctionTaskResource implements TaskResource {
         }
 
         if (name.isBlank()) {
-            throw new TaskResourceException(
-                    TaskResourceErrors.TASK_FAILED,
-                    "Function Task resource must include a function name"
-            );
+            throw new IllegalArgumentException(
+                    "Function Task resource must include a function name");
         }
         return new FunctionResourceRef(name, version);
     }
 
-    private Integer parseVersion(String rawVersion) {
+    private static Integer parseVersion(String rawVersion) {
         if (rawVersion == null || rawVersion.isBlank()
                 || "latest".equalsIgnoreCase(rawVersion)) {
             return null;
@@ -79,14 +117,20 @@ public class FunctionTaskResource implements TaskResource {
             }
             return parsed;
         } catch (NumberFormatException exception) {
-            throw new TaskResourceException(
-                    TaskResourceErrors.TASK_FAILED,
-                    "Function version must be latest, vN, or N"
-            );
+            throw new IllegalArgumentException(
+                    "Function version must be latest, vN, or N");
         }
     }
 
-    private record FunctionResourceRef(
+    private static String trimPathSlashes(String value) {
+        return value == null ? null : value.replaceAll("^/+|/+$", "");
+    }
+
+    /**
+     * Parsed components of a {@code voyager://function/...} Task resource.
+     * A {@code null} version means "the function's active version at run time".
+     */
+    public record FunctionResourceRef(
             String name,
             Integer version
     ) {

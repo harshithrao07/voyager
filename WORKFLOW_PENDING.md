@@ -422,7 +422,8 @@ Currently supported resources:
 
 - `voyager://send-email`
 - `voyager://webhook`
-- `mcp://serverId/toolName`
+- `voyager://mcp/serverId/toolName[?trust=LEVEL]`
+- `voyager://function/name[@version]`
 
 Pending:
 
@@ -437,6 +438,14 @@ Pending:
   in-flight handlers. Contract documented on
   `WorkflowExecutionCancellationService`.
 - [x] Resource-specific error-mapping tests added (webhook/email/MCP).
+- [x] Save-time ASL validation for registry-backed Task resources. MCP
+  resources (`AslMcpResourceValidator`) and function resources
+  (`AslFunctionResourceValidator`) are checked at save/activation: the
+  referenced server/tool or function must exist, the function must be enabled,
+  and the pinned (or active) function version must exist and be published.
+  Authoring mistakes fail in the editor instead of as runtime
+  `Mcp.ToolNotFound`/`Function.NotFound`; the runtime errors still cover drift
+  after save (e.g. a function archived later).
 - [ ] Reintroduce a cleanup Task only if it targets workflow runtime data; the
   legacy execution-log cleanup resource was intentionally removed.
   (Won't-do unless a use case needs it.)

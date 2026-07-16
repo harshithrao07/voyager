@@ -1,2 +1,4 @@
 /mvnw text eol=lf
+# Sourced by bash inside the Judge0 containers; CRLF breaks hostname values.
+/judge0.conf text eol=lf
 *.cmd text eol=crlf

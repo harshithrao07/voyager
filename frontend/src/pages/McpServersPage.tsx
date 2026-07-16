@@ -68,6 +68,12 @@ const labelClass = 'mb-1.5 flex items-center gap-1.5 text-[11px] text-on-surface
 const TRUST_LEVELS: McpTrustLevel[] = ['UNTRUSTED', 'READ_ONLY', 'WRITE', 'DESTRUCTIVE'];
 const GRANTABLE_TRUST_LEVELS: McpTrustLevel[] = ['READ_ONLY', 'WRITE', 'DESTRUCTIVE'];
 
+function trustLevelLabel(level: McpTrustLevel) {
+  return level === 'READ_ONLY'
+    ? 'Read only'
+    : level.charAt(0) + level.slice(1).toLowerCase();
+}
+
 const TRUST_META: Record<McpTrustLevel, { rank: number; text: string; bar: string; description: string }> = {
   UNTRUSTED: {
     rank: 0,
@@ -1146,10 +1152,11 @@ function PlaygroundPanel({
           <select
             value={trustCap}
             onChange={(event) => setTrustCap(event.target.value as McpTrustLevel)}
-            className="h-8 shrink-0 rounded-lg border border-border-subtle bg-surface-container-lowest px-2 font-mono-sm text-[11px] text-on-surface outline-none focus:border-primary/60"
+            aria-label="Execution cap"
+            className="h-8 min-w-[132px] shrink-0 rounded-lg border border-border-subtle bg-surface-container-lowest px-2 pr-8 text-[12px] font-medium text-on-surface outline-none focus:border-primary/60"
           >
             {GRANTABLE_TRUST_LEVELS.map((level) => (
-              <option key={level} value={level}>{level}</option>
+              <option key={level} value={level}>{trustLevelLabel(level)}</option>
             ))}
           </select>
         </div>

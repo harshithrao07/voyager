@@ -147,6 +147,12 @@ services:
     image: judge0/judge0:latest
     command: ["./scripts/workers"]
     privileged: true
+    environment:
+      # Image default is 24. Simultaneously booting Resque workers on one host
+      # race in prune_dead_workers and evict each other's registrations,
+      # leaving /workers empty and the app's judge0 health indicator DOWN.
+      # A single worker cannot race itself, and is plenty for local dev.
+      COUNT: "1"
     volumes:
       - ./judge0.conf:/judge0.conf:ro
     depends_on:

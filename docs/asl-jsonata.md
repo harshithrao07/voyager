@@ -30,7 +30,7 @@ A string is treated as an expression **only** if it's trimmed form starts with
 **input** to the current state is the JSONata root (`$`), so `$states.input.x`
 and `$.x` refer to the same thing.
 
-Evaluation is bounded by a timeout (`mapping-timeout-ms`, default 100ms) and max
+Evaluation is bounded by a timeout (`mapping-timeout-ms`, default 1000 ms) and max
 depth (`mapping-max-depth`, default 100) so a pathological expression can't freeze
 a thread.
 
@@ -116,7 +116,7 @@ forward as a variable *and* shape the next input.
 ```json
 "FetchCustomer": {
   "Type": "Task",
-  "Resource": "mcp://crm/get_customer",
+  "Resource": "voyager://mcp/crm/get-customer",
   "Arguments": {
     "id": "{% $states.input.userId %}"
   },
@@ -272,8 +272,12 @@ enforces:
 
 **Resource & Map limits:**
 
-- A `Task` `Resource` must be a valid URI with a scheme
-  (e.g. `mcp://…`, `https://…`).
+- A `Task` `Resource` must be a valid URI with a scheme. The runtime routes
+  `voyager://system/webhook`, `voyager://system/send-email`,
+  `voyager://mcp/<serverId>/<toolName>[?trust=…]`, and
+  `voyager://function/<name>[@vN]`; the two registry-backed forms also get
+  save-time existence checks (server + tool registered and synced; function
+  enabled with the referenced version published).
 - `Map` `ProcessorConfig.Mode`: only `INLINE` is implemented.
 - `Map` `ItemReader`, `ItemBatcher`, `ResultWriter`, `ToleratedFailureCount`, and
   `ToleratedFailurePercentage` are not supported and are rejected as

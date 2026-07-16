@@ -199,8 +199,11 @@ public class Judge0Client {
         int available = 0;
         if (root != null && root.isArray()) {
             for (JsonNode pool : root) {
-                total += intOrZero(pool, "size");
-                available += intOrZero(pool, "available");
+                // Judge0 reports per-queue stats where "size" is the queue
+                // backlog, "available" is registered workers, and "idle" is
+                // workers free right now.
+                total += intOrZero(pool, "available");
+                available += intOrZero(pool, "idle");
             }
         }
         return new WorkerStats(total, available);

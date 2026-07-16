@@ -15,6 +15,7 @@ import com.job.scheduler.repository.WorkflowRepository;
 import com.job.scheduler.workflow.asl.runtime.AslRuntimeCapabilityValidator;
 import com.job.scheduler.workflow.asl.validation.AslDefinitionValidationException;
 import com.job.scheduler.workflow.asl.validation.AslDefinitionValidator;
+import com.job.scheduler.workflow.asl.validation.AslFunctionResourceValidator;
 import com.job.scheduler.workflow.asl.validation.AslMcpResourceValidator;
 import com.job.scheduler.workflow.asl.validation.AslValidationResult;
 import jakarta.persistence.EntityNotFoundException;
@@ -49,6 +50,7 @@ public class WorkflowService {
     private final ObjectMapper objectMapper;
     private final AslRuntimeCapabilityValidator runtimeCapabilityValidator;
     private final AslMcpResourceValidator mcpResourceValidator;
+    private final AslFunctionResourceValidator functionResourceValidator;
 
     @Transactional
     public WorkflowResponseDTO createWorkflow(CreateWorkflowRequestDTO request) {
@@ -418,6 +420,10 @@ public class WorkflowService {
         var mcpIssues = mcpResourceValidator.validate(definition);
         if (!mcpIssues.isEmpty()) {
             throw new AslDefinitionValidationException(mcpIssues);
+        }
+        var functionIssues = functionResourceValidator.validate(definition);
+        if (!functionIssues.isEmpty()) {
+            throw new AslDefinitionValidationException(functionIssues);
         }
     }
 

@@ -7,12 +7,15 @@ import com.job.scheduler.dto.UpdateWorkflowCanvasLayoutRequestDTO;
 import com.job.scheduler.entity.Workflow;
 import com.job.scheduler.entity.WorkflowDefinition;
 import com.job.scheduler.enums.WorkflowStatus;
+import com.job.scheduler.repository.FunctionDefinitionRepository;
+import com.job.scheduler.repository.FunctionVersionRepository;
 import com.job.scheduler.repository.McpServerRepository;
 import com.job.scheduler.repository.McpToolRepository;
 import com.job.scheduler.repository.WorkflowDefinitionRepository;
 import com.job.scheduler.repository.WorkflowRepository;
 import com.job.scheduler.workflow.asl.validation.AslDefinitionValidator;
 import com.job.scheduler.workflow.asl.validation.AslDefinitionValidationException;
+import com.job.scheduler.workflow.asl.validation.AslFunctionResourceValidator;
 import com.job.scheduler.workflow.asl.validation.AslMcpResourceValidator;
 import com.job.scheduler.workflow.asl.runtime.AslRuntimeCapabilityValidator;
 import com.job.scheduler.workflow.asl.validation.AslValidationCategory;
@@ -58,6 +61,12 @@ class WorkflowServiceTest {
     @Mock
     private McpToolRepository mcpToolRepository;
 
+    @Mock
+    private FunctionDefinitionRepository functionDefinitionRepository;
+
+    @Mock
+    private FunctionVersionRepository functionVersionRepository;
+
     private ObjectMapper objectMapper;
     private WorkflowService workflowService;
 
@@ -71,7 +80,11 @@ class WorkflowServiceTest {
                 new WorkflowDefinitionCanonicalizer(objectMapper),
                 objectMapper,
                 new AslRuntimeCapabilityValidator(),
-                new AslMcpResourceValidator(mcpServerRepository, mcpToolRepository)
+                new AslMcpResourceValidator(mcpServerRepository, mcpToolRepository),
+                new AslFunctionResourceValidator(
+                        functionDefinitionRepository,
+                        functionVersionRepository
+                )
         );
     }
 
