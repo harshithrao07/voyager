@@ -218,5 +218,13 @@ class WorkflowAiConversationServiceTest {
                     }
                     return message;
                 });
+        lenient().when(messageRepository.saveAndFlush(any(WorkflowAiMessage.class)))
+                .thenAnswer(invocation -> {
+                    WorkflowAiMessage message = invocation.getArgument(0);
+                    if (message.getId() == null) {
+                        message.setId(UUID.randomUUID());
+                    }
+                    return message;
+                });
     }
 }

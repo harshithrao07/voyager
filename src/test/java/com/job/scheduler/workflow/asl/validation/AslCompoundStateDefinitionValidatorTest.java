@@ -262,6 +262,42 @@ class AslCompoundStateDefinitionValidatorTest {
     }
 
     @Test
+    void treatsDistributedMapAsValidAslButUnsupportedRuntime() {
+        AslValidationResult result = validate(machineWithState("""
+                {
+                  "Type": "Map",
+                  "Items": [],
+                  "ItemProcessor": {
+                    "ProcessorConfig": {
+                      "Mode": "DISTRIBUTED"
+                    },
+                    "StartAt": "Done",
+                    "States": {
+                      "Done": {"Type": "Succeed"}
+                    }
+                  },
+                  "End": true
+                }
+                """));
+
+        assertThat(result.isValid()).isTrue();
+        assertThat(result.isRuntimeSupported()).isFalse();
+        AslValidationIssue issue = result.issues().stream()
+                .filter(candidate -> "PROCESSOR_MODE_RUNTIME_UNSUPPORTED"
+                        .equals(candidate.code()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(issue.location()).isEqualTo(
+                "$.States.State.ItemProcessor.ProcessorConfig.Mode"
+        );
+        assertThat(issue.category())
+                .isEqualTo(AslValidationCategory.RUNTIME_SUPPORT);
+        assertThat(issue.message())
+                .isEqualTo("Map ItemProcessor ProcessorConfig Mode "
+                        + "DISTRIBUTED is not supported; use INLINE");
+    }
+
+    @Test
     void rejectsUnsupportedMapFeaturesAsRuntimeUnsupported() {
         AslValidationResult result = validate(machineWithState("""
                 {

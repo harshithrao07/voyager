@@ -52,6 +52,7 @@ class WorkflowInterpreterTest {
     private AtomicReference<StateExecution> latestState;
     private AtomicReference<StateExecutionAttempt> latestAttempt;
     private List<StateExecutionAttempt> attempts;
+    private List<String> stateResourcesAtSave;
 
     @BeforeEach
     void setUp() {
@@ -72,6 +73,7 @@ class WorkflowInterpreterTest {
         latestState = new AtomicReference<>();
         latestAttempt = new AtomicReference<>();
         attempts = new ArrayList<>();
+        stateResourcesAtSave = new ArrayList<>();
 
         lenient().when(executionScopeRepository.findByIdForUpdate(root.getId()))
                 .thenReturn(Optional.of(root));
@@ -82,6 +84,7 @@ class WorkflowInterpreterTest {
         lenient().when(stateExecutionRepository.save(any(StateExecution.class)))
                 .thenAnswer(invocation -> {
                     StateExecution stateExecution = invocation.getArgument(0);
+                    stateResourcesAtSave.add(stateExecution.getResource());
                     if (stateExecution.getId() == null) {
                         stateExecution.setId(UUID.randomUUID());
                     }
@@ -290,6 +293,8 @@ class WorkflowInterpreterTest {
         StateExecution taskState = latestState.get();
         StateExecutionAttempt attempt = latestAttempt.get();
         assertThat(taskState.getResource())
+                .isEqualTo("voyager://webhook");
+        assertThat(stateResourcesAtSave.get(0))
                 .isEqualTo("voyager://webhook");
         assertThat(attempt.getStatus())
                 .isEqualTo(StateExecutionAttemptStatus.PENDING);

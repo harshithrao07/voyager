@@ -27,6 +27,7 @@ function CollapsibleSection({
   title,
   description,
   badge,
+  testId,
   defaultOpen = false,
   children,
 }: {
@@ -34,11 +35,12 @@ function CollapsibleSection({
   title: string;
   description?: string;
   badge?: string;
+  testId?: string;
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
   return (
-    <details open={defaultOpen} className={`group ${sectionClass}`}>
+    <details data-testid={testId} open={defaultOpen} className={`group ${sectionClass}`}>
       <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
         {icon ? <span className="material-symbols-outlined text-[15px] text-on-surface-variant">{icon}</span> : null}
         <h3 className="font-mono-sm text-[11px] font-medium uppercase tracking-[0.08em] text-on-surface">{title}</h3>
@@ -566,7 +568,10 @@ export function StateEditorForm({
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+    <div
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+      data-testid={`workflow-state-editor-${type.toLowerCase()}`}
+    >
       <div className={`h-1 shrink-0 ${visual.barClass}`} />
       <div className={`${sectionClass} ${visual.softBgClass}`}>
         <div className="flex items-center justify-between gap-3">
@@ -1077,7 +1082,8 @@ export function StateEditorForm({
                 </button>
               </div>
               <p className="mt-2 text-[10px] leading-5 text-on-surface-variant/75">
-                Processor mode is INLINE. Each iteration has its own closed transition and variable scope.
+                Voyager supports INLINE Map only. Distributed Map is rejected during validation and activation.
+                Each iteration has its own closed transition and variable scope.
               </p>
             </div>
             <JsonField
@@ -1176,6 +1182,7 @@ export function StateEditorForm({
         <CollapsibleSection
           icon="restart_alt"
           title="Error handling"
+          testId="workflow-error-handling"
           description="Retry transient failures, then catch remaining errors and route to a fallback state."
           badge={retriers.length > 0 || catchers.length > 0 ? `${retriers.length + catchers.length}` : undefined}
         >

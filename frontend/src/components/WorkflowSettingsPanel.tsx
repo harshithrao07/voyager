@@ -409,6 +409,7 @@ export function WorkflowSettingsPanel({
             </div>
             <button
               type="button"
+              data-testid="workflow-archive"
               onClick={() => void handleArchive()}
               disabled={lifecycleBusy || dirty}
               className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-DEFAULT border border-status-error/35 text-body-sm font-medium text-status-error transition-colors hover:bg-status-error/10 disabled:cursor-not-allowed disabled:opacity-45"

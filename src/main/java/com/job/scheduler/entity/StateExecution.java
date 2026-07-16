@@ -79,10 +79,12 @@ public class StateExecution {
     @Column(name = "status", nullable = false)
     private StateExecutionStatus status = StateExecutionStatus.PENDING;
 
-    // Set when the interpreter handles DispatchTask — after the visit row is
-    // inserted — so the column must remain updatable or Hibernate silently
-    // drops the value and the worker later reads a null resource.
-    @Column(name = "resource", length = 2048)
+    // Set once when a Task state visit is created — before the row is first
+    // inserted — so it participates in the INSERT and stays immutable after.
+    // (A late setResource on an already-persisted row would be silently
+    // dropped by updatable = false; the interpreter must keep writing it at
+    // creation time.)
+    @Column(name = "resource", updatable = false, length = 2048)
     private String resource;
 
     @JdbcTypeCode(SqlTypes.JSON)

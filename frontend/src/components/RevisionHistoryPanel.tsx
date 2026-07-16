@@ -39,7 +39,10 @@ export function RevisionHistoryPanel({
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-label-caps font-label-caps text-on-surface-variant">Revision History</div>
-            <h2 className="mt-1 font-headline-md text-headline-md font-medium text-primary">
+            <h2
+              className="mt-1 font-headline-md text-headline-md font-medium text-primary"
+              data-testid="workflow-revision-count"
+            >
               {revisions.length} revisions
             </h2>
           </div>
@@ -74,6 +77,8 @@ export function RevisionHistoryPanel({
             <button
               key={revision.id}
               type="button"
+              data-testid={`workflow-revision-${revision.id}`}
+              data-revision-active={revision.active ? 'true' : 'false'}
               onClick={() => onRevisionSelected(revision.id)}
               className={`glass-card group relative mb-2 w-full overflow-hidden rounded-DEFAULT border p-4 text-left transition-colors ${selected ? 'border-status-info bg-surface-container-high text-primary' : 'border-border-subtle bg-surface-lowest/40 text-on-surface-variant hover:border-border-muted hover:bg-surface-container-lowest hover:text-primary'}`}
               aria-pressed={selected}

@@ -1091,6 +1091,7 @@ function App() {
 
                   <button
                     type="button"
+                    data-testid="workflow-revision-history"
                     onClick={() => setRevisionPanelOpen((open) => !open)}
                     className={`flex h-9 items-center gap-2 rounded-DEFAULT border px-3 font-body-sm text-body-sm transition-colors ${revisionPanelOpen ? 'border-status-info bg-surface-container-high text-primary' : 'border-border-subtle bg-surface-elevated text-primary hover:bg-surface-container'}`}
                     aria-pressed={revisionPanelOpen}

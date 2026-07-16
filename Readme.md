@@ -125,11 +125,11 @@ Latest JaCoCo run across the full Testcontainers-backed suite:
 
 | Metric | Covered | Total | Coverage |
 |---|---:|---:|---:|
-| Instructions | 15,692 | 18,810 | 83% |
-| Branches | 1,206 | 1,690 | 71% |
-| Lines | 3,490 | 4,197 | 83% |
-| Methods | 566 | 703 | 81% |
-| Classes | 152 | 178 | 85% |
+| Instructions | 21,430 | 28,030 | 76% |
+| Branches | 1,726 | 2,772 | 62% |
+| Lines | 4,716 | 6,194 | 76% |
+| Methods | 758 | 995 | 76% |
+| Classes | 206 | 238 | 87% |
 
 Per-package instruction coverage:
 
@@ -140,19 +140,19 @@ Per-package instruction coverage:
 | `enums` | 100% |
 | `monitoring` | 100% |
 | `producers` | 100% |
-| `scheduler` (due-job, watchdogs, DLQ) | 97% |
 | `com.job.scheduler.workflow.asl.validation` | 94% |
-| `com.job.scheduler.workflow.task` | 90% |
-| `exception` | 89% |
+| `com.job.scheduler.workflow.task` | 92% |
+| `scheduler` (due-job, watchdogs, DLQ) | 89% |
 | `handlers` | 88% |
-| `com.job.scheduler.workflow.asl.runtime` | 87% |
+| `com.job.scheduler.workflow.asl.runtime` | 88% |
+| `exception` | 87% |
 | `dto.payload` | 86% |
-| `dto` | 86% |
-| `service` (job lifecycle, worker, locks) | 78% |
-| `controller` | 59% |
+| `dto` | 83% |
+| `service` (job lifecycle, worker, locks) | 65% |
 | `com.job.scheduler` (root) | 38% |
-| `config` | 0% |
-| `com.job.scheduler.storage` | 0% |
+| `controller` | 37% |
+| `config` | 33% |
+| `com.job.scheduler.entity.converter` | 16% |
 | `utility` | 0% |
 
 Open `target/site/jacoco/index.html` after `mvn test` for the drill-down view.

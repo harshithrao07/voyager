@@ -2587,7 +2587,10 @@ export function FunctionVersionWorkbench({
   };
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-1 flex-col bg-[radial-gradient(ellipse_at_50%_0%,rgba(242,121,90,0.08),transparent_35%),linear-gradient(180deg,rgba(9,17,29,0.98),rgba(5,11,19,0.98))]">
+    <div
+      data-testid="function-workbench"
+      className="flex h-full min-h-0 w-full flex-1 flex-col bg-[radial-gradient(ellipse_at_50%_0%,rgba(242,121,90,0.08),transparent_35%),linear-gradient(180deg,rgba(9,17,29,0.98),rgba(5,11,19,0.98))]"
+    >
       <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <button
@@ -2617,6 +2620,7 @@ export function FunctionVersionWorkbench({
           {onSaveDraft && (
             <button
               type="button"
+              data-testid="function-workbench-save-draft"
               onClick={saveDraft}
               disabled={!canSaveDraftVersion}
               className="flex h-8 items-center gap-1.5 rounded-lg border border-border-subtle px-3 text-[12px] text-on-surface transition-colors hover:border-primary/45 disabled:opacity-50"
@@ -2627,6 +2631,7 @@ export function FunctionVersionWorkbench({
           )}
           <button
             type="button"
+            data-testid="function-workbench-publish"
             onClick={publish}
             disabled={!canPublishVersion || publishing}
             className="flex h-8 items-center gap-1.5 rounded-lg border border-primary bg-primary px-3 text-[12px] font-semibold text-on-primary shadow-[0_12px_32px_rgba(242,121,90,0.22)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
@@ -2672,6 +2677,7 @@ export function FunctionVersionWorkbench({
                 <span className={labelClass}>Description</span>
                 {onDescriptionChange ? (
                   <input
+                    data-testid="function-workbench-description"
                     value={description || ''}
                     onChange={(event) => onDescriptionChange(event.target.value)}
                     placeholder="What this function does"
@@ -2690,6 +2696,7 @@ export function FunctionVersionWorkbench({
             <div>
               <span className={labelClass}>Source mode</span>
               <select
+                data-testid="function-workbench-source-mode"
                 value={sourceMode}
                 onChange={(event) => switchSourceMode(event.target.value as FunctionSourceMode)}
                 className={selectControlClass}
@@ -2723,6 +2730,7 @@ export function FunctionVersionWorkbench({
               <span className="text-on-surface-variant/60">(optional)</span>
             </span>
             <input
+              data-testid="function-workbench-note"
               value={note}
               onChange={(event) => setNote(event.target.value)}
               maxLength={2000}

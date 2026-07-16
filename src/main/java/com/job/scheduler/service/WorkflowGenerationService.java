@@ -1,7 +1,10 @@
 package com.job.scheduler.service;
 
 import com.job.scheduler.dto.WorkflowGenerationResponseDTO;
+import com.job.scheduler.entity.FunctionDefinition;
 import com.job.scheduler.entity.McpTool;
+import com.job.scheduler.enums.FunctionStatus;
+import com.job.scheduler.repository.FunctionDefinitionRepository;
 import com.job.scheduler.repository.McpToolRepository;
 import com.job.scheduler.workflow.asl.validation.AslDefinitionValidator;
 import com.job.scheduler.workflow.asl.validation.AslValidationIssue;
@@ -28,6 +31,7 @@ public class WorkflowGenerationService {
 
     private final ObjectProvider<ChatLanguageModel> chatLanguageModelProvider;
     private final McpToolRepository mcpToolRepository;
+    private final FunctionDefinitionRepository functionRepository;
     private final AslDefinitionValidator validator;
     private final ObjectMapper objectMapper;
 
@@ -48,7 +52,9 @@ public class WorkflowGenerationService {
             RESOURCES:
             - voyager://system/webhook: args url(str), body(obj)
             - voyager://system/send-email: args to(str), subject(str), body(str)
-            - voyager://function/<name>@<version>: invoke a custom function (omit @version for the active one)
+
+            FUNCTIONS (voyager://function/<name>; omit @version for the active one):
+            %s
 
             MCP TOOLS (voyager://mcp/<serverId>/<toolName>; append ?trust=WRITE or ?trust=DESTRUCTIVE for non-read tools):
             %s
@@ -60,7 +66,10 @@ public class WorkflowGenerationService {
             throw new IllegalStateException("AI ChatLanguageModel is not configured. Please configure an AI provider for LangChain4j.");
         }
 
-        String systemPrompt = String.format(SYSTEM_PROMPT_TEMPLATE, buildMcpToolsDocumentation());
+        String systemPrompt = String.format(
+                SYSTEM_PROMPT_TEMPLATE,
+                buildFunctionsDocumentation(),
+                buildMcpToolsDocumentation());
         
         SystemMessage sysMsg = SystemMessage.systemMessage(systemPrompt);
         UserMessage userMsg = UserMessage.userMessage(instruction);
@@ -114,6 +123,25 @@ public class WorkflowGenerationService {
         }
 
         return new WorkflowGenerationResponseDTO(parsedDefinition, rawOutput, validationIssues);
+    }
+
+    private String buildFunctionsDocumentation() {
+        List<FunctionDefinition> functions = functionRepository
+                .findByStatusNotOrderByUpdatedAtDesc(FunctionStatus.ARCHIVED);
+        StringBuilder doc = new StringBuilder();
+        for (FunctionDefinition function : functions) {
+            // Only functions that can actually be invoked from a Task.
+            if (function.getStatus() != FunctionStatus.ENABLED || function.getActiveVersion() == null) {
+                continue;
+            }
+            doc.append("- voyager://function/").append(function.getName())
+                    .append("@v").append(function.getActiveVersion());
+            if (function.getDescription() != null && !function.getDescription().isBlank()) {
+                doc.append(" (").append(function.getDescription()).append(")");
+            }
+            doc.append("\n");
+        }
+        return doc.length() == 0 ? "None." : doc.toString();
     }
 
     private String buildMcpToolsDocumentation() {

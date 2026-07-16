@@ -258,7 +258,10 @@ function JsonBlock({ label, value }: { label: string; value: string }) {
 
 function ErrorNote({ message }: { message: string }) {
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-status-error/35 bg-status-error/10 px-3 py-2 text-[12px] leading-5 text-status-error">
+    <div
+      data-testid="mcp-error-note"
+      className="flex items-start gap-2 rounded-lg border border-status-error/35 bg-status-error/10 px-3 py-2 text-[12px] leading-5 text-status-error"
+    >
       <AlertTriangle size={14} className="mt-0.5 shrink-0" />
       <span className="min-w-0 break-words">{message}</span>
     </div>
@@ -407,6 +410,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
 
   return (
     <div
+      data-testid="mcp-server-form"
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
@@ -444,6 +448,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
           <label>
             <span className={labelClass}>Display name</span>
             <input
+              data-testid="mcp-display-name"
               value={displayName}
               onChange={(event) => {
                 const next = event.target.value;
@@ -462,6 +467,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
               {mode === 'edit' && <span className="text-on-surface-variant/60">(immutable)</span>}
             </span>
             <input
+              data-testid="mcp-server-id"
               value={serverId}
               onChange={(event) => {
                 const next = event.target.value;
@@ -483,6 +489,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
           <label className="sm:col-span-2">
             <span className={labelClass}>Transport</span>
             <select
+              data-testid="mcp-transport"
               value={transport}
               onChange={(event) => setTransport(event.target.value as McpTransport)}
               className={selectFieldClass}
@@ -496,6 +503,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
               <label>
                 <span className={labelClass}>Base URL</span>
                 <input
+                  data-testid="mcp-base-url"
                   value={baseUrl}
                   onChange={(event) => setBaseUrl(event.target.value)}
                   placeholder="https://mcp.example.com"
@@ -505,6 +513,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
               <label>
                 <span className={labelClass}>Endpoint</span>
                 <input
+                  data-testid="mcp-endpoint"
                   value={endpoint}
                   onChange={(event) => setEndpoint(event.target.value)}
                   placeholder="/mcp"
@@ -517,6 +526,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
               <label className="sm:col-span-2">
                 <span className={labelClass}>Command</span>
                 <input
+                  data-testid="mcp-command"
                   value={command}
                   onChange={(event) => setCommand(event.target.value)}
                   placeholder="npx"
@@ -526,6 +536,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
               <label className="sm:col-span-2">
                 <span className={labelClass}>Arguments (one per line)</span>
                 <textarea
+                  data-testid="mcp-args"
                   value={argsText}
                   onChange={(event) => setArgsText(event.target.value)}
                   placeholder={'-y\n@modelcontextprotocol/server-filesystem\n/data'}
@@ -551,6 +562,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
           <label>
             <span className={labelClass}>Request timeout (ms)</span>
             <input
+              data-testid="mcp-timeout"
               value={timeoutMs}
               onChange={(event) => setTimeoutMs(event.target.value)}
               placeholder="Application default"
@@ -561,6 +573,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
           <label>
             <span className={labelClass}>Authentication</span>
             <select
+              data-testid="mcp-auth-type"
               value={authType}
               onChange={(event) => setAuthType(event.target.value as McpAuthType)}
               className={selectFieldClass}
@@ -641,6 +654,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
                 key={level}
                 type="button"
                 onClick={() => setTrustLevel(level)}
+                data-testid={`mcp-trust-${level.toLowerCase().replace('_', '-')}`}
                 className={`rounded-lg border p-2.5 text-left transition-colors ${
                   trustLevel === level
                     ? 'border-primary/60 bg-primary/10'
@@ -658,6 +672,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
 
         <label className="mt-4 flex items-center gap-2.5">
           <input
+            data-testid="mcp-enable"
             type="checkbox"
             checked={enabled}
             onChange={(event) => setEnabled(event.target.checked)}
@@ -684,6 +699,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
           </button>
           <button
             type="button"
+            data-testid="mcp-save-server"
             onClick={submit}
             disabled={busy}
             className="flex h-9 items-center gap-2 rounded-lg border border-primary bg-primary px-4 text-[12px] font-semibold text-on-primary transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
@@ -705,7 +721,10 @@ function SyncResultBanner({ result, onDismiss }: { result: McpToolSyncResultDTO;
     { label: `${result.disabledCount} disabled`, className: 'border-border-subtle bg-surface-container-low text-on-surface-variant' },
   ];
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-secondary/30 bg-secondary/[0.06] px-3 py-2">
+    <div
+      data-testid="mcp-sync-result"
+      className="flex flex-wrap items-center gap-2 rounded-lg border border-secondary/30 bg-secondary/[0.06] px-3 py-2"
+    >
       <CheckCircle2 size={14} className="shrink-0 text-secondary" />
       <span className="text-[12px] text-on-surface">Tool sync finished {formatDateTime(result.syncedAt)}</span>
       {pills.map((pill) => (
@@ -778,9 +797,10 @@ function ToolsPanel({
               {probeState.message}
             </span>
           )}
-          <button
-            type="button"
-            onClick={probeLiveTools}
+            <button
+              type="button"
+              data-testid="mcp-probe-live"
+              onClick={probeLiveTools}
             disabled={probeState.busy}
             className="flex h-8 items-center gap-1.5 rounded-lg border border-border-subtle px-2.5 text-[12px] text-on-surface-variant transition-colors hover:border-secondary/45 hover:text-on-surface disabled:opacity-50"
             title="Fetch the live tool list from the server without syncing"
@@ -824,6 +844,7 @@ function ToolsPanel({
               <div key={tool.id} className={tool.enabled ? '' : 'opacity-60'}>
                 <button
                   type="button"
+                  data-testid={`mcp-tool-${tool.toolName}`}
                   onClick={() => setExpandedToolId(expanded ? null : tool.id)}
                   className="grid w-full grid-cols-[minmax(0,1.4fr)_minmax(0,2fr)_150px_110px_90px] items-center border-b border-border-subtle px-4 py-2.5 text-left transition-colors hover:bg-surface-container-low"
                 >
@@ -852,6 +873,7 @@ function ToolsPanel({
                   <div className="flex justify-end">
                     <span
                       role="button"
+                      data-testid={`mcp-tool-run-${tool.toolName}`}
                       tabIndex={tool.enabled && server.status === 'ENABLED' ? 0 : -1}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -933,6 +955,7 @@ function ExecutionsPanel({
             <button
               key={option}
               type="button"
+              data-testid={`mcp-execution-filter-${option.toLowerCase()}`}
               onClick={() => setStatusFilter(option)}
               className={`rounded-md px-2 py-1 font-mono-sm text-[10px] tracking-[0.04em] transition-colors ${
                 statusFilter === option
@@ -992,6 +1015,7 @@ function ExecutionsPanel({
               <div key={execution.id}>
                 <button
                   type="button"
+                  data-testid={`mcp-execution-${execution.id}`}
                   onClick={() => setExpandedId(expanded ? null : execution.id)}
                   className={`grid w-full grid-cols-[170px_minmax(0,1fr)_130px_110px_130px] items-center border-b border-border-subtle px-4 py-2.5 text-left transition-colors hover:bg-surface-container-low ${
                     expanded ? 'bg-surface-container-low/70' : ''
@@ -1131,6 +1155,7 @@ function PlaygroundPanel({
         <label>
           <span className={labelClass}>Tool</span>
           <select
+            data-testid="mcp-playground-tool"
             value={selectedTool?.toolName ?? ''}
             onChange={(event) => onSelectTool(event.target.value)}
             className={selectFieldClass}
@@ -1150,6 +1175,7 @@ function PlaygroundPanel({
             Execution cap — calls needing more trust are rejected before dispatch.
           </span>
           <select
+            data-testid="mcp-playground-trust"
             value={trustCap}
             onChange={(event) => setTrustCap(event.target.value as McpTrustLevel)}
             aria-label="Execution cap"
@@ -1173,6 +1199,7 @@ function PlaygroundPanel({
             </button>
           </span>
           <textarea
+            data-testid="mcp-playground-args"
             value={argsText}
             onChange={(event) => setArgsText(event.target.value)}
             rows={10}
@@ -1190,6 +1217,7 @@ function PlaygroundPanel({
 
         <button
           type="button"
+          data-testid="mcp-run-tool"
           onClick={run}
           disabled={running || !selectedTool}
           className="flex h-10 items-center justify-center gap-2 rounded-lg border border-primary bg-primary px-4 text-[13px] font-semibold text-on-primary shadow-[0_16px_42px_rgba(242,121,90,0.24)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
@@ -1229,7 +1257,9 @@ function PlaygroundPanel({
               </pre>
             ))}
             {result.structuredContent !== undefined && result.structuredContent !== null && (
-              <JsonBlock label="Structured content" value={prettyJson(result.structuredContent)} />
+              <div data-testid="mcp-playground-result">
+                <JsonBlock label="Structured content" value={prettyJson(result.structuredContent)} />
+              </div>
             )}
             {(result.content ?? []).length === 0 && result.structuredContent == null && (
               <div className="rounded-lg border border-dashed border-border-subtle px-3 py-8 text-center text-[12px] text-on-surface-variant">
@@ -1380,6 +1410,7 @@ function ServerDetail({
         <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
+            data-testid="mcp-toggle-status"
             onClick={toggleStatus}
             disabled={statusBusy}
             className={`flex h-9 items-center gap-2 rounded-lg border px-3 text-[12px] transition-colors disabled:opacity-50 ${
@@ -1394,6 +1425,7 @@ function ServerDetail({
           </button>
           <button
             type="button"
+            data-testid="mcp-edit-server"
             onClick={onEdit}
             className="flex h-9 items-center gap-2 rounded-lg border border-border-subtle px-3 text-[12px] text-on-surface-variant transition-colors hover:border-primary/45 hover:text-on-surface"
           >
@@ -1402,6 +1434,7 @@ function ServerDetail({
           </button>
           <button
             type="button"
+            data-testid="mcp-sync-tools"
             onClick={syncTools}
             disabled={syncBusy}
             className="flex h-9 items-center gap-2 rounded-lg border border-primary bg-primary px-3 text-[12px] font-semibold text-on-primary shadow-[0_16px_42px_rgba(242,121,90,0.24)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
@@ -1497,6 +1530,7 @@ function ServerDetail({
               <button
                 key={tab.id}
                 type="button"
+                data-testid={`mcp-tab-${tab.id}`}
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex h-full items-center gap-2 border-b-2 text-[13px] transition-colors ${
                   activeTab === tab.id
@@ -1639,7 +1673,8 @@ function ServerList({
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle bg-surface-base/60 px-5 py-3">
         <label className="flex h-9 min-w-[220px] flex-1 items-center gap-2 rounded-lg border border-border-subtle bg-surface-container-lowest px-3">
           <Search size={14} className="text-on-surface-variant" />
-          <input
+            <input
+            data-testid="mcp-search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search servers..."
@@ -1651,6 +1686,7 @@ function ServerList({
         {filterButton('DISABLED', 'Disabled', disabledCount)}
         <button
           type="button"
+          data-testid="mcp-register-open"
           onClick={onRegister}
           className="flex h-9 items-center gap-2 rounded-lg border border-primary/45 bg-primary px-3 text-[13px] font-semibold text-on-primary shadow-[0_16px_42px_rgba(242,121,90,0.24)] transition-colors hover:bg-primary-fixed-dim"
         >
@@ -1680,6 +1716,9 @@ function ServerList({
               <button
                 key={server.id}
                 type="button"
+                data-testid={`mcp-server-card-${server.serverId}`}
+                data-mcp-server-id={server.serverId}
+                data-mcp-status={server.status}
                 onClick={() => onSelect(server.serverId)}
                 className="group flex flex-col rounded-lg border border-border-subtle bg-surface-container-lowest/60 p-4 text-left transition-colors hover:border-primary/55 hover:bg-[linear-gradient(145deg,rgba(242,121,90,0.1),rgba(14,23,34,0.78))]"
               >
