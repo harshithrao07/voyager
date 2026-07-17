@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Braces, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-  acceptWorkflowAiPlan,
   continueWorkflowAiConversation,
+  createAiModel,
   createWorkflow,
   createWorkflowRevision,
   deleteAiModel,
@@ -15,7 +15,7 @@ import {
   listMcpServers,
   listMcpKnownTools,
   regenerateWorkflowAiMessage,
-  reviewWorkflowAiAsl,
+  saveWorkflowAiWorkspace,
   setAiModelEnabled,
   startWorkflowAiConversation,
   testAiModel,
@@ -23,19 +23,17 @@ import {
   type FunctionDefinitionDTO,
   type McpToolDTO,
   type WorkflowAiMessageDTO,
-  type WorkflowAiConversationSummaryDTO,
   type WorkflowAiResponse,
-  type WorkflowAiStage,
+  type WorkflowAiWorkspaceRequest,
   type WorkflowDefinitionResponseDTO,
   type WorkflowResponseDTO,
 } from '../api';
-import { AslReviewPanel } from './workflow-create/AslReviewPanel';
 import { ChatComposer } from './workflow-create/ChatComposer';
-import { ChatMessageList } from './workflow-create/ChatMessageList';
 import { ManualWorkflowEditor } from './workflow-create/ManualWorkflowEditor';
 import { ModelSettingsModal } from './workflow-create/ModelSettingsModal';
+import { cloudProviderPreset } from './workflow-create/modelProviders';
+import { SidebarAiChat } from './workflow-create/SidebarAiChat';
 import { WorkflowAiEmptyState } from './workflow-create/WorkflowAiEmptyState';
-import { WorkflowStageStrip } from './workflow-create/WorkflowStageStrip';
 import type { TaskResourceOption } from './workflow-create/StateEditorForm';
 import { filterCanvasPositionsForDefinition } from './workflow-create/nestedMachine';
 import { collectAslIssues } from '../utils/aslValidation';
@@ -43,7 +41,6 @@ import { validateCron } from '../utils/cronValidation';
 import type {
   AiModel,
   ChatMessage,
-  ChatSnapshot,
   DefinitionMode,
   ModelSettingsTab,
   WorkflowPreview,
@@ -73,9 +70,8 @@ type Props = {
   ) => void | Promise<void>;
   onUnsavedChangesChange?: (dirty: boolean) => void;
   onNavigate?: (path: string, options?: { replace?: boolean }) => void;
+  onConversationUpdated?: () => void;
   routeChatId?: string;
-  onChatStarted?: (chat: WorkflowAiConversationSummaryDTO) => void;
-  onChatUpdated?: (previousId: string | null, chat: WorkflowAiConversationSummaryDTO) => void;
   revisionEdit?: WorkflowRevisionEditContext;
 };
 
@@ -139,18 +135,6 @@ function newChatMessageId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function newConversationRouteId() {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
-  }
-
-  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function chatStorageKey(chatId: string) {
-  return `voyager-chat:${chatId}`;
-}
-
 const lastAiModelStorageKey = 'voyager:last-ai-model-id';
 
 function readLastSelectedModelId() {
@@ -171,36 +155,13 @@ function writeLastSelectedModelId(value: string) {
   }
 }
 
-function chatSummary(
-  id: string,
-  name: string,
-  stage: WorkflowAiStage,
-  initialInstruction: string,
-): WorkflowAiConversationSummaryDTO {
-  const timestamp = new Date().toISOString();
-  return {
-    id,
-    name: name.trim() || initialInstruction.trim().slice(0, 48) || 'New workflow chat',
-    stage,
-    initialInstruction,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
-}
-
-function formatMessageTime(value: number) {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
-}
-
 function chatMessageFromDto(message: WorkflowAiMessageDTO): ChatMessage {
   return {
     id: message.id,
     role: message.role === 'USER' ? 'user' : 'assistant',
     content: message.content,
     createdAt: new Date(message.createdAt).getTime(),
+    persisted: true,
     modelConfigId: message.modelConfigId,
     modelDisplayName: message.modelDisplayName,
     durationMs: message.durationMs,
@@ -213,22 +174,39 @@ function chatMessageFromDto(message: WorkflowAiMessageDTO): ChatMessage {
   };
 }
 
+function visibleChatMessages(messages: WorkflowAiMessageDTO[]) {
+  const supersededMessageIds = new Set(
+    messages
+      .map((message) => message.regeneratedFromMessageId)
+      .filter((messageId): messageId is string => Boolean(messageId)),
+  );
+  return messages
+    .filter((message) => message.role !== 'SYSTEM')
+    .filter((message) => !supersededMessageIds.has(message.id))
+    .map(chatMessageFromDto);
+}
+
 function aiModelFromDto(model: {
   id: string;
   displayName: string;
+  providerType: 'OPENAI_COMPATIBLE_LOCAL' | 'OPENAI_COMPATIBLE_API';
   baseUrl: string;
   modelName: string;
   enabled?: boolean;
   defaultModel?: boolean;
+  credentialRef?: string | null;
+  hasCredential?: boolean;
 }): AiModel {
   return {
     id: model.id,
     label: model.displayName || model.modelName,
     endpoint: model.baseUrl,
     modelName: model.modelName,
-    provider: 'local',
+    provider: model.providerType === 'OPENAI_COMPATIBLE_API' ? 'api' : 'local',
     enabled: model.enabled,
     defaultModel: model.defaultModel,
+    credentialRef: model.credentialRef,
+    hasCredential: model.hasCredential,
   };
 }
 
@@ -249,19 +227,12 @@ export function CreateWorkflowView({
   onWorkflowRevisionSaved,
   onUnsavedChangesChange,
   onNavigate,
+  onConversationUpdated,
   routeChatId,
-  onChatStarted,
-  onChatUpdated,
   revisionEdit,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [conversationStage, setConversationStage] = useState<WorkflowAiStage>('COLLECTING_WORKFLOW_DETAILS');
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const [editingMessageContent, setEditingMessageContent] = useState('');
-  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
-  const [chatEntered, setChatEntered] = useState(false);
   const [mode, setMode] = useState<DefinitionMode>(revisionEdit ? 'manual' : 'ai');
   const [name, setName] = useState(revisionEdit?.workflow.name || '');
   const [maxAttempts, setMaxAttempts] = useState(revisionEdit?.workflow.maxAttempts ?? 3);
@@ -282,12 +253,17 @@ export function CreateWorkflowView({
   const [modelPickerPlacement, setModelPickerPlacement] = useState<'down' | 'up'>('down');
   const [addModelOpen, setAddModelOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<ModelSettingsTab>('add');
-  const [localApiKey, setLocalApiKey] = useState('');
-  const [showLocalApiKey, setShowLocalApiKey] = useState(false);
+  const [localCredentialRef, setLocalCredentialRef] = useState('');
+  const [showLocalCredentialRef, setShowLocalCredentialRef] = useState(false);
   const [localActionsOpen, setLocalActionsOpen] = useState(false);
   const [apiProvider, setApiProvider] = useState('DeepSeek');
   const [apiModelName, setApiModelName] = useState('');
-  const [apiEndpoint, setApiEndpoint] = useState('https://api.deepseek.com/v1');
+  const [apiEndpoint, setApiEndpoint] = useState('https://api.deepseek.com');
+  const [apiCredentialRef, setApiCredentialRef] = useState('');
+  const [apiActionsOpen, setApiActionsOpen] = useState(false);
+  const [apiActionMessage, setApiActionMessage] = useState<string | null>(null);
+  const [apiActionSuccess, setApiActionSuccess] = useState<boolean | null>(null);
+  const [apiDiscoveredModelNames, setApiDiscoveredModelNames] = useState<string[]>([]);
   const [modelActionMessage, setModelActionMessage] = useState<string | null>(null);
   const [modelActionSuccess, setModelActionSuccess] = useState<boolean | null>(null);
   const [addingModel, setAddingModel] = useState(false);
@@ -304,24 +280,32 @@ export function CreateWorkflowView({
     revisionEdit?.baseRevision.canvasLayout || {},
   );
   const [validationIssues, setValidationIssues] = useState<string[]>([]);
+  const [conversationLoading, setConversationLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [accepting, setAccepting] = useState(false);
   const [revisionSaveCompleted, setRevisionSaveCompleted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedThinkingMessageIds, setExpandedThinkingMessageIds] = useState<Set<string>>(() => new Set());
   const modelPickerRef = useRef<HTMLDivElement | null>(null);
   const localActionsRef = useRef<HTMLDivElement | null>(null);
+  const apiActionsRef = useRef<HTMLDivElement | null>(null);
   const instructionTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const chatScrollRef = useRef<HTMLDivElement | null>(null);
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
-  const lastLoadedRouteChatIdRef = useRef<string | null>(null);
-  const suppressNextSnapshotSaveRef = useRef(false);
+  const regeneratingRef = useRef(false);
   const streamingTimerRefs = useRef<number[]>([]);
+  const lastLoadedRouteChatIdRef = useRef<string | null>(null);
+  const lastSavedWorkspaceRef = useRef<string | null>(null);
+  const workspaceSaveTimerRef = useRef<number | null>(null);
+  const pendingWorkspaceSaveRef = useRef<(() => void) | null>(null);
+  const workspaceSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const workspaceSaveErrorShownRef = useRef(false);
 
   const hasSelectedModel = models.some((model) => model.id === modelId);
-  const canGenerate = instruction.trim().length > 0 && !generating && !saving && !accepting && hasSelectedModel;
+  const canGenerate = instruction.trim().length > 0
+    && !conversationLoading
+    && !generating
+    && !saving
+    && hasSelectedModel;
   const definitionJsonStatus = useMemo(() => {
     try {
       parseDefinition(definitionText);
@@ -344,6 +328,40 @@ export function CreateWorkflowView({
       description: `MCP · ${tool.serverId}`,
     })),
   ]), [customFunctions, mcpTools]);
+
+  const enqueueWorkspaceSave = (
+    targetConversationId: string,
+    request: WorkflowAiWorkspaceRequest,
+    signature: string,
+  ) => {
+    workspaceSaveQueueRef.current = workspaceSaveQueueRef.current
+      .catch(() => undefined)
+      .then(() => saveWorkflowAiWorkspace(targetConversationId, request))
+      .then(() => {
+        if (lastLoadedRouteChatIdRef.current === targetConversationId) {
+          lastSavedWorkspaceRef.current = signature;
+        }
+        workspaceSaveErrorShownRef.current = false;
+        onConversationUpdated?.();
+      })
+      .catch((err: Error) => {
+        console.warn('Could not autosave conversation workspace.', err);
+        if (!workspaceSaveErrorShownRef.current) {
+          workspaceSaveErrorShownRef.current = true;
+          toast.error('Could not save this conversation workspace.');
+        }
+      });
+  };
+
+  const flushPendingWorkspaceSave = () => {
+    if (workspaceSaveTimerRef.current !== null) {
+      window.clearTimeout(workspaceSaveTimerRef.current);
+      workspaceSaveTimerRef.current = null;
+    }
+    const pendingSave = pendingWorkspaceSaveRef.current;
+    pendingWorkspaceSaveRef.current = null;
+    pendingSave?.();
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -381,6 +399,7 @@ export function CreateWorkflowView({
         setModelPickerOpen(false);
         setAddModelOpen(false);
         setLocalActionsOpen(false);
+        setApiActionsOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -552,117 +571,164 @@ export function CreateWorkflowView({
     }
   }, [modelId]);
 
+  useEffect(() => {
+    if (!routeChatId || revisionEdit || lastLoadedRouteChatIdRef.current === routeChatId) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    flushPendingWorkspaceSave();
+    lastLoadedRouteChatIdRef.current = routeChatId;
+    lastSavedWorkspaceRef.current = null;
+    setConversationLoading(true);
+    setMessages([]);
+    setConversationId(null);
+    setValidationIssues([]);
+    setExpandedThinkingMessageIds(new Set());
+    setCanvasNodePositions({});
+    setError(null);
+
+    getWorkflowAiConversation(routeChatId)
+      .then((conversation) => {
+        if (cancelled) return;
+        const restoredMessages = visibleChatMessages(conversation.messages);
+        const restoredDefinition = conversation.aslDefinition
+          || conversation.draftWorkflowPayload?.definition
+          || starterDefinition;
+        const restoredCanvasLayout = conversation.canvasLayout || {};
+        const restoredName = conversation.workspaceSettings?.name
+          ?? conversation.draftWorkflowPayload?.name
+          ?? conversation.name
+          ?? '';
+        const restoredMaxAttempts = conversation.workspaceSettings?.maxAttempts
+          ?? conversation.draftWorkflowPayload?.maxAttempts
+          ?? 3;
+        const restoredCronExpression = conversation.workspaceSettings?.cronExpression
+          ?? conversation.draftWorkflowPayload?.cronExpression
+          ?? '';
+        const restoredTimezone = conversation.workspaceSettings?.timezone
+          ?? conversation.draftWorkflowPayload?.timezone
+          ?? 'UTC';
+        const restoredIdempotencyKey = conversation.workspaceSettings?.idempotencyKey
+          ?? conversation.draftWorkflowPayload?.idempotencyKey
+          ?? newIdempotencyKey();
+        const restoredWorkspace: WorkflowAiWorkspaceRequest = {
+          definition: restoredDefinition,
+          canvasLayout: restoredCanvasLayout,
+          settings: {
+            name: restoredName,
+            maxAttempts: restoredMaxAttempts,
+            cronExpression: restoredCronExpression,
+            timezone: restoredTimezone,
+            idempotencyKey: restoredIdempotencyKey,
+          },
+        };
+        setMessages(restoredMessages);
+        setConversationId(conversation.id);
+        setMode('manual');
+        if (conversation.modelConfigId) {
+          setModelId(conversation.modelConfigId);
+          writeLastSelectedModelId(conversation.modelConfigId);
+        }
+        setName(restoredName);
+        setMaxAttempts(restoredMaxAttempts);
+        setCronExpression(restoredCronExpression);
+        setTimezone(restoredTimezone);
+        setIdempotencyKey(restoredIdempotencyKey);
+        setDefinitionText(formatJson(restoredDefinition));
+        setCanvasNodePositions(restoredCanvasLayout);
+        // Hydration is read-only. Treat the values returned (including legacy fallbacks) as the
+        // saved baseline so merely opening an old chat does not autosave it and refresh updatedAt.
+        lastSavedWorkspaceRef.current = JSON.stringify(restoredWorkspace);
+        setExpandedThinkingMessageIds(new Set(
+          restoredMessages
+            .filter((message) => Boolean(message.thinkingContent))
+            .map((message) => message.id),
+        ));
+      })
+      .catch((err: Error) => {
+        if (cancelled) return;
+        lastLoadedRouteChatIdRef.current = null;
+        const message = `Could not load conversation: ${err.message}`;
+        setError(message);
+        toast.error(message);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setConversationLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [routeChatId, revisionEdit]);
+
+  useEffect(() => {
+    if (workspaceSaveTimerRef.current !== null) {
+      window.clearTimeout(workspaceSaveTimerRef.current);
+      workspaceSaveTimerRef.current = null;
+    }
+    pendingWorkspaceSaveRef.current = null;
+
+    if (!conversationId || conversationLoading || revisionEdit) return;
+
+    let definition: any;
+    try {
+      definition = parseDefinition(definitionText);
+    } catch {
+      // Keep the last valid saved workspace while the code editor contains incomplete JSON.
+      return;
+    }
+    if (localValidationIssues.length > 0) {
+      // A rejected AI candidate or incomplete manual edit may stay visible in the editor, but it
+      // must never replace the last valid authoritative ASL stored for this conversation.
+      return;
+    }
+
+    const request: WorkflowAiWorkspaceRequest = {
+      definition,
+      canvasLayout: canvasNodePositions,
+      settings: {
+        name,
+        maxAttempts,
+        cronExpression,
+        timezone,
+        idempotencyKey,
+      },
+    };
+    const signature = JSON.stringify(request);
+    if (signature === lastSavedWorkspaceRef.current) return;
+
+    const executeSave = () => enqueueWorkspaceSave(conversationId, request, signature);
+    pendingWorkspaceSaveRef.current = executeSave;
+    workspaceSaveTimerRef.current = window.setTimeout(() => {
+      workspaceSaveTimerRef.current = null;
+      pendingWorkspaceSaveRef.current = null;
+      executeSave();
+    }, 400);
+  }, [
+    canvasNodePositions,
+    conversationId,
+    conversationLoading,
+    cronExpression,
+    definitionText,
+    idempotencyKey,
+    maxAttempts,
+    name,
+    localValidationIssues,
+    revisionEdit,
+    timezone,
+  ]);
+
+  useEffect(() => () => {
+    flushPendingWorkspaceSave();
+  }, []);
+
   useEffect(() => () => {
     streamingTimerRefs.current.forEach((timerId) => window.clearTimeout(timerId));
     streamingTimerRefs.current = [];
   }, []);
-
-  useEffect(() => {
-    if (!routeChatId || lastLoadedRouteChatIdRef.current === routeChatId) {
-      return;
-    }
-
-    lastLoadedRouteChatIdRef.current = routeChatId;
-
-    try {
-      const rawSnapshot = window.sessionStorage.getItem(chatStorageKey(routeChatId));
-      if (!rawSnapshot) {
-        if (messages.length > 0 && (!conversationId || conversationId === routeChatId)) {
-          return;
-        }
-
-        setMessages([]);
-        setError(null);
-        getWorkflowAiConversation(routeChatId)
-          .then((conversation) => {
-            setMessages(conversation.messages.map(chatMessageFromDto));
-            setIsEditorOpen(Boolean(conversation.aslDefinition));
-            setConversationId(conversation.id);
-            setConversationStage(conversation.stage);
-            if (conversation.modelConfigId) {
-              selectModel(conversation.modelConfigId);
-            }
-            setName(conversation.draftWorkflowPayload?.name || conversation.name || '');
-            setMaxAttempts(conversation.draftWorkflowPayload?.maxAttempts ?? 3);
-            setCronExpression(conversation.draftWorkflowPayload?.cronExpression || '');
-            setTimezone(conversation.draftWorkflowPayload?.timezone || 'UTC');
-            setIdempotencyKey(conversation.draftWorkflowPayload?.idempotencyKey || newIdempotencyKey());
-            setDefinitionText(formatJson(conversation.aslDefinition || conversation.draftWorkflowPayload?.definition || starterDefinition));
-            setValidationIssues([]);
-            setError(null);
-          })
-          .catch((err: Error) => {
-            setError(`Could not load chat: ${err.message}`);
-          });
-        return;
-      }
-
-      const snapshot = JSON.parse(rawSnapshot) as Partial<ChatSnapshot>;
-      suppressNextSnapshotSaveRef.current = true;
-
-      setMessages(snapshot.messages || []);
-      setIsEditorOpen(Boolean(snapshot.isEditorOpen));
-      setConversationId(snapshot.conversationId || null);
-      setConversationStage(snapshot.conversationStage || 'COLLECTING_WORKFLOW_DETAILS');
-      setName(snapshot.name || '');
-      setMaxAttempts(snapshot.maxAttempts ?? 3);
-      setCronExpression(snapshot.cronExpression || '');
-      setTimezone(snapshot.timezone || 'UTC');
-      setIdempotencyKey(snapshot.idempotencyKey || newIdempotencyKey());
-      setDefinitionText(snapshot.definitionText || formatJson(starterDefinition));
-      setValidationIssues(snapshot.validationIssues || []);
-      if (snapshot.modelId) {
-        selectModel(snapshot.modelId);
-      }
-      setError(snapshot.error || null);
-    } catch {
-      window.sessionStorage.removeItem(chatStorageKey(routeChatId));
-    }
-  }, [routeChatId, messages.length, conversationId]);
-
-  useEffect(() => {
-    if (!routeChatId) {
-      return;
-    }
-
-    if (suppressNextSnapshotSaveRef.current) {
-      suppressNextSnapshotSaveRef.current = false;
-      return;
-    }
-
-    const snapshot: ChatSnapshot = {
-      messages,
-      isEditorOpen,
-      conversationId,
-      conversationStage,
-      name,
-      maxAttempts,
-      cronExpression,
-      timezone,
-      idempotencyKey,
-      definitionText,
-      validationIssues,
-      modelId,
-      error,
-    };
-
-    window.sessionStorage.setItem(chatStorageKey(routeChatId), JSON.stringify(snapshot));
-  }, [
-    routeChatId,
-    messages,
-    isEditorOpen,
-    conversationId,
-    conversationStage,
-    name,
-    maxAttempts,
-    cronExpression,
-    timezone,
-    idempotencyKey,
-    definitionText,
-    validationIssues,
-    modelId,
-    error,
-  ]);
 
   const scheduleStreamingTick = (callback: () => void, delayMs: number) => {
     const timerId = window.setTimeout(() => {
@@ -682,12 +748,13 @@ export function CreateWorkflowView({
     assistantMessage: ChatMessage,
     replaceMessageId?: string,
   ) => {
-    const targetId = replaceMessageId || assistantMessage.id;
+    // Stream under the server's message id, not the local placeholder it replaces: the id is what
+    // regenerate posts back, and a placeholder id 404s.
+    const targetId = assistantMessage.id;
     const fullThinking = assistantMessage.thinkingContent || '';
     const fullContent = assistantMessage.content || '';
     const streamingMessage: ChatMessage = {
       ...assistantMessage,
-      id: targetId,
       content: '',
       thinkingContent: fullThinking ? '' : null,
       streamingStatus: 'streaming',
@@ -738,7 +805,6 @@ export function CreateWorkflowView({
     const finish = () => {
       updateMessageById(targetId, () => ({
         ...assistantMessage,
-        id: targetId,
         streamingStatus: undefined,
         streamingPhase: undefined,
       }));
@@ -771,13 +837,13 @@ export function CreateWorkflowView({
     response: WorkflowAiResponse,
     options: { replaceMessageId?: string; animate?: boolean } = {},
   ) => {
+    lastLoadedRouteChatIdRef.current = response.conversationId;
     setConversationId(response.conversationId);
-    setConversationStage(response.stage);
     setValidationIssues(response.validationIssues || []);
+    onConversationUpdated?.();
 
     if (response.aslDefinition) {
       setDefinitionText(formatJson(response.aslDefinition));
-      setIsEditorOpen(response.stage === 'ASL_READY' || response.stage === 'ASL_UNDER_REVIEW' || response.stage === 'COLLECTING_SCHEDULE_DETAILS');
     }
 
     if (response.draftWorkflowPayload) {
@@ -807,7 +873,7 @@ export function CreateWorkflowView({
     if (assistantMessage.thinkingContent) {
       setExpandedThinkingMessageIds((current) => {
         const next = new Set(current);
-        next.add(options.replaceMessageId || assistantMessage.id);
+        next.add(assistantMessage.id);
         return next;
       });
     }
@@ -820,18 +886,30 @@ export function CreateWorkflowView({
     setMessages((prev) => {
       if (options.replaceMessageId) {
         return prev.map((message) => (
-          message.id === options.replaceMessageId
-            ? { ...assistantMessage, id: options.replaceMessageId }
-            : message
+          message.id === options.replaceMessageId ? assistantMessage : message
         ));
       }
       return [...prev, assistantMessage];
     });
   };
 
-  const handleGenerate = async (overrideInstruction?: string) => {
+  // The assistant only benefits from the editor's ASL once it actually has states; an empty
+  // starter definition would just be noise in the prompt.
+  const currentEditorDefinition = () => {
+    try {
+      const parsed = parseDefinition(definitionText);
+      return Object.keys(parsed.States || {}).length > 0 ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const handleGenerate = async (
+    overrideInstruction?: string,
+    options: { includeDefinition?: boolean } = {},
+  ) => {
     const currentInstruction = (overrideInstruction ?? instruction).trim();
-    if (!currentInstruction || generating || saving || accepting) return;
+    if (!currentInstruction || conversationLoading || generating || saving) return;
 
     const selectedModelForSend = models.find((model) => model.id === modelId) || null;
     if (!selectedModelForSend) {
@@ -847,7 +925,6 @@ export function CreateWorkflowView({
 
     const sentAt = Date.now();
     const startingNewConversation = !conversationId;
-    const provisionalConversationId = startingNewConversation ? newConversationRouteId() : null;
     const processingMessageId = newChatMessageId();
     
     setMessages((prev) => [
@@ -871,19 +948,14 @@ export function CreateWorkflowView({
       },
     ]);
     setInstruction('');
-    if (provisionalConversationId && onNavigate) {
-      onChatStarted?.(chatSummary(
-        provisionalConversationId,
-        currentInstruction,
-        'COLLECTING_WORKFLOW_DETAILS',
-        currentInstruction,
-      ));
-      onNavigate(`/c/${provisionalConversationId}`);
-    }
-
+    // The empty state is only an entry point: once a conversation exists the workflow lives in the
+    // manual editor, with this conversation continuing in its sidebar.
+    setMode('manual');
     setGenerating(true);
     setError(null);
     setValidationIssues([]);
+
+    const editorDefinition = options.includeDefinition ? currentEditorDefinition() : null;
 
     try {
       const response = conversationId
@@ -891,31 +963,20 @@ export function CreateWorkflowView({
             conversationId,
             message: currentInstruction,
             modelConfigId: modelId || null,
+            definition: editorDefinition,
           })
         : await startWorkflowAiConversation({
             instruction: currentInstruction,
             modelConfigId: modelId || null,
             userDateTime: new Date().toISOString(),
+            definition: editorDefinition,
           });
       applyWorkflowAiResponse(response, {
         replaceMessageId: processingMessageId,
         animate: true,
       });
-      if (provisionalConversationId && onNavigate && response.conversationId !== provisionalConversationId) {
-        onChatUpdated?.(provisionalConversationId, chatSummary(
-          response.conversationId,
-          response.conversationName,
-          response.stage,
-          currentInstruction,
-        ));
-        onNavigate(`/c/${response.conversationId}`, { replace: true });
-      } else {
-        onChatUpdated?.(conversationId, chatSummary(
-          response.conversationId,
-          response.conversationName,
-          response.stage,
-          currentInstruction,
-        ));
+      if (startingNewConversation) {
+        onNavigate?.(`/c/${encodeURIComponent(response.conversationId)}`, { replace: true });
       }
     } catch (err: any) {
       setError(err.message || 'Failed to generate workflow definition.');
@@ -934,80 +995,6 @@ export function CreateWorkflowView({
     }
   };
 
-  const handleReviewAsl = async () => {
-    if (!conversationId || generating || saving) return;
-
-    setGenerating(true);
-    setError(null);
-
-    try {
-      const definition = parseDefinition(definitionText);
-      setMessages((prev) => [...prev, {
-        id: newChatMessageId(),
-        role: 'user',
-        content: 'Check the ASL in the editor against my original request.',
-        createdAt: Date.now(),
-        modelConfigId: modelId || null,
-        modelDisplayName: selectedModel?.label || null,
-      }]);
-      const response = await reviewWorkflowAiAsl({ conversationId, definition });
-      applyWorkflowAiResponse(response);
-    } catch (err: any) {
-      setError(err.message || 'Failed to review ASL.');
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  const handleAcceptPlan = async () => {
-    if (!conversationId || accepting) return;
-
-    setAccepting(true);
-    setError(null);
-
-    try {
-      const response = await acceptWorkflowAiPlan({ conversationId });
-      applyWorkflowAiResponse(response);
-      if (response.workflow) {
-        onWorkflowCreated(response.workflow);
-      }
-    } catch (err: any) {
-      setError(err.message || 'Failed to accept final plan.');
-    } finally {
-      setAccepting(false);
-    }
-  };
-
-  const startEditingMessage = (message: ChatMessage) => {
-    setEditingMessageId(message.id);
-    setEditingMessageContent(message.content);
-  };
-
-  const saveEditedMessage = () => {
-    const nextContent = editingMessageContent.trim();
-    if (!editingMessageId || !nextContent) return;
-
-    setMessages((current) => current.map((message) => (
-      message.id === editingMessageId ? { ...message, content: nextContent } : message
-    )));
-    setEditingMessageId(null);
-    setEditingMessageContent('');
-  };
-
-  const cancelEditingMessage = () => {
-    setEditingMessageId(null);
-    setEditingMessageContent('');
-  };
-
-  const copyMessage = async (message: ChatMessage) => {
-    try {
-      await navigator.clipboard.writeText(message.content);
-      setCopiedMessageId(message.id);
-      window.setTimeout(() => setCopiedMessageId((current) => current === message.id ? null : current), 1200);
-    } catch {
-      setCopiedMessageId(null);
-    }
-  };
 
   const toggleThinking = (messageId: string) => {
     setExpandedThinkingMessageIds((current) => {
@@ -1022,18 +1009,26 @@ export function CreateWorkflowView({
   };
 
   const handleRegenerateMessage = async (message: ChatMessage) => {
-    if (!conversationId || message.role !== 'assistant' || regeneratingMessageId) return;
+    // The guard is a ref, not state: repeated clicks land in the same tick, where a state update
+    // has not been applied yet and every call would still see an idle guard.
+    if (!conversationId || message.role !== 'assistant' || regeneratingRef.current) return;
 
+    regeneratingRef.current = true;
     setRegeneratingMessageId(message.id);
     setError(null);
     try {
       const response = await regenerateWorkflowAiMessage(message.id, {
         modelConfigId: modelId || null,
       });
-      applyWorkflowAiResponse(response);
+      // The server appends a fresh message, so swap it in place of the one being retried.
+      applyWorkflowAiResponse(response, {
+        replaceMessageId: message.id,
+        animate: true,
+      });
     } catch (err: any) {
       setError(err.message || 'Failed to regenerate message.');
     } finally {
+      regeneratingRef.current = false;
       setRegeneratingMessageId(null);
     }
   };
@@ -1118,18 +1113,11 @@ export function CreateWorkflowView({
     }
   };
 
-  const toLocalModel = (model: {
-    id: string;
-    displayName: string;
-    baseUrl: string;
-    modelName: string;
-    enabled?: boolean;
-    defaultModel?: boolean;
-  }): AiModel => ({
+  const toLocalModel = (model: Parameters<typeof aiModelFromDto>[0]): AiModel => ({
     ...aiModelFromDto(model),
   });
 
-  const localAuth = () => localApiKey.trim() || null;
+  const localCredential = () => localCredentialRef.trim() || null;
 
   const mergeDiscoveredModels = (nextModels: AiModel[]) => {
     const enabledNextModels = nextModels.filter((model) => model.enabled !== false);
@@ -1164,7 +1152,10 @@ export function CreateWorkflowView({
     setDiscoveredModelNames([]);
 
     try {
-      const response = await testAiModel({ baseUrl: endpoint, apiKey: localAuth() });
+      const response = await testAiModel({
+        baseUrl: endpoint,
+        credentialRef: localCredential(),
+      });
       setModelActionMessage(response.message);
       setModelActionSuccess(response.success);
     } catch (err: any) {
@@ -1186,7 +1177,11 @@ export function CreateWorkflowView({
     setDiscoveredModelNames([]);
 
     try {
-      const discovered = await discoverAiModels({ baseUrl: endpoint, apiKey: localAuth() });
+      const discovered = await discoverAiModels({
+        baseUrl: endpoint,
+        credentialRef: localCredential(),
+        providerType: 'OPENAI_COMPATIBLE_LOCAL',
+      });
       const nextModels = discovered.map(toLocalModel);
       mergeDiscoveredModels(nextModels);
       setDiscoveredModelNames(nextModels.map((model) => model.label));
@@ -1205,6 +1200,8 @@ export function CreateWorkflowView({
     const candidates = [
       'http://host.docker.internal:11434/v1',
       'http://host.docker.internal:8000/v1',
+      'http://host.docker.internal:8080/v1',
+      'http://host.docker.internal:1234/v1',
     ];
     const existingKeys = new Set(models.map((model) => `${model.endpoint}|${model.modelName || model.label}`));
     const foundServerLabels: string[] = [];
@@ -1220,7 +1217,11 @@ export function CreateWorkflowView({
 
     for (const endpoint of candidates) {
       try {
-        const discovered = await discoverAiModels({ baseUrl: endpoint, apiKey: localAuth() });
+        const discovered = await discoverAiModels({
+          baseUrl: endpoint,
+          credentialRef: localCredential(),
+          providerType: 'OPENAI_COMPATIBLE_LOCAL',
+        });
         if (discovered.length === 0) continue;
         const nextModels = discovered.map(toLocalModel);
         foundServerLabels.push(new URL(endpoint).host);
@@ -1298,7 +1299,7 @@ export function CreateWorkflowView({
   const refreshEndpointModels = async (endpoint: string) => {
     setManagingModels(true);
     try {
-      const discovered = await discoverAiModels({ baseUrl: endpoint, apiKey: localAuth() });
+      const discovered = await discoverAiModels({ baseUrl: endpoint });
       mergeDiscoveredModels(discovered.map(toLocalModel));
       await refreshModelLists();
       toast.success('Endpoint refreshed');
@@ -1316,7 +1317,7 @@ export function CreateWorkflowView({
     setManagingModels(true);
     try {
       const results = await Promise.allSettled(
-        endpoints.map((endpoint) => discoverAiModels({ baseUrl: endpoint, apiKey: localAuth() })),
+        endpoints.map((endpoint) => discoverAiModels({ baseUrl: endpoint })),
       );
       const discoveredModels = results
         .filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof discoverAiModels>>> => result.status === 'fulfilled')
@@ -1347,21 +1348,129 @@ export function CreateWorkflowView({
     }
   };
 
-  const addApiModel = () => {
-    const endpoint = apiEndpoint.trim();
-    const label = apiModelName.trim() || apiProvider;
-    if (!endpoint || !label) return;
+  const apiCredential = () => apiCredentialRef.trim() || null;
 
-    const model = {
-      id: `api-${Date.now()}`,
-      label,
-      endpoint,
-      provider: 'api' as const,
-    };
-    setModels((current) => [model, ...current]);
-    selectModel(model.id);
+  const changeApiProvider = (provider: string) => {
+    const preset = cloudProviderPreset(provider);
+    setApiProvider(preset.name);
+    setApiEndpoint(preset.endpoint);
     setApiModelName('');
-    setAddModelOpen(false);
+    setApiActionMessage(null);
+    setApiActionSuccess(null);
+    setApiDiscoveredModelNames([]);
+    setApiActionsOpen(false);
+  };
+
+  const resetApiProvider = () => {
+    const preset = cloudProviderPreset(apiProvider);
+    setApiEndpoint(preset.endpoint);
+    setApiModelName('');
+    setApiActionMessage('Provider defaults restored.');
+    setApiActionSuccess(true);
+    setApiDiscoveredModelNames([]);
+    setApiActionsOpen(false);
+  };
+
+  const testApiEndpoint = async () => {
+    const endpoint = apiEndpoint.trim();
+    if (!endpoint) {
+      setApiActionMessage('Enter a cloud endpoint before testing.');
+      setApiActionSuccess(false);
+      return;
+    }
+
+    setTestingModel(true);
+    setApiActionsOpen(false);
+    setApiActionMessage(null);
+    setApiActionSuccess(null);
+    setApiDiscoveredModelNames([]);
+    try {
+      const response = await testAiModel({
+        baseUrl: endpoint,
+        modelName: apiModelName.trim() || null,
+        credentialRef: apiCredential(),
+      });
+      setApiActionMessage(response.message);
+      setApiActionSuccess(response.success);
+    } catch (err: any) {
+      setApiActionMessage(err.message || 'Failed to test cloud endpoint.');
+      setApiActionSuccess(false);
+    } finally {
+      setTestingModel(false);
+    }
+  };
+
+  const scanApiModels = async () => {
+    const endpoint = apiEndpoint.trim();
+    if (!endpoint) {
+      setApiActionMessage('Enter a cloud endpoint before scanning.');
+      setApiActionSuccess(false);
+      return;
+    }
+
+    setDiscoveringModels(true);
+    setApiActionsOpen(false);
+    setApiActionMessage(null);
+    setApiActionSuccess(null);
+    setApiDiscoveredModelNames([]);
+    try {
+      const discovered = await discoverAiModels({
+        baseUrl: endpoint,
+        credentialRef: apiCredential(),
+        providerType: 'OPENAI_COMPATIBLE_API',
+      });
+      const nextModels = discovered.map(toLocalModel);
+      mergeDiscoveredModels(nextModels);
+      setApiDiscoveredModelNames(nextModels.map((model) => model.label));
+      setApiActionMessage(`Connected ${discovered.length} cloud model${discovered.length === 1 ? '' : 's'}.`);
+      setApiActionSuccess(true);
+      setApiCredentialRef('');
+      setSettingsTab('added');
+    } catch (err: any) {
+      setApiActionMessage(err.message || 'Failed to scan cloud models.');
+      setApiActionSuccess(false);
+    } finally {
+      setDiscoveringModels(false);
+    }
+  };
+
+  const addApiModel = async () => {
+    const endpoint = apiEndpoint.trim();
+    const modelName = apiModelName.trim();
+    if (!endpoint || !modelName) {
+      setApiActionMessage('Enter both an endpoint and model name, or use Scan models.');
+      setApiActionSuccess(false);
+      return;
+    }
+
+    setAddingModel(true);
+    setApiActionMessage(null);
+    setApiActionSuccess(null);
+    setApiDiscoveredModelNames([]);
+    try {
+      const created = await createAiModel({
+        displayName: modelName,
+        providerType: 'OPENAI_COMPATIBLE_API',
+        baseUrl: endpoint,
+        modelName,
+        credentialRef: apiCredential(),
+        defaultModel: models.length === 0,
+      });
+      const model = toLocalModel(created);
+      mergeDiscoveredModels([model]);
+      selectModel(model.id);
+      setApiActionMessage(`Connected ${model.label}.`);
+      setApiActionSuccess(true);
+      setApiDiscoveredModelNames([model.label]);
+      setApiModelName('');
+      setApiCredentialRef('');
+      setSettingsTab('added');
+    } catch (err: any) {
+      setApiActionMessage(err.message || 'Failed to add cloud model.');
+      setApiActionSuccess(false);
+    } finally {
+      setAddingModel(false);
+    }
   };
 
   const fieldClass = 'mt-2 h-10 w-full rounded-DEFAULT border border-border-subtle bg-surface-base px-3 text-body-md text-on-surface outline-none transition-colors placeholder:text-on-surface-variant/45 focus:border-secondary';
@@ -1384,6 +1493,8 @@ export function CreateWorkflowView({
       host: endpointHost(endpoint),
       models: endpointModels,
       enabledCount: endpointModels.filter((model) => model.enabled !== false).length,
+      provider: endpointModels.some((model) => model.provider === 'api') ? 'api' as const : 'local' as const,
+      hasCredential: endpointModels.some((model) => model.hasCredential),
     }));
   }, [allModels]);
   const localEndpointNeedsDockerHint = /\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(discoverEndpoint.trim());
@@ -1440,6 +1551,21 @@ export function CreateWorkflowView({
   }, [localActionsOpen]);
 
   useEffect(() => {
+    if (!apiActionsOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (apiActionsRef.current?.contains(event.target as Node)) return;
+      setApiActionsOpen(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [apiActionsOpen]);
+
+  useEffect(() => {
     const textarea = instructionTextareaRef.current;
     if (!textarea) return;
 
@@ -1449,41 +1575,6 @@ export function CreateWorkflowView({
     textarea.style.height = `${nextHeight}px`;
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
   }, [instruction]);
-
-  useEffect(() => {
-    if (messages.length === 0) {
-      setChatEntered(false);
-      return;
-    }
-
-    const frame = window.requestAnimationFrame(() => setChatEntered(true));
-    return () => window.cancelAnimationFrame(frame);
-  }, [messages.length]);
-
-  useEffect(() => {
-    if (messages.length === 0) return;
-
-    const timeout = window.setTimeout(() => {
-      chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }, 40);
-
-    return () => window.clearTimeout(timeout);
-  }, [messages.length, generating, error]);
-
-  const streamingActivityKey = useMemo(() => messages
-    .filter((message) => message.streamingStatus)
-    .map((message) => `${message.id}:${message.content.length}:${message.thinkingContent?.length || 0}:${message.streamingPhase || ''}`)
-    .join('|'), [messages]);
-
-  useEffect(() => {
-    if (!streamingActivityKey) return;
-
-    const timeout = window.setTimeout(() => {
-      chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }, 40);
-
-    return () => window.clearTimeout(timeout);
-  }, [streamingActivityKey]);
 
   const handleSubmitPrompt = (prompt: string) => {
     setPreviewPrompt(null);
@@ -1499,17 +1590,20 @@ export function CreateWorkflowView({
       setError(null);
       setMode('manual');
       toast.success(fileName ? `Imported ${fileName} into the ASL editor.` : 'Template imported into the ASL editor.');
+      return true;
     } catch (err: any) {
       toast.error(err?.message ? `Import failed: ${err.message}` : 'Import failed. Expected ASL JSON with StartAt and States.');
+      return false;
     }
   };
 
-  const chatInputNode = (
+  const composerNode = (options: { placeholder: string; onSubmit: () => void; compact?: boolean }) => (
     <ChatComposer
       instruction={instruction}
       onInstructionChange={setInstruction}
-      placeholder={previewPrompt || 'Describe a workflow...'}
-      onSubmit={() => handleGenerate()}
+      placeholder={options.placeholder}
+      onSubmit={options.onSubmit}
+      compact={options.compact}
       instructionTextareaRef={instructionTextareaRef}
       modelPickerRef={modelPickerRef}
       selectedModel={selectedModel}
@@ -1526,16 +1620,38 @@ export function CreateWorkflowView({
         setModelPickerOpen(false);
         setAddModelOpen(true);
       }}
-      generating={generating}
+      generating={generating || conversationLoading}
       canGenerate={canGenerate}
     />
   );
 
-  const latestAssistantModelLabel = [...messages]
-    .reverse()
-    .find((message) => message.role === 'assistant' && message.modelDisplayName)?.modelDisplayName;
-  const chatSessionModelLabel = latestAssistantModelLabel || selectedModel?.label || 'AI model';
-  const chatSessionTimeLabel = messages.length > 0 ? formatMessageTime(messages[messages.length - 1].createdAt) : '';
+  const chatInputNode = composerNode({
+    placeholder: previewPrompt || 'Describe a workflow...',
+    onSubmit: () => handleGenerate(),
+  });
+
+  const handleSidebarPrompt = (prompt?: string) => handleGenerate(prompt, { includeDefinition: true });
+
+  // Revision edits stay out of the assistant: starting a conversation routes to /c/<id>, which would
+  // navigate away from the revision being edited, and accepting a plan creates a separate workflow.
+  const sidebarAiChatNode = revisionEdit ? undefined : (
+    <SidebarAiChat
+      messages={messages}
+      generating={generating}
+      error={error}
+      hasStates={definitionStats.stateCount > 0}
+      onSubmitPrompt={handleSidebarPrompt}
+      expandedThinkingMessageIds={expandedThinkingMessageIds}
+      onToggleThinking={toggleThinking}
+      regeneratingMessageId={regeneratingMessageId}
+      onRegenerateMessage={handleRegenerateMessage}
+      chatInputNode={composerNode({
+        placeholder: 'Ask for a change to this workflow...',
+        onSubmit: () => handleSidebarPrompt(),
+        compact: true,
+      })}
+    />
+  );
 
   return (
     <div className="relative flex h-full min-h-0 flex-col text-on-surface">
@@ -1549,113 +1665,13 @@ export function CreateWorkflowView({
       {mode === 'ai' ? (
         <div className="flex min-h-0 flex-1 overflow-hidden bg-transparent">
           <div className="relative flex flex-1 flex-col overflow-hidden">
-            {messages.length === 0 ? (
-              <WorkflowAiEmptyState
-                chatInputNode={chatInputNode}
-                onSubmitPrompt={handleSubmitPrompt}
-                onPreviewPrompt={setPreviewPrompt}
-                onImportTemplate={handleImportTemplate}
-              />
-            ) : (
-              <>
-                <ChatMessageList
-                  messages={messages}
-                  chatEntered={chatEntered}
-                  chatScrollRef={chatScrollRef}
-                  chatEndRef={chatEndRef}
-                  chatSessionModelLabel={chatSessionModelLabel}
-                  chatSessionTimeLabel={chatSessionTimeLabel}
-                  selectedModel={selectedModel}
-                  editingMessageId={editingMessageId}
-                  editingMessageContent={editingMessageContent}
-                  onEditingMessageContentChange={setEditingMessageContent}
-                  copiedMessageId={copiedMessageId}
-                  expandedThinkingMessageIds={expandedThinkingMessageIds}
-                  regeneratingMessageId={regeneratingMessageId}
-                  error={error}
-                  headerNode={(
-                    <WorkflowStageStrip
-                      stage={conversationStage}
-                      definitionStatus={definitionStatus}
-                      generating={generating}
-                    />
-                  )}
-                  onCancelEditingMessage={cancelEditingMessage}
-                  onSaveEditedMessage={saveEditedMessage}
-                  onStartEditingMessage={startEditingMessage}
-                  onCopyMessage={copyMessage}
-                  onToggleThinking={toggleThinking}
-                  onRegenerateMessage={handleRegenerateMessage}
-                />
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-surface-base via-surface-base/90 to-transparent pt-12 pb-6 px-8 pointer-events-none">
-                  <div className={`mx-auto w-full max-w-[900px] pointer-events-auto transition-all duration-500 ease-out ${chatEntered ? 'translate-y-0 opacity-100' : 'translate-y-10 opacity-0'}`}>
-                    {chatInputNode}
-                  </div>
-                </div>
-              </>
-            )}
+            <WorkflowAiEmptyState
+              chatInputNode={chatInputNode}
+              onSubmitPrompt={handleSubmitPrompt}
+              onPreviewPrompt={setPreviewPrompt}
+              onImportTemplate={handleImportTemplate}
+            />
           </div>
-
-          {isEditorOpen && (
-            <AslReviewPanel
-              conversationStage={conversationStage}
-              conversationId={conversationId}
-              generating={generating}
-              accepting={accepting}
-              definitionStatus={definitionStatus}
-              workflowPreview={definitionStats}
-              definitionText={definitionText}
-              onDefinitionTextChange={handleDefinitionTextChange}
-              onReviewAsl={handleReviewAsl}
-              onAcceptPlan={handleAcceptPlan}
-              onClose={() => setIsEditorOpen(false)}
-            />
-          )}
-
-          {addModelOpen && (
-            <ModelSettingsModal
-              settingsTab={settingsTab}
-              onSettingsTabChange={setSettingsTab}
-              onClose={() => setAddModelOpen(false)}
-              fieldClass={fieldClass}
-              localActionsRef={localActionsRef}
-              localActionsOpen={localActionsOpen}
-              setLocalActionsOpen={setLocalActionsOpen}
-              discoverEndpoint={discoverEndpoint}
-              onDiscoverEndpointChange={setDiscoverEndpoint}
-              onDiscoverModels={discoverModels}
-              onScanForServers={scanForServers}
-              onTestLocalEndpoint={testLocalEndpoint}
-              addingModel={addingModel}
-              testingModel={testingModel}
-              discoveringModels={discoveringModels}
-              showLocalApiKey={showLocalApiKey}
-              setShowLocalApiKey={setShowLocalApiKey}
-              localApiKey={localApiKey}
-              onLocalApiKeyChange={setLocalApiKey}
-              localEndpointNeedsDockerHint={localEndpointNeedsDockerHint}
-              modelActionMessage={modelActionMessage}
-              modelActionSuccess={modelActionSuccess}
-              discoveredModelNames={discoveredModelNames}
-              apiProvider={apiProvider}
-              onApiProviderChange={setApiProvider}
-              apiEndpoint={apiEndpoint}
-              onApiEndpointChange={setApiEndpoint}
-              apiModelName={apiModelName}
-              onApiModelNameChange={setApiModelName}
-              onAddApiModel={addApiModel}
-              endpointGroups={endpointGroups}
-              expandedEndpoint={expandedEndpoint}
-              setExpandedEndpoint={setExpandedEndpoint}
-              managingModels={managingModels}
-              onProbeAllEndpoints={probeAllEndpoints}
-              onCopyEndpoint={copyEndpoint}
-              onUpdateEndpointEnabled={updateEndpointEnabled}
-              onDeleteEndpointModels={deleteEndpointModels}
-              onRefreshEndpointModels={refreshEndpointModels}
-              onUpdateSingleModelEnabled={updateSingleModelEnabled}
-            />
-          )}
         </div>
       ) : (
         <ManualWorkflowEditor
@@ -1694,6 +1710,66 @@ export function CreateWorkflowView({
           reserveTopControlsSpace={!revisionEdit && messages.length === 0}
           initialNodePositions={canvasNodePositions}
           onNodePositionsChange={setCanvasNodePositions}
+          onImportTemplate={handleImportTemplate}
+          aiChatNode={sidebarAiChatNode}
+          startInAiChat={messages.length > 0}
+        />
+      )}
+
+      {/* Outside the mode branch: the model picker is reachable from both composers. */}
+      {addModelOpen && (
+        <ModelSettingsModal
+          settingsTab={settingsTab}
+          onSettingsTabChange={setSettingsTab}
+          onClose={() => setAddModelOpen(false)}
+          fieldClass={fieldClass}
+          localActionsRef={localActionsRef}
+          localActionsOpen={localActionsOpen}
+          setLocalActionsOpen={setLocalActionsOpen}
+          discoverEndpoint={discoverEndpoint}
+          onDiscoverEndpointChange={setDiscoverEndpoint}
+          onDiscoverModels={discoverModels}
+          onScanForServers={scanForServers}
+          onTestLocalEndpoint={testLocalEndpoint}
+          addingModel={addingModel}
+          testingModel={testingModel}
+          discoveringModels={discoveringModels}
+          showLocalCredentialRef={showLocalCredentialRef}
+          setShowLocalCredentialRef={setShowLocalCredentialRef}
+          localCredentialRef={localCredentialRef}
+          onLocalCredentialRefChange={setLocalCredentialRef}
+          localEndpointNeedsDockerHint={localEndpointNeedsDockerHint}
+          modelActionMessage={modelActionMessage}
+          modelActionSuccess={modelActionSuccess}
+          discoveredModelNames={discoveredModelNames}
+          apiActionsRef={apiActionsRef}
+          apiActionsOpen={apiActionsOpen}
+          setApiActionsOpen={setApiActionsOpen}
+          apiProvider={apiProvider}
+          onApiProviderChange={changeApiProvider}
+          apiEndpoint={apiEndpoint}
+          onApiEndpointChange={setApiEndpoint}
+          apiModelName={apiModelName}
+          onApiModelNameChange={setApiModelName}
+          apiCredentialRef={apiCredentialRef}
+          onApiCredentialRefChange={setApiCredentialRef}
+          onTestApiEndpoint={testApiEndpoint}
+          onScanApiModels={scanApiModels}
+          onResetApiProvider={resetApiProvider}
+          onAddApiModel={addApiModel}
+          apiActionMessage={apiActionMessage}
+          apiActionSuccess={apiActionSuccess}
+          apiDiscoveredModelNames={apiDiscoveredModelNames}
+          endpointGroups={endpointGroups}
+          expandedEndpoint={expandedEndpoint}
+          setExpandedEndpoint={setExpandedEndpoint}
+          managingModels={managingModels}
+          onProbeAllEndpoints={probeAllEndpoints}
+          onCopyEndpoint={copyEndpoint}
+          onUpdateEndpointEnabled={updateEndpointEnabled}
+          onDeleteEndpointModels={deleteEndpointModels}
+          onRefreshEndpointModels={refreshEndpointModels}
+          onUpdateSingleModelEnabled={updateSingleModelEnabled}
         />
       )}
     </div>

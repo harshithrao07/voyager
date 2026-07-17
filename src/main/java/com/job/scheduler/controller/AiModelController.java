@@ -39,10 +39,10 @@ public class AiModelController {
     }
 
     @PostMapping("/models")
-    public ResponseEntity<AiModelConfigDTO> createLocalModel(
+    public ResponseEntity<AiModelConfigDTO> createModel(
             @Valid @RequestBody AiModelConfigRequestDTO request
     ) {
-        return ResponseEntity.ok(aiModelConfigService.createLocalModel(request));
+        return ResponseEntity.ok(aiModelConfigService.createModel(request));
     }
 
     @PostMapping("/models/test")
@@ -58,7 +58,8 @@ public class AiModelController {
     ) {
         return ResponseEntity.ok(aiModelConfigService.discoverAndOnboardModels(
                 request.baseUrl(),
-                request.apiKey()
+                request.credentialRef(),
+                request.providerType()
         ));
     }
 

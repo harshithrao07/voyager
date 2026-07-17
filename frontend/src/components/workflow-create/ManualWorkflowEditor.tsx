@@ -1,7 +1,8 @@
 import Editor from '@monaco-editor/react';
-import { useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { AlertCircle, Braces, ChevronRight, FlaskConical, ListPlus, Loader2, PanelRightClose, PanelRightOpen, Plus, Save, Wand2, X } from 'lucide-react';
+import { useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { AlertCircle, Braces, ChevronRight, FileUp, FlaskConical, ListPlus, Loader2, PanelRightClose, PanelRightOpen, Plus, Save, Sliders, Sparkles, Wand2, X } from 'lucide-react';
 import type { DefinitionStatus, WorkflowPreview } from './types';
+import { useTemplateFilePicker, type TemplateImportHandler } from './useTemplateImport';
 import { AslGraphViewer } from '../AslGraphViewer';
 import { updateState, type AslDefinition } from './stateBuilder';
 import { StateCanvasBuilder } from './StateCanvasBuilder';
@@ -23,6 +24,8 @@ import { WorkflowDraftTestBench } from './WorkflowDraftTestBench';
 import type { CanvasNodePositions } from '../../types/workflowCanvas';
 
 type EditorView = 'code' | 'builder';
+
+type SidebarTab = 'workflow' | 'ai';
 
 type RevisionEditDetails = {
   baseRevision: number;
@@ -60,6 +63,10 @@ type Props = {
   reserveTopControlsSpace?: boolean;
   initialNodePositions?: CanvasNodePositions;
   onNodePositionsChange?: (positions: CanvasNodePositions) => void;
+  onImportTemplate?: TemplateImportHandler;
+  aiChatNode?: ReactNode;
+  /** Arrive with the sidebar open on the AI tab, for when a conversation is already underway. */
+  startInAiChat?: boolean;
 };
 
 export function ManualWorkflowEditor({
@@ -91,10 +98,14 @@ export function ManualWorkflowEditor({
   reserveTopControlsSpace,
   initialNodePositions,
   onNodePositionsChange,
+  onImportTemplate,
+  aiChatNode,
+  startInAiChat,
 }: Props) {
   const [selectedStateName, setSelectedStateName] = useState('');
   const [editorView, setEditorView] = useState<EditorView>('builder');
-  const [sidebarOpen, setSidebarOpen] = useState(Boolean(revisionEdit));
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>(startInAiChat ? 'ai' : 'workflow');
+  const [sidebarOpen, setSidebarOpen] = useState(Boolean(revisionEdit) || Boolean(startInAiChat));
   const [sidebarWidth, setSidebarWidth] = useState(360);
   const [layoutVersion, setLayoutVersion] = useState(0);
   const [testBenchOpen, setTestBenchOpen] = useState(false);
@@ -239,6 +250,23 @@ export function ManualWorkflowEditor({
     setSelectedStateName(`Branch${branchIndex + 1}Start`);
   };
 
+  const handleImportedTemplate: TemplateImportHandler = (raw, fileName) => {
+    const imported = onImportTemplate?.(raw, fileName);
+    if (imported === false) return imported;
+    setMachinePath([]);
+    try {
+      const parsed = JSON.parse(raw) as AslDefinition;
+      setSelectedStateName(parsed.StartAt || Object.keys(parsed.States || {})[0] || '');
+    } catch {
+      setSelectedStateName('');
+    }
+    setTestBenchOpen(false);
+    setLayoutVersion((version) => version + 1);
+    return imported;
+  };
+
+  const { openTemplatePicker, templateFileInput } = useTemplateFilePicker(handleImportedTemplate);
+
   const handleFormat = () => {
     try {
       const parsed = JSON.parse(definitionText);
@@ -274,6 +302,7 @@ export function ManualWorkflowEditor({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-transparent">
+      {templateFileInput}
       <div ref={bodyRef} className="flex min-h-0 flex-1 overflow-hidden">
         <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-base">
           <div className="flex min-h-0 flex-1 flex-col">
@@ -299,6 +328,18 @@ export function ManualWorkflowEditor({
                 </button>
               )}
               {viewToggle}
+              {onImportTemplate && (
+                <button
+                  type="button"
+                  data-testid="workflow-import-template"
+                  onClick={openTemplatePicker}
+                  className="flex h-8 items-center gap-1.5 rounded-DEFAULT border border-border-subtle px-3 font-mono-sm text-[11px] text-on-surface-variant transition-colors hover:border-secondary hover:text-secondary"
+                  title="Replace the definition with an ASL JSON template"
+                >
+                  <FileUp size={13} />
+                  Import
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleFormat}
@@ -525,21 +566,46 @@ export function ManualWorkflowEditor({
 
         {sidebarOpen && (
         <aside
-          className="hidden min-h-0 shrink-0 flex-col overflow-y-auto border-l border-border-subtle bg-surface-base xl:flex"
+          className="hidden min-h-0 shrink-0 flex-col border-l border-border-subtle bg-surface-base xl:flex"
           style={{ width: sidebarWidth }}
         >
-          <div className={`border-b border-border-subtle p-6 ${reserveTopControlsSpace ? 'pt-[82px]' : ''}`}>
-            <div className="mb-4 flex items-center justify-between">
+          <div className={`flex shrink-0 items-center justify-between gap-2 border-b border-border-subtle px-4 py-3 ${reserveTopControlsSpace ? 'pt-[82px]' : ''}`}>
+            {aiChatNode ? (
+              <div className="flex min-w-0 items-center gap-1 rounded-DEFAULT border border-border-subtle p-0.5">
+                {([
+                  { tab: 'workflow', label: 'Workflow', icon: <Sliders size={12} /> },
+                  { tab: 'ai', label: 'AI Generator', icon: <Sparkles size={12} /> },
+                ] as const).map(({ tab, label, icon }) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    data-testid={`workflow-sidebar-${tab}`}
+                    onClick={() => setSidebarTab(tab)}
+                    className={`flex h-7 min-w-0 items-center gap-1.5 rounded-[3px] px-2.5 font-mono-sm text-[11px] transition-colors ${sidebarTab === tab
+                      ? 'bg-surface-container-highest text-on-surface'
+                      : 'text-on-surface-variant hover:text-on-surface'}`}
+                  >
+                    {icon}
+                    <span className="truncate">{label}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
               <span className="font-mono-sm text-[11px] uppercase tracking-[0.08em] text-on-surface-variant">Workflow</span>
-              <button
-                type="button"
-                onClick={() => setSidebarOpen(false)}
-                title="Collapse panel"
-                className="flex h-7 w-7 items-center justify-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface"
-              >
-                <PanelRightClose size={16} />
-              </button>
-            </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(false)}
+              title="Collapse panel"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface"
+            >
+              <PanelRightClose size={16} />
+            </button>
+          </div>
+
+          {sidebarTab === 'ai' && aiChatNode ? aiChatNode : (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="border-b border-border-subtle p-6">
             {revisionEdit?.recurring && onSaveWithoutActivation && (
               <button
                 type="button"
@@ -657,6 +723,8 @@ export function ManualWorkflowEditor({
               />
             )}
           </div>
+          </div>
+          )}
         </aside>
         )}
       </div>

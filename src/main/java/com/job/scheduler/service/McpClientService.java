@@ -9,6 +9,7 @@ import com.job.scheduler.repository.McpServerRepository;
 import io.modelcontextprotocol.client.McpAsyncClient;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
+import io.modelcontextprotocol.client.transport.McpHttpClientTransportAuthorizationException;
 import io.modelcontextprotocol.client.transport.ServerParameters;
 import io.modelcontextprotocol.client.transport.StdioClientTransport;
 import io.modelcontextprotocol.json.McpJsonDefaults;
@@ -46,7 +47,7 @@ public class McpClientService {
     private static final String MCP_SERVER_NOT_FOUND_MESSAGE = "MCP server does not exist";
 
     private final McpServerRepository mcpServerRepository;
-    private final McpTokenResolver tokenResolver;
+    private final SecretResolver secretResolver;
 
     /** Default per-request timeout when a server does not override it. */
     @Value("${scheduler.mcp.request-timeout-ms:30000}")
@@ -78,14 +79,45 @@ public class McpClientService {
     }
 
     private <T> Mono<T> withClient(String serverId, Function<McpAsyncClient, Mono<T>> operation) {
+        return executeWithClient(serverId, operation, true);
+    }
+
+    private <T> Mono<T> executeWithClient(
+            String serverId,
+            Function<McpAsyncClient, Mono<T>> operation,
+            boolean retryAuthenticationFailure
+    ) {
         return Mono.defer(() -> {
             McpServer server = findEnabledServer(serverId);
             PooledClient pooled = acquire(serverId, server);
             return pooled.ready()
                     .flatMap(operation)
-                    .doOnError(error -> evict(serverId, pooled))
-                    .onErrorMap(error -> mapConnectionError(server, error));
+                    .onErrorResume(error -> {
+                        evict(serverId, pooled);
+                        if (retryAuthenticationFailure && isAuthenticationFailure(error)) {
+                            log.info(
+                                    "MCP authentication failed for {}; recreating client and retrying once",
+                                    serverId
+                            );
+                            return executeWithClient(serverId, operation, false);
+                        }
+                        return Mono.error(mapConnectionError(server, error));
+                    });
         });
+    }
+
+    boolean isAuthenticationFailure(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof McpHttpClientTransportAuthorizationException authorization
+                    && authorization.getResponseInfo() != null
+                    && authorization.getResponseInfo().statusCode() == 401) {
+                return true;
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return false;
     }
 
     /**
@@ -337,7 +369,13 @@ public class McpClientService {
         }
         Map<String, String> env = new LinkedHashMap<>();
         if (server.getEnv() != null) {
-            env.putAll(server.getEnv());
+            SecretReferences.validateEnvironment(server.getEnv());
+            server.getEnv().forEach((name, value) -> env.put(
+                    name,
+                    SecretReferences.referenceFromValue(value)
+                            .map(secretResolver::require)
+                            .orElse(value)
+            ));
         }
         if (server.getAuthType() == McpAuthType.BEARER_TOKEN) {
             // The resolved secret is injected into the child process environment,
@@ -352,8 +390,13 @@ public class McpClientService {
     }
 
     private String resolveToken(McpServer server) {
-        return tokenResolver.resolve(server)
-                .orElseThrow(() -> new IllegalStateException(
-                        "No token configured for MCP server: " + server.getServerId()));
+        try {
+            return secretResolver.require(server.getAuthTokenRef());
+        } catch (IllegalStateException exception) {
+            throw new IllegalStateException(
+                    "No token configured for MCP server: " + server.getServerId(),
+                    exception
+            );
+        }
     }
 }

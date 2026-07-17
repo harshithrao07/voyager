@@ -66,6 +66,20 @@ public class WorkflowAiConversation {
     @Column(name = "draft_workflow_payload", columnDefinition = "jsonb")
     private String draftWorkflowPayload;
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "canvas_layout", columnDefinition = "jsonb")
+    private String canvasLayout;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "workspace_settings", columnDefinition = "jsonb")
+    private String workspaceSettings;
+
+    @Column(name = "conversation_summary", columnDefinition = "TEXT")
+    private String conversationSummary;
+
+    @Column(name = "summarized_through_message_id")
+    private UUID summarizedThroughMessageId;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

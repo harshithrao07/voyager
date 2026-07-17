@@ -27,6 +27,7 @@ import tools.jackson.databind.ObjectMapper;
 public class AiModelConfigService {
     private final AiModelConfigRepository repository;
     private final ObjectMapper objectMapper;
+    private final SecretResolver secretResolver;
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .build();
@@ -66,21 +67,24 @@ public class AiModelConfigService {
     }
 
     @Transactional
-    public AiModelConfigDTO createLocalModel(AiModelConfigRequestDTO request) {
+    public AiModelConfigDTO createModel(AiModelConfigRequestDTO request) {
         String baseUrl = normalizeBaseUrl(request.baseUrl());
         String modelName = requireText(request.modelName(), "Model name");
         String displayName = requireText(request.displayName(), "Display name");
-        String apiKey = optionalText(request.apiKey());
+        String credentialRef = optionalSecretReference(request.credentialRef());
+        AiModelProviderType providerType = request.providerType() == null
+                ? AiModelProviderType.OPENAI_COMPATIBLE_LOCAL
+                : request.providerType();
 
         AiModelConfig model = repository.findByBaseUrlAndModelName(baseUrl, modelName)
                 .orElseGet(AiModelConfig::new);
         boolean newModel = model.getId() == null;
         model.setDisplayName(displayName);
-        model.setProviderType(AiModelProviderType.OPENAI_COMPATIBLE_LOCAL);
+        model.setProviderType(providerType);
         model.setBaseUrl(baseUrl);
         model.setModelName(modelName);
-        if (apiKey != null || newModel) {
-            model.setApiKey(apiKey);
+        if (credentialRef != null || newModel) {
+            model.setCredentialRef(credentialRef);
         }
         model.setEnabled(true);
         model.setDefaultModel(request.defaultModel());
@@ -99,16 +103,29 @@ public class AiModelConfigService {
     @Transactional
     public List<AiModelConfigDTO> discoverAndOnboardModels(
             String requestedBaseUrl,
-            String requestedApiKey
+            String requestedCredentialRef,
+            AiModelProviderType requestedProviderType
     ) {
         String baseUrl = normalizeBaseUrl(requestedBaseUrl);
-        String apiKey = optionalText(requestedApiKey);
+        AiModelConfig existingEndpoint = repository
+                .findFirstByBaseUrlOrderByCreatedAtAsc(baseUrl)
+                .orElse(null);
+        String credentialRef = optionalSecretReference(requestedCredentialRef);
+        if (credentialRef == null && existingEndpoint != null) {
+            credentialRef = optionalSecretReference(existingEndpoint.getCredentialRef());
+        }
+        String credential = resolveCredential(credentialRef);
+        AiModelProviderType providerType = requestedProviderType != null
+                ? requestedProviderType
+                : existingEndpoint == null
+                        ? AiModelProviderType.OPENAI_COMPATIBLE_LOCAL
+                        : existingEndpoint.getProviderType();
 
         HttpRequest.Builder modelsRequestBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/models"))
                 .timeout(Duration.ofSeconds(10))
                 .GET();
-        applyAuthorization(modelsRequestBuilder, apiKey);
+        applyAuthorization(modelsRequestBuilder, credential);
         HttpRequest modelsRequest = modelsRequestBuilder.build();
 
         String responseBody;
@@ -173,11 +190,11 @@ public class AiModelConfigService {
                     .orElseGet(AiModelConfig::new);
             boolean newModel = model.getId() == null;
             model.setDisplayName(modelId);
-            model.setProviderType(AiModelProviderType.OPENAI_COMPATIBLE_LOCAL);
+            model.setProviderType(providerType);
             model.setBaseUrl(baseUrl);
             model.setModelName(modelId);
-            if (apiKey != null || newModel) {
-                model.setApiKey(apiKey);
+            if (credentialRef != null || newModel) {
+                model.setCredentialRef(credentialRef);
             }
             model.setEnabled(true);
             if (noExistingModels && i == 0) {
@@ -223,14 +240,21 @@ public class AiModelConfigService {
     public AiModelTestResponseDTO testLocalModel(AiModelTestRequestDTO request) {
         String baseUrl = normalizeBaseUrl(request.baseUrl());
         String modelName = optionalText(request.modelName());
-        String apiKey = optionalText(request.apiKey());
 
         try {
+            String credentialRef = optionalSecretReference(request.credentialRef());
+            if (credentialRef == null) {
+                credentialRef = repository.findFirstByBaseUrlOrderByCreatedAtAsc(baseUrl)
+                        .map(AiModelConfig::getCredentialRef)
+                        .map(this::optionalSecretReference)
+                        .orElse(null);
+            }
+            String credential = resolveCredential(credentialRef);
             HttpRequest.Builder modelsRequestBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + "/models"))
                     .timeout(Duration.ofSeconds(10))
                     .GET();
-            applyAuthorization(modelsRequestBuilder, apiKey);
+            applyAuthorization(modelsRequestBuilder, credential);
             HttpRequest modelsRequest = modelsRequestBuilder.build();
             HttpResponse<String> modelsResponse = httpClient.send(
                     modelsRequest,
@@ -259,7 +283,7 @@ public class AiModelConfigService {
                     .POST(HttpRequest.BodyPublishers.ofString("""
                             {"model":"%s","messages":[{"role":"user","content":"Reply with pong."}],"max_tokens":16,"stream":false}
                             """.formatted(escapeJson(modelName))));
-            applyAuthorization(chatRequestBuilder, apiKey);
+            applyAuthorization(chatRequestBuilder, credential);
             HttpRequest chatRequest = chatRequestBuilder.build();
             HttpResponse<String> chatResponse = httpClient.send(
                     chatRequest,
@@ -299,7 +323,9 @@ public class AiModelConfigService {
                 model.getBaseUrl(),
                 model.getModelName(),
                 model.isEnabled(),
-                model.isDefaultModel()
+                model.isDefaultModel(),
+                optionalSecretReference(model.getCredentialRef()),
+                optionalSecretReference(model.getCredentialRef()) != null
         );
     }
 
@@ -307,6 +333,19 @@ public class AiModelConfigService {
         String baseUrl = requireText(value, "Base URL");
         while (baseUrl.endsWith("/")) {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+        }
+        try {
+            URI uri = URI.create(baseUrl);
+            String scheme = uri.getScheme();
+            if ((scheme == null
+                    || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https")))
+                    || uri.getHost() == null) {
+                throw new IllegalArgumentException();
+            }
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException(
+                    "Base URL must be a valid HTTP or HTTPS endpoint"
+            );
         }
         return baseUrl;
     }
@@ -322,9 +361,20 @@ public class AiModelConfigService {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    private void applyAuthorization(HttpRequest.Builder builder, String apiKey) {
-        if (apiKey != null) {
-            builder.header("Authorization", "Bearer " + apiKey);
+    private String optionalSecretReference(String value) {
+        String reference = optionalText(value);
+        return reference == null
+                ? null
+                : SecretReferences.requireValidReference(reference);
+    }
+
+    private String resolveCredential(String credentialRef) {
+        return credentialRef == null ? null : secretResolver.require(credentialRef);
+    }
+
+    private void applyAuthorization(HttpRequest.Builder builder, String credential) {
+        if (credential != null) {
+            builder.header("Authorization", "Bearer " + credential);
         }
     }
 

@@ -18,4 +18,6 @@ public interface AiModelConfigRepository
     long countByEnabledTrue();
 
     Optional<AiModelConfig> findByBaseUrlAndModelName(String baseUrl, String modelName);
+
+    Optional<AiModelConfig> findFirstByBaseUrlOrderByCreatedAtAsc(String baseUrl);
 }

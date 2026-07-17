@@ -17,6 +17,8 @@ public record WorkflowAiConversationDetailDTO(
         JsonNode aslDefinition,
         JsonNode finalPlan,
         CreateWorkflowRequestDTO draftWorkflowPayload,
+        JsonNode canvasLayout,
+        WorkflowAiWorkspaceSettingsDTO workspaceSettings,
         List<WorkflowAiMessageDTO> messages,
         Instant createdAt,
         Instant updatedAt

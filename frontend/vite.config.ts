@@ -12,6 +12,11 @@ export default defineConfig({
   ],
   server: {
     host: "0.0.0.0",
+    fs: {
+      // The Docs page imports markdown and screenshots from the repo-root
+      // /docs directory, which sits outside this Vite root.
+      allow: ['..'],
+    },
     proxy: {
       '/app': backendUrl,
       '/api': backendUrl,

@@ -6,6 +6,8 @@ import com.job.scheduler.dto.WorkflowAiConversationSummaryDTO;
 import com.job.scheduler.dto.WorkflowAiMessageDTO;
 import com.job.scheduler.dto.WorkflowAiResponseDTO;
 import com.job.scheduler.dto.WorkflowResponseDTO;
+import com.job.scheduler.dto.WorkflowAiWorkspaceRequestDTO;
+import com.job.scheduler.dto.WorkflowAiWorkspaceSettingsDTO;
 import com.job.scheduler.entity.AiModelConfig;
 import com.job.scheduler.entity.WorkflowAiConversation;
 import com.job.scheduler.entity.WorkflowAiMessage;
@@ -28,6 +30,7 @@ import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -35,8 +38,11 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -48,25 +54,51 @@ public class WorkflowAiConversationService {
     private static final Pattern THINKING_PATTERN = Pattern.compile(
             "(?is)<think(?:ing)?>(.*?)</think(?:ing)?>"
     );
+    private static final Pattern REPEATED_CHARACTER_RUN = Pattern.compile("(.)\\1{11,}");
+    private static final Pattern DISTINCTIVE_IDENTIFIER = Pattern.compile(
+            "(?i)\\b(?=[a-z0-9._:/-]{4,}\\b)(?=[a-z0-9._:/-]*[a-z])(?=[a-z0-9._:/-]*[0-9])[a-z0-9._:/-]+\\b"
+    );
+    private static final String INVALID_AI_RESPONSE =
+            "[AI_RESPONSE] The model response was not valid Voyager workflow JSON.";
 
     private static final String SYSTEM_PROMPT = """
             You are Voyager's workflow builder for this scheduler.
             Return strict JSON only with these fields:
             {
-              "stage": "COLLECTING_WORKFLOW_DETAILS|ASL_READY|COLLECTING_SCHEDULE_DETAILS|PLAN_READY",
+              "stage": "COLLECTING_WORKFLOW_DETAILS|ASL_READY|ASL_UNDER_REVIEW|COLLECTING_SCHEDULE_DETAILS|PLAN_READY",
               "message": "short assistant message for the user",
               "aslDefinition": optional JSONata-only ASL object,
               "finalPlan": optional object,
               "draftWorkflowPayload": optional object with name, cronExpression, timezone, maxAttempts, idempotencyKey, definition
             }
             ASL rules: omit QueryLanguage and Version, use JSONata expressions with {% %}, reject JSONPath fields and States.* intrinsics.
+            Never return an Adaptive Card, Markdown wrapper, JSON Schema, tool-call envelope, or UI component as aslDefinition.
+            aslDefinition must be the ASL machine itself with StartAt and a non-empty States object.
             Keep cron, timezone, approval, and schedule metadata outside ASL.
+            When asked to recall an exact identifier, copy it verbatim from the supplied Exact source identifiers.
             Ask clarifying questions until the workflow is clear. When ASL is ready, include aslDefinition.
+            If the user already has ASL open in their editor it is given to you as "Current ASL in the user's editor".
+            Persisted workflow context may provide the same document as "Latest ASL definition (authoritative)".
+            Treat that ASL as the source of truth, amend it in place for what the user asks, and return the whole
+            amended definition as aslDefinition. Keep the states, names, and structure the user already has unless
+            they ask otherwise, and never restart from scratch when an editor ASL is present.
             After ASL is approved, collect workflow name, cron expression if scheduled, timezone, and max attempts.
             When everything is ready, return PLAN_READY with finalPlan and draftWorkflowPayload.
             If the selected local model supports visible reasoning, put that reasoning before the JSON as <think>...</think>.
             The content after </think> must still be strict JSON only.
             """;
+
+    private static final String SUMMARY_SYSTEM_PROMPT = """
+            You compact older turns from a workflow-design conversation into durable memory.
+            Return only a concise factual summary, never an answer to the user.
+            Preserve requirements, decisions, state names, resources, JSONata expressions,
+            schedule details, corrections, unresolved questions, and explicit user preferences.
+            Distinguish confirmed decisions from proposals. Do not invent missing details.
+            The original request, current stage, and latest ASL are supplied separately to the
+            workflow model, so focus on conversational facts that are not already represented there.
+            """;
+
+    private static final int APPROXIMATE_CHARACTERS_PER_TOKEN = 4;
 
     private final AiModelConfigService aiModelConfigService;
     private final WorkflowAiModelResolver modelResolver;
@@ -76,6 +108,15 @@ public class WorkflowAiConversationService {
     private final AslRuntimeCapabilityValidator runtimeCapabilityValidator;
     private final WorkflowService workflowService;
     private final ObjectMapper objectMapper;
+
+    @Value("${scheduler.workflow-ai.context.max-estimated-tokens:12000}")
+    private int maximumContextTokens = 12000;
+
+    @Value("${scheduler.workflow-ai.context.recent-estimated-tokens:4000}")
+    private int recentContextTokens = 4000;
+
+    @Value("${scheduler.workflow-ai.context.summary-max-characters:6000}")
+    private int maximumSummaryCharacters = 6000;
 
     public List<WorkflowAiConversationSummaryDTO> listConversations() {
         return conversationRepository.findTop50ByOrderByUpdatedAtDesc()
@@ -94,10 +135,44 @@ public class WorkflowAiConversationService {
     }
 
     @Transactional
+    public void saveWorkspace(UUID conversationId, WorkflowAiWorkspaceRequestDTO request) {
+        WorkflowAiConversation conversation = findForUpdate(conversationId);
+        if (!request.definition().isObject()) {
+            throw new IllegalArgumentException("ASL definition must be a JSON object");
+        }
+        if (!request.canvasLayout().isObject()) {
+            throw new IllegalArgumentException("Canvas layout must be a JSON object");
+        }
+
+        List<String> validationIssues = validateExecutableDefinition(request.definition());
+        if (!validationIssues.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Cannot save an invalid JSONata ASL definition: "
+                            + String.join("; ", validationIssues)
+            );
+        }
+
+        JsonNode workspaceSettings = objectMapper.valueToTree(request.settings());
+        if (request.definition().equals(readJson(conversation.getDraftAsl()))
+                && request.canvasLayout().equals(readJson(conversation.getCanvasLayout()))
+                && workspaceSettings.equals(readJson(conversation.getWorkspaceSettings()))) {
+            return;
+        }
+
+        // draftAsl is authoritative conversation state. Incomplete editor text stays client-side,
+        // and rejected AI candidates stay in message structured_payload until they validate.
+        conversation.setDraftAsl(serialize(request.definition()));
+        conversation.setCanvasLayout(serialize(request.canvasLayout()));
+        conversation.setWorkspaceSettings(serialize(workspaceSettings));
+        conversationRepository.saveAndFlush(conversation);
+    }
+
+    @Transactional
     public WorkflowAiResponseDTO startConversation(
             String instruction,
             UUID modelConfigId,
-            String userDateTime
+            String userDateTime,
+            JsonNode editorDefinition
     ) {
         String normalizedInstruction = requireText(instruction, "Instruction");
         AiModelConfig modelConfig = aiModelConfigService.resolveModel(modelConfigId);
@@ -110,36 +185,79 @@ public class WorkflowAiConversationService {
                 WorkflowAiConversationStage.COLLECTING_WORKFLOW_DETAILS
         );
         conversationRepository.save(conversation);
+
+        String editorContext = editorAslContext(editorDefinition);
+        List<String> editorValidationIssues = editorContext == null
+                ? List.of()
+                : validateExecutableDefinition(editorDefinition);
+        if (editorContext != null && editorValidationIssues.isEmpty()) {
+            conversation.setDraftAsl(serialize(editorDefinition));
+        }
         appendMessage(
                 conversation,
                 WorkflowAiMessageRole.USER,
-                withDateContext(normalizedInstruction, userDateTime),
-                null,
+                normalizedInstruction,
+                editorContext == null ? null : serialize(editorDefinition),
                 modelConfig
         );
 
-        return callAssistant(conversation, "Start from the user's first instruction.");
+        String startTask = editorContext == null
+                ? "Start from the user's first instruction."
+                : "Amend the ASL already open in the user's editor.";
+        if (!editorValidationIssues.isEmpty()) {
+            startTask = rejectedEditorCandidateContext(editorDefinition, editorValidationIssues)
+                    + "\nHelp the user correct this candidate without treating it as authoritative.";
+        }
+        if (userDateTime != null && !userDateTime.isBlank()) {
+            startTask += "\nUser date/time context: " + userDateTime.trim();
+        }
+        return callAssistant(
+                conversation,
+                startTask
+        );
     }
 
     @Transactional
     public WorkflowAiResponseDTO continueConversation(
             UUID conversationId,
             String message,
-            UUID modelConfigId
+            UUID modelConfigId,
+            JsonNode editorDefinition
     ) {
         WorkflowAiConversation conversation = findForUpdate(conversationId);
         AiModelConfig selectedModel = aiModelConfigService.resolveModel(
                 modelConfigId == null ? conversation.getModelConfig().getId() : modelConfigId
         );
         conversation.setModelConfig(selectedModel);
+
+        // Only resend the editor ASL when it drifted from what the conversation already knows,
+        // so an unchanged definition is not repeated into every prompt.
+        String editorContext = null;
+        List<String> editorValidationIssues = List.of();
+        if (editorAslContext(editorDefinition) != null
+                && !serialize(editorDefinition).equals(conversation.getDraftAsl())) {
+            editorContext = editorAslContext(editorDefinition);
+            editorValidationIssues = validateExecutableDefinition(editorDefinition);
+            if (editorValidationIssues.isEmpty()) {
+                conversation.setDraftAsl(serialize(editorDefinition));
+            }
+        }
+
         appendMessage(
                 conversation,
                 WorkflowAiMessageRole.USER,
                 requireText(message, "Message"),
-                null,
+                editorContext == null ? null : serialize(editorDefinition),
                 selectedModel
         );
-        return callAssistant(conversation, "Continue the workflow design conversation.");
+        String task = "Continue the workflow design conversation.";
+        if (!editorValidationIssues.isEmpty()) {
+            task += "\n" + rejectedEditorCandidateContext(
+                    editorDefinition,
+                    editorValidationIssues
+            );
+        }
+        return callAssistant(conversation, task);
     }
 
     @Transactional
@@ -157,12 +275,27 @@ public class WorkflowAiConversationService {
         WorkflowAiConversation conversation = findForUpdate(
                 targetMessage.getConversation().getId()
         );
+        WorkflowAiMessage latestMessage = messageRepository
+                .findFirstByConversationOrderByCreatedAtDesc(conversation)
+                .orElseThrow(() -> new IllegalStateException(
+                        "The conversation has no messages"
+                ));
+        if (!latestMessage.getId().equals(targetMessage.getId())) {
+            throw new IllegalArgumentException(
+                    "Only the latest assistant message can be regenerated"
+            );
+        }
         AiModelConfig selectedModel = aiModelConfigService.resolveModel(
                 modelConfigId == null ? conversation.getModelConfig().getId() : modelConfigId
         );
         conversation.setModelConfig(selectedModel);
 
-        List<WorkflowAiMessage> history = historyBeforeMessage(conversation, targetMessage);
+        // Anchor on the first attempt, so retrying repeatedly does not feed each discarded reply
+        // back into the prompt and drift the answer further every time.
+        List<WorkflowAiMessage> history = historyBeforeMessage(
+                conversation,
+                regenerationRoot(targetMessage)
+        );
         return callAssistant(
                 conversation,
                 "Regenerate the previous assistant response. Keep the workflow state consistent.",
@@ -281,54 +414,68 @@ public class WorkflowAiConversationService {
             List<WorkflowAiMessage> historyOverride
     ) {
         ChatLanguageModel model = modelResolver.resolve(modelConfig);
-        List<ChatMessage> messages = buildPrompt(conversation, task, historyOverride);
+        List<ChatMessage> messages = buildPrompt(
+                conversation,
+                task,
+                historyOverride,
+                model
+        );
         Instant startedAt = Instant.now();
-        Response<AiMessage> modelResponse = model.generate(messages);
+        AssistantAttempt attempt = generateAssistantAttempt(model, messages);
+        List<String> validationIssues = validateAssistantAttempt(attempt.parsed());
+        if (!validationIssues.isEmpty()) {
+            attempt = generateAssistantAttempt(
+                    model,
+                    repairPrompt(messages, attempt.cleaned(), validationIssues)
+            );
+            validationIssues = validateAssistantAttempt(attempt.parsed());
+        }
         long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
-        String raw = modelResponse.content().text().trim();
-        ThinkingExtraction thinkingExtraction = extractThinking(raw);
-        String cleaned = stripMarkdown(thinkingExtraction.answer());
-        ParsedAssistantResponse parsed = parseAssistantResponse(cleaned);
+        ParsedAssistantResponse parsed = attempt.parsed();
 
         JsonNode aslDefinition = parsed.aslDefinition();
-        List<String> validationIssues = List.of();
-        if (aslDefinition != null) {
-            validationIssues = validateExecutableDefinition(aslDefinition);
-            if (validationIssues.isEmpty()) {
-                conversation.setDraftAsl(serialize(aslDefinition));
-                conversation.setStage(WorkflowAiConversationStage.ASL_READY);
-            } else {
-                conversation.setStage(WorkflowAiConversationStage.ASL_UNDER_REVIEW);
-            }
-        } else if (parsed.draftWorkflowPayload() != null) {
+        if (validationIssues.isEmpty() && aslDefinition != null) {
+            conversation.setDraftAsl(serialize(aslDefinition));
+            conversation.setStage(WorkflowAiConversationStage.ASL_READY);
+        } else if (validationIssues.isEmpty() && parsed.draftWorkflowPayload() != null) {
             conversation.setDraftWorkflowPayload(
                     serialize(parsed.draftWorkflowPayloadNode())
             );
             conversation.setFinalPlan(serialize(parsed.finalPlan()));
+            if (parsed.draftWorkflowPayload().definition() != null) {
+                conversation.setDraftAsl(serialize(parsed.draftWorkflowPayload().definition()));
+            }
             conversation.setStage(WorkflowAiConversationStage.PLAN_READY);
-        } else if (parsed.stage() != null) {
+        } else if (validationIssues.isEmpty() && parsed.stage() != null) {
             conversation.setStage(parsed.stage());
+        } else if (parsed.hasDefinitionCandidate()) {
+            conversation.setStage(WorkflowAiConversationStage.ASL_UNDER_REVIEW);
         }
+        String assistantContent = assistantContent(
+                parsed,
+                attempt.cleaned(),
+                validationIssues
+        );
 
         WorkflowAiMessage assistantMessage = appendMessage(
                 conversation,
                 WorkflowAiMessageRole.ASSISTANT,
-                parsed.message() == null ? cleaned : parsed.message(),
-                cleaned,
+                assistantContent,
+                jsonPayloadOrNull(attempt.cleaned()),
                 modelConfig,
-                thinkingExtraction.thinkingContent(),
+                attempt.thinkingExtraction().thinkingContent(),
                 durationMs,
-                modelResponse.tokenUsage(),
-                modelResponse.finishReason() == null
+                attempt.modelResponse().tokenUsage(),
+                attempt.modelResponse().finishReason() == null
                         ? null
-                        : modelResponse.finishReason().name(),
+                        : attempt.modelResponse().finishReason().name(),
                 regeneratedFromMessage
         );
 
         return response(
                 conversation,
-                parsed.message() == null ? cleaned : parsed.message(),
-                aslDefinition == null ? readJson(conversation.getDraftAsl()) : aslDefinition,
+                assistantContent,
+                readJson(conversation.getDraftAsl()),
                 validationIssues,
                 parsed.finalPlan() == null
                         ? readJson(conversation.getFinalPlan())
@@ -341,29 +488,134 @@ public class WorkflowAiConversationService {
         );
     }
 
-    private List<ChatMessage> buildPrompt(
-            WorkflowAiConversation conversation,
-            String task
+    private String assistantContent(
+            ParsedAssistantResponse parsed,
+            String cleanedResponse,
+            List<String> validationIssues
     ) {
-        return buildPrompt(conversation, task, null);
+        if (validationIssues.isEmpty()) {
+            return parsed.message() == null ? cleanedResponse : parsed.message();
+        }
+        StringBuilder message = new StringBuilder(
+                "I couldn't apply the generated change because it still failed validation after one automatic repair attempt. The last valid workflow was preserved."
+        );
+        if (!parsed.structured()) {
+            message.append("\nRaw model reply: ")
+                    .append(boundedExcerpt(cleanedResponse, 1000));
+        }
+        return message.toString();
+    }
+
+    private AssistantAttempt generateAssistantAttempt(
+            ChatLanguageModel model,
+            List<ChatMessage> messages
+    ) {
+        Response<AiMessage> modelResponse = model.generate(messages);
+        String raw = requireModelReply(modelResponse);
+        ThinkingExtraction thinkingExtraction = extractThinking(raw);
+        String cleaned = stripMarkdown(thinkingExtraction.answer());
+        return new AssistantAttempt(
+                modelResponse,
+                cleaned,
+                thinkingExtraction,
+                parseAssistantResponse(cleaned)
+        );
+    }
+
+    private List<ChatMessage> repairPrompt(
+            List<ChatMessage> originalPrompt,
+            String rejectedResponse,
+            List<String> validationIssues
+    ) {
+        List<ChatMessage> repairMessages = new ArrayList<>(originalPrompt);
+        repairMessages.add(AiMessage.aiMessage(rejectedResponse));
+        repairMessages.add(UserMessage.userMessage("""
+                Your previous response was rejected. Repair it once.
+                Return exactly one strict JSON object matching the workflow response contract.
+                Do not return Markdown, an Adaptive Card, a tool-call envelope, or commentary outside JSON.
+                Preserve the user's requested workflow and return JSONata-only ASL when aslDefinition is present.
+                Rejection reasons:
+                """ + String.join("\n", validationIssues)));
+        return repairMessages;
+    }
+
+    private List<String> validateAssistantAttempt(ParsedAssistantResponse parsed) {
+        List<String> issues = new ArrayList<>();
+        if (!parsed.structured()) {
+            issues.add(INVALID_AI_RESPONSE + " " + parsed.failureReason());
+            return List.copyOf(issues);
+        }
+        if (parsed.aslDefinition() != null) {
+            issues.addAll(validateExecutableDefinition(parsed.aslDefinition()));
+        }
+        JsonNode payloadDefinition = parsed.draftWorkflowPayload() == null
+                ? null
+                : parsed.draftWorkflowPayload().definition();
+        if (payloadDefinition != null) {
+            issues.addAll(validateExecutableDefinition(payloadDefinition));
+        }
+        if (parsed.aslDefinition() != null
+                && payloadDefinition != null
+                && !parsed.aslDefinition().equals(payloadDefinition)) {
+            issues.add(
+                    "[AI_RESPONSE] aslDefinition and draftWorkflowPayload.definition must match."
+            );
+        }
+        return List.copyOf(issues);
+    }
+
+    private String requireModelReply(Response<AiMessage> modelResponse) {
+        String reply = modelResponse == null || modelResponse.content() == null
+                ? null
+                : modelResponse.content().text();
+        if (reply == null || reply.isBlank()) {
+            TokenUsage tokenUsage = modelResponse == null ? null : modelResponse.tokenUsage();
+            log.warn(
+                    "AI model returned an empty reply (output tokens: {}, finish reason: {})",
+                    tokenUsage == null ? null : tokenUsage.outputTokenCount(),
+                    modelResponse == null ? null : modelResponse.finishReason()
+            );
+            throw new IllegalStateException(
+                    "The AI model returned an empty reply. Retry or choose a different model."
+            );
+        }
+        return reply.trim();
     }
 
     private List<ChatMessage> buildPrompt(
             WorkflowAiConversation conversation,
             String task,
-            List<WorkflowAiMessage> historyOverride
+            List<WorkflowAiMessage> historyOverride,
+            ChatLanguageModel model
     ) {
-        List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.systemMessage(SYSTEM_PROMPT));
-        messages.add(SystemMessage.systemMessage(
-                "Current stage: " + conversation.getStage()
-                        + "\nInitial request: " + conversation.getInitialInstruction()
-                        + "\nTask: " + task
-        ));
-        List<WorkflowAiMessage> history = historyOverride == null
+        List<WorkflowAiMessage> rawHistory = historyOverride == null
                 ? messageRepository.findByConversationOrderByCreatedAtAsc(conversation)
                 : historyOverride;
-        for (WorkflowAiMessage message : history) {
+        List<WorkflowAiMessage> effectiveHistory = effectiveHistory(rawHistory);
+        String durableContext = durableConversationContext(conversation, task);
+        String exactIdentifiers = exactSourceIdentifiers(effectiveHistory);
+        if (exactIdentifiers != null) {
+            durableContext += "\nExact source identifiers (verbatim):\n" + exactIdentifiers;
+        }
+        int fixedContextTokens = estimatedTokens(SYSTEM_PROMPT)
+                + estimatedTokens(durableContext);
+        ContextWindow contextWindow = compactContextIfNeeded(
+                conversation,
+                effectiveHistory,
+                model,
+                fixedContextTokens,
+                historyOverride == null
+        );
+
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(SystemMessage.systemMessage(SYSTEM_PROMPT));
+        messages.add(SystemMessage.systemMessage(durableContext));
+        if (contextWindow.summary() != null) {
+            messages.add(SystemMessage.systemMessage(
+                    "Summary of earlier conversation turns:\n" + contextWindow.summary()
+            ));
+        }
+        for (WorkflowAiMessage message : contextWindow.recentMessages()) {
             if (message.getRole() == WorkflowAiMessageRole.ASSISTANT) {
                 messages.add(AiMessage.aiMessage(message.getContent()));
             } else if (message.getRole() == WorkflowAiMessageRole.USER) {
@@ -373,9 +625,349 @@ public class WorkflowAiConversationService {
         return messages;
     }
 
+    private String durableConversationContext(
+            WorkflowAiConversation conversation,
+            String task
+    ) {
+        StringBuilder context = new StringBuilder()
+                .append("Current stage: ")
+                .append(conversation.getStage())
+                .append("\nInitial request: ")
+                .append(conversation.getInitialInstruction())
+                .append("\nTask: ")
+                .append(task);
+        if (optionalText(conversation.getDraftAsl()) != null) {
+            context.append("\nLatest ASL definition (authoritative):\n")
+                    .append(conversation.getDraftAsl());
+        }
+        if (optionalText(conversation.getFinalPlan()) != null) {
+            context.append("\nLatest final plan:\n")
+                    .append(conversation.getFinalPlan());
+        }
+        if (optionalText(conversation.getWorkspaceSettings()) != null) {
+            context.append("\nLatest workflow settings (outside ASL):\n")
+                    .append(conversation.getWorkspaceSettings());
+        }
+        return context.toString();
+    }
+
+    private List<WorkflowAiMessage> effectiveHistory(List<WorkflowAiMessage> history) {
+        Set<UUID> supersededMessageIds = new HashSet<>();
+        for (WorkflowAiMessage message : history) {
+            if (message.getRegeneratedFromMessage() != null
+                    && message.getRegeneratedFromMessage().getId() != null) {
+                supersededMessageIds.add(message.getRegeneratedFromMessage().getId());
+            }
+        }
+        return history.stream()
+                .filter(message -> message.getRole() == WorkflowAiMessageRole.USER
+                        || message.getRole() == WorkflowAiMessageRole.ASSISTANT)
+                .filter(message -> message.getId() == null
+                        || !supersededMessageIds.contains(message.getId()))
+                .toList();
+    }
+
+    private String exactSourceIdentifiers(List<WorkflowAiMessage> history) {
+        Set<String> identifiers = new LinkedHashSet<>();
+        int totalCharacters = 0;
+        for (WorkflowAiMessage message : history) {
+            Matcher matcher = DISTINCTIVE_IDENTIFIER.matcher(message.getContent());
+            while (matcher.find() && identifiers.size() < 64) {
+                String identifier = matcher.group();
+                if (identifier.length() <= 120
+                        && !identifiers.contains(identifier)
+                        && totalCharacters + identifier.length() + 2 <= 2000) {
+                    identifiers.add(identifier);
+                    totalCharacters += identifier.length() + 2;
+                }
+            }
+        }
+        return identifiers.isEmpty() ? null : String.join(", ", identifiers);
+    }
+
+    private ContextWindow compactContextIfNeeded(
+            WorkflowAiConversation conversation,
+            List<WorkflowAiMessage> history,
+            ChatLanguageModel model,
+            int fixedContextTokens,
+            boolean persistSummary
+    ) {
+        String existingSummary = optionalText(conversation.getConversationSummary());
+        int unsummarizedStart = summarizedHistoryEnd(
+                history,
+                existingSummary,
+                conversation.getSummarizedThroughMessageId()
+        );
+        if (unsummarizedStart < 0) {
+            existingSummary = null;
+            unsummarizedStart = 0;
+        }
+        if (existingSummary != null
+                && unsummarizedStart > 0
+                && !summaryIsGrounded(
+                        existingSummary,
+                        history.subList(0, unsummarizedStart)
+                )) {
+            // Legacy/free-form summaries can be fluent but unrelated to the source. Because all
+            // messages remain stored, discard the bad summary and rebuild from source anchors.
+            log.warn("Discarding ungrounded workflow conversation summary and rebuilding it");
+            existingSummary = null;
+            unsummarizedStart = 0;
+        }
+
+        int estimatedTotal = fixedContextTokens + estimatedTokens(existingSummary);
+        for (int index = unsummarizedStart; index < history.size(); index++) {
+            estimatedTotal += estimatedTokens(history.get(index));
+        }
+
+        int contextLimit = Math.max(256, maximumContextTokens);
+        if (estimatedTotal <= contextLimit) {
+            return new ContextWindow(
+                    existingSummary,
+                    List.copyOf(history.subList(unsummarizedStart, history.size()))
+            );
+        }
+
+        int recentLimit = Math.max(
+                64,
+                Math.min(recentContextTokens, Math.max(64, contextLimit / 2))
+        );
+        int retainFrom = history.size();
+        int retainedTokens = 0;
+        while (retainFrom > unsummarizedStart) {
+            int nextTokens = estimatedTokens(history.get(retainFrom - 1));
+            if (retainFrom < history.size()
+                    && retainedTokens + nextTokens > recentLimit) {
+                break;
+            }
+            retainFrom--;
+            retainedTokens += nextTokens;
+        }
+
+        if (retainFrom <= unsummarizedStart) {
+            // There is no older prefix to replace; the durable ASL or latest turn itself is large.
+            return new ContextWindow(
+                    existingSummary,
+                    List.copyOf(history.subList(unsummarizedStart, history.size()))
+            );
+        }
+
+        // Rebuild the durable summary from every older source turn. This prevents repeated model
+        // compaction from gradually dropping identifiers and decisions that are still in the DB.
+        List<WorkflowAiMessage> messagesToSummarize = List.copyOf(
+                history.subList(0, retainFrom)
+        );
+        String nextSummary = summarizeHistory(
+                model,
+                null,
+                messagesToSummarize,
+                contextLimit
+        );
+
+        WorkflowAiMessage summarizedThrough = messagesToSummarize.get(
+                messagesToSummarize.size() - 1
+        );
+        if (persistSummary && summarizedThrough.getId() != null) {
+            conversation.setConversationSummary(nextSummary);
+            conversation.setSummarizedThroughMessageId(summarizedThrough.getId());
+            conversationRepository.save(conversation);
+        }
+
+        return new ContextWindow(
+                nextSummary,
+                List.copyOf(history.subList(retainFrom, history.size()))
+        );
+    }
+
+    private int summarizedHistoryEnd(
+            List<WorkflowAiMessage> history,
+            String summary,
+            UUID summarizedThroughMessageId
+    ) {
+        if (summary == null || summarizedThroughMessageId == null) {
+            return summary == null ? 0 : -1;
+        }
+        for (int index = 0; index < history.size(); index++) {
+            if (summarizedThroughMessageId.equals(history.get(index).getId())) {
+                return index + 1;
+            }
+        }
+        return -1;
+    }
+
+    private String summarizeHistory(
+            ChatLanguageModel model,
+            String existingSummary,
+            List<WorkflowAiMessage> messages,
+            int contextLimit
+    ) {
+        int targetTokens = Math.max(128, Math.min(1500, contextLimit / 4));
+        StringBuilder source = new StringBuilder()
+                .append("Keep the summary under approximately ")
+                .append(targetTokens)
+                .append(" tokens.\n");
+        if (existingSummary != null) {
+            source.append("\nExisting durable summary:\n")
+                    .append(existingSummary)
+                    .append('\n');
+        }
+        int sourceBudget = Math.max(
+                2048,
+                Math.min(maximumSummaryCharacters * 2, contextLimit * 3)
+        );
+        source.append("\nSource-anchored older turns to summarize:\n")
+                .append(summarySourceAnchors(messages, sourceBudget));
+
+        try {
+            Response<AiMessage> summaryResponse = model.generate(List.of(
+                    SystemMessage.systemMessage(SUMMARY_SYSTEM_PROMPT),
+                    UserMessage.userMessage(source.toString())
+            ));
+            String generatedSummary = summaryResponse == null
+                    || summaryResponse.content() == null
+                    ? null
+                    : summaryResponse.content().text();
+            if (generatedSummary == null || generatedSummary.isBlank()) {
+                throw new IllegalStateException("Summary model returned an empty reply");
+            }
+            String cleanedSummary = extractThinking(generatedSummary.trim()).answer();
+            if (!summaryIsGrounded(cleanedSummary, messages)) {
+                log.warn("Summary model omitted all distinctive source identifiers; using fallback");
+                return fallbackSummary(existingSummary, messages);
+            }
+            return anchoredSummary(existingSummary, cleanedSummary, messages);
+        } catch (RuntimeException exception) {
+            // A summary refresh should not make the user's actual turn unavailable. The bounded
+            // deterministic fallback keeps the context usable and the next refresh can improve it.
+            log.warn("Could not generate workflow conversation summary; using bounded fallback", exception);
+            return fallbackSummary(existingSummary, messages);
+        }
+    }
+
+    private String fallbackSummary(
+            String existingSummary,
+            List<WorkflowAiMessage> messages
+    ) {
+        StringBuilder summary = new StringBuilder();
+        if (existingSummary != null) {
+            summary.append(existingSummary).append('\n');
+        }
+        summary.append("Source anchors (authoritative excerpts):\n")
+                .append(summarySourceAnchors(
+                        messages,
+                        Math.max(256, maximumSummaryCharacters - summary.length() - 64)
+                ));
+        return limitSummary(summary.toString().trim());
+    }
+
+    private String anchoredSummary(
+            String existingSummary,
+            String generatedSummary,
+            List<WorkflowAiMessage> messages
+    ) {
+        int limit = Math.max(512, maximumSummaryCharacters);
+        StringBuilder summary = new StringBuilder();
+        if (existingSummary != null) {
+            summary.append(boundedExcerpt(existingSummary, limit / 4)).append('\n');
+        }
+        summary.append("Factual summary:\n")
+                .append(boundedExcerpt(generatedSummary, limit / 3))
+                .append("\nSource anchors (authoritative excerpts):\n");
+        int remaining = Math.max(256, limit - summary.length());
+        summary.append(summarySourceAnchors(messages, remaining));
+        return limitSummary(summary.toString().trim());
+    }
+
+    private String summarySourceAnchors(
+            List<WorkflowAiMessage> messages,
+            int characterBudget
+    ) {
+        if (messages.isEmpty()) {
+            return "";
+        }
+        int budget = Math.max(128, characterBudget);
+        int perMessage = Math.max(32, (budget / messages.size()) - 16);
+        StringBuilder anchors = new StringBuilder();
+        for (WorkflowAiMessage message : messages) {
+            anchors.append(message.getRole())
+                    .append(": ")
+                    .append(boundedExcerpt(compactSummaryText(message.getContent()), perMessage))
+                    .append('\n');
+        }
+        return anchors.length() <= budget
+                ? anchors.toString().trim()
+                : boundedExcerpt(anchors.toString().trim(), budget);
+    }
+
+    private String compactSummaryText(String value) {
+        String compact = value == null ? "" : value.replaceAll("\\s+", " ").trim();
+        return REPEATED_CHARACTER_RUN.matcher(compact).replaceAll("$1…");
+    }
+
+    private String boundedExcerpt(String value, int limit) {
+        String compact = value == null ? "" : value.trim();
+        int boundedLimit = Math.max(24, limit);
+        if (compact.length() <= boundedLimit) {
+            return compact;
+        }
+        int headLength = (boundedLimit * 2) / 3;
+        int tailLength = Math.max(1, boundedLimit - headLength - 5);
+        return compact.substring(0, headLength)
+                + " ... "
+                + compact.substring(compact.length() - tailLength);
+    }
+
+    private boolean summaryIsGrounded(
+            String summary,
+            List<WorkflowAiMessage> sourceMessages
+    ) {
+        Set<String> identifiers = new HashSet<>();
+        for (WorkflowAiMessage message : sourceMessages) {
+            Matcher matcher = DISTINCTIVE_IDENTIFIER.matcher(message.getContent());
+            while (matcher.find() && identifiers.size() < 64) {
+                identifiers.add(matcher.group().toLowerCase(Locale.ROOT));
+            }
+        }
+        if (identifiers.isEmpty()) {
+            return true;
+        }
+        String normalizedSummary = summary == null
+                ? ""
+                : summary.toLowerCase(Locale.ROOT);
+        return identifiers.stream().anyMatch(normalizedSummary::contains);
+    }
+
+    private String limitSummary(String value) {
+        String summary = value == null ? "" : value.trim();
+        int limit = Math.max(512, maximumSummaryCharacters);
+        if (summary.length() <= limit) {
+            return summary;
+        }
+        int headLength = (limit * 2) / 3;
+        int tailLength = limit - headLength;
+        return summary.substring(0, headLength)
+                + "\n...[older summary compacted]...\n"
+                + summary.substring(summary.length() - tailLength);
+    }
+
+    private int estimatedTokens(WorkflowAiMessage message) {
+        return 6 + estimatedTokens(message.getContent());
+    }
+
+    private int estimatedTokens(String value) {
+        if (value == null || value.isBlank()) {
+            return 0;
+        }
+        return 4 + (value.length() + APPROXIMATE_CHARACTERS_PER_TOKEN - 1)
+                / APPROXIMATE_CHARACTERS_PER_TOKEN;
+    }
+
     private ParsedAssistantResponse parseAssistantResponse(String value) {
         try {
             JsonNode root = objectMapper.readTree(value);
+            if (root == null || !root.isObject()) {
+                throw new IllegalArgumentException("Response root must be a JSON object");
+            }
             if (looksLikeAsl(root)) {
                 return new ParsedAssistantResponse(
                         WorkflowAiConversationStage.ASL_READY,
@@ -383,6 +975,8 @@ public class WorkflowAiConversationService {
                         root,
                         null,
                         null,
+                        null,
+                        true,
                         null
                 );
             }
@@ -390,6 +984,11 @@ public class WorkflowAiConversationService {
             String message = root.path("message").isString()
                     ? root.path("message").stringValue()
                     : null;
+            if (stage == null || message == null || message.isBlank()) {
+                throw new IllegalArgumentException(
+                        "Response must include a recognized stage and non-empty message"
+                );
+            }
             JsonNode asl = root.get("aslDefinition");
             JsonNode finalPlan = root.get("finalPlan");
             JsonNode draftPayloadNode = root.get("draftWorkflowPayload");
@@ -406,17 +1005,21 @@ public class WorkflowAiConversationService {
                     asl,
                     finalPlan,
                     draftPayload,
-                    draftPayloadNode
+                    draftPayloadNode,
+                    true,
+                    null
             );
         } catch (Exception exception) {
             log.warn("Could not parse workflow AI response as structured JSON", exception);
             return new ParsedAssistantResponse(
-                    WorkflowAiConversationStage.COLLECTING_WORKFLOW_DETAILS,
+                    null,
                     value,
                     null,
                     null,
                     null,
-                    null
+                    null,
+                    false,
+                    exception.getMessage()
             );
         }
     }
@@ -550,6 +1153,8 @@ public class WorkflowAiConversationService {
                 readJson(conversation.getDraftAsl()),
                 readJson(conversation.getFinalPlan()),
                 readDraftPayload(conversation),
+                readJson(conversation.getCanvasLayout()),
+                readWorkspaceSettings(conversation),
                 messageRepository.findByConversationOrderByCreatedAtAsc(conversation)
                         .stream()
                         .map(this::message)
@@ -563,7 +1168,7 @@ public class WorkflowAiConversationService {
         return new WorkflowAiMessageDTO(
                 message.getId(),
                 message.getRole(),
-                message.getContent(),
+                userFacingMessageContent(message),
                 message.getModelConfig() == null ? null : message.getModelConfig().getId(),
                 message.getModelConfig() == null ? null : message.getModelConfig().getDisplayName(),
                 message.getDurationMs(),
@@ -577,6 +1182,16 @@ public class WorkflowAiConversationService {
                         : message.getRegeneratedFromMessage().getId(),
                 message.getCreatedAt()
         );
+    }
+
+    /** Walks back to the original assistant reply that later retries all descend from. */
+    private WorkflowAiMessage regenerationRoot(WorkflowAiMessage message) {
+        WorkflowAiMessage root = message;
+        Set<UUID> visited = new HashSet<>();
+        while (visited.add(root.getId()) && root.getRegeneratedFromMessage() != null) {
+            root = root.getRegeneratedFromMessage();
+        }
+        return root;
     }
 
     private List<WorkflowAiMessage> historyBeforeMessage(
@@ -708,11 +1323,73 @@ public class WorkflowAiConversationService {
         return compact.substring(0, 48).trim();
     }
 
-    private String withDateContext(String instruction, String userDateTime) {
-        if (userDateTime == null || userDateTime.isBlank()) {
-            return instruction;
+    private String jsonPayloadOrNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
         }
-        return instruction + "\n\nUser date/time context: " + userDateTime.trim();
+        try {
+            objectMapper.readTree(value);
+            return value;
+        } catch (Exception exception) {
+            // structured_payload is a json column, so malformed model output would fail the whole
+            // insert and lose the turn. The prose is kept on the message content regardless.
+            log.debug("Assistant response was not valid JSON; storing no structured payload", exception);
+            return null;
+        }
+    }
+
+    private String editorAslContext(JsonNode definition) {
+        if (!looksLikeAsl(definition) || definition.path("States").isEmpty()) {
+            return null;
+        }
+        return "Current ASL in the user's editor:\n" + serialize(definition);
+    }
+
+    private String rejectedEditorCandidateContext(
+            JsonNode definition,
+            List<String> validationIssues
+    ) {
+        return "Candidate ASL in the user's editor (not authoritative):\n"
+                + serialize(definition)
+                + "\nValidator issues:\n"
+                + String.join("\n", validationIssues);
+    }
+
+    private WorkflowAiWorkspaceSettingsDTO readWorkspaceSettings(
+            WorkflowAiConversation conversation
+    ) {
+        if (conversation.getWorkspaceSettings() == null) {
+            return null;
+        }
+        try {
+            return objectMapper.treeToValue(
+                    objectMapper.readTree(conversation.getWorkspaceSettings()),
+                    WorkflowAiWorkspaceSettingsDTO.class
+            );
+        } catch (Exception exception) {
+            throw new IllegalStateException(
+                    "Could not read stored workflow AI workspace settings",
+                    exception
+            );
+        }
+    }
+
+    private String userFacingMessageContent(WorkflowAiMessage message) {
+        String content = message.getContent();
+        if (message.getRole() != WorkflowAiMessageRole.USER || content == null) {
+            return content;
+        }
+
+        // Older conversations stored model-only context in the user message. Keep that context in
+        // model history, but do not expose it as text the user typed when the chat is rehydrated.
+        int editorContextStart = content.indexOf("\n\nCurrent ASL in the user's editor:\n");
+        if (editorContextStart >= 0) {
+            content = content.substring(0, editorContextStart);
+        }
+        return content.replaceFirst(
+                "(?s)\\n\\nUser date/time context:\\s*[^\\r\\n]+\\s*$",
+                ""
+        );
     }
 
     private String requireText(String value, String label) {
@@ -732,13 +1409,34 @@ public class WorkflowAiConversationService {
             JsonNode aslDefinition,
             JsonNode finalPlan,
             CreateWorkflowRequestDTO draftWorkflowPayload,
-            JsonNode draftWorkflowPayloadNode
+            JsonNode draftWorkflowPayloadNode,
+            boolean structured,
+            String failureReason
+    ) {
+        private boolean hasDefinitionCandidate() {
+            return aslDefinition != null
+                    || draftWorkflowPayload != null
+                    && draftWorkflowPayload.definition() != null;
+        }
+    }
+
+    private record AssistantAttempt(
+            Response<AiMessage> modelResponse,
+            String cleaned,
+            ThinkingExtraction thinkingExtraction,
+            ParsedAssistantResponse parsed
     ) {
     }
 
     private record ThinkingExtraction(
             String answer,
             String thinkingContent
+    ) {
+    }
+
+    private record ContextWindow(
+            String summary,
+            List<WorkflowAiMessage> recentMessages
     ) {
     }
 }

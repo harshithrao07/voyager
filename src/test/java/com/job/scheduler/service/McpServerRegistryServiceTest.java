@@ -151,6 +151,46 @@ class McpServerRegistryServiceTest {
     }
 
     @Test
+    void rejectsRawSecretInStdioEnvironment() {
+        McpServerRequestDTO request = new McpServerRequestDTO(
+                "local-github", "Local GitHub", null, null,
+                "npx", List.of("github-mcp"),
+                java.util.Map.of("GITHUB_TOKEN", "ghp_plaintext"), null,
+                McpTransport.STDIO, McpAuthType.NONE, null, null, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null
+        );
+
+        assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("GITHUB_TOKEN")
+                .hasMessageContaining("must use ${secret:REF} or ref:REF");
+    }
+
+    @Test
+    void storesOnlySecretReferenceMarkerInStdioEnvironment() {
+        McpServerRequestDTO request = new McpServerRequestDTO(
+                "local-github", "Local GitHub", null, null,
+                "npx", List.of("github-mcp"),
+                java.util.Map.of("GITHUB_TOKEN", "${secret:MCP_GITHUB_TOKEN}"), null,
+                McpTransport.STDIO, McpAuthType.NONE, null, null, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null
+        );
+        when(mcpServerRepository.existsByServerId("local-github")).thenReturn(false);
+        when(mcpServerRepository.save(any(McpServer.class))).thenAnswer(invocation -> {
+            McpServer server = invocation.getArgument(0);
+            server.setId(UUID.randomUUID());
+            server.setCreatedAt(Instant.parse("2026-06-17T00:00:00Z"));
+            server.setUpdatedAt(Instant.parse("2026-06-17T00:00:00Z"));
+            return server;
+        });
+
+        McpServerResponseDTO response = mcpServerRegistryService.registerServer(request);
+
+        assertThat(response.env())
+                .containsEntry("GITHUB_TOKEN", "${secret:MCP_GITHUB_TOKEN}");
+    }
+
+    @Test
     void rejectsStdioServerWithoutCommand() {
         McpServerRequestDTO request = new McpServerRequestDTO(
                 "local-fs", "Local FS", null, null,

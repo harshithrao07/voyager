@@ -289,6 +289,24 @@ function formatEnv(env: Record<string, string> | null | undefined): string {
   return Object.entries(env ?? {}).map(([key, value]) => `${key}=${value}`).join('\n');
 }
 
+const secretReferencePattern = /^(?:\$\{secret:[A-Z][A-Z0-9_]{0,127}}|ref:[A-Z][A-Z0-9_]{0,127})$/;
+const sensitiveEnvNamePattern = /(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|CREDENTIAL|ACCESS_KEY|AUTH)(_|$)/;
+
+function validateEnvironmentReferences(env: Record<string, string>): string | null {
+  for (const [name, value] of Object.entries(env)) {
+    const normalizedName = name.trim().toUpperCase();
+    const normalizedValue = value.trim();
+    if ((normalizedValue.startsWith('${secret:') || normalizedValue.startsWith('ref:'))
+      && !secretReferencePattern.test(normalizedValue)) {
+      return `${normalizedName} must use \${secret:UPPER_SNAKE_CASE} or ref:UPPER_SNAKE_CASE.`;
+    }
+    if (sensitiveEnvNamePattern.test(normalizedName) && !secretReferencePattern.test(normalizedValue)) {
+      return `${normalizedName} looks sensitive and must use a secret reference.`;
+    }
+  }
+  return null;
+}
+
 /** Human-readable address: base URL + endpoint for HTTP, the command line for STDIO. */
 function serverAddress(server: McpServerDTO): string {
   if (server.transport === 'STDIO') {
@@ -353,9 +371,14 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
       if (authType === 'BEARER_TOKEN' && !authEnvVar.trim()) {
         return 'A token env var is required to inject the token for STDIO bearer auth.';
       }
+      const environmentError = validateEnvironmentReferences(parseEnvText(envText));
+      if (environmentError) return environmentError;
     }
     if (authType !== 'NONE' && !authTokenRef.trim()) {
       return 'A secret reference is required for authenticated servers.';
+    }
+    if (authType !== 'NONE' && !/^[A-Z][A-Z0-9_]{0,127}$/.test(authTokenRef.trim())) {
+      return 'Secret references must use UPPER_SNAKE_CASE.';
     }
     if (authType === 'API_KEY' && !authHeaderName.trim()) {
       return 'A header name is required for API key auth.';
@@ -549,12 +572,12 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
                 <textarea
                   value={envText}
                   onChange={(event) => setEnvText(event.target.value)}
-                  placeholder={'LOG_LEVEL=info'}
+                  placeholder={'LOG_LEVEL=info\nGITHUB_TOKEN=${secret:MCP_GITHUB_TOKEN}'}
                   rows={2}
                   className={`${fieldClass} font-mono-sm`}
                 />
                 <span className="mt-1 block text-[10.5px] leading-4 text-on-surface-variant/70">
-                  Non-secret config only — a bearer token is injected separately at call time.
+                  Use literals for non-secret settings. Sensitive variables must use ${'{secret:REF}'} or ref:REF.
                 </span>
               </label>
             </>
@@ -592,14 +615,14 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
               </span>
               <input
                 value={authTokenRef}
-                onChange={(event) => setAuthTokenRef(event.target.value)}
+                onChange={(event) => setAuthTokenRef(event.target.value.toUpperCase())}
                 placeholder="MCP_GITHUB_TOKEN"
                 className={`${fieldClass} font-mono-sm`}
               />
               <span className="mt-1 block text-[10.5px] leading-4 text-on-surface-variant/70">
                 {authType === 'BASIC'
-                  ? 'Env var holding the password, resolved at call time — never stored.'
-                  : 'Env var holding the token/key, resolved at call time — never stored.'}
+                  ? 'Reference to the password in the shared secret resolver — never the password itself.'
+                  : 'Reference to the token/key in the shared secret resolver — never the value itself.'}
               </span>
             </label>
           ) : (

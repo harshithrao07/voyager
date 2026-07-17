@@ -5,16 +5,16 @@ import { WorkspaceState } from './components/WorkspaceState';
 import { WorkflowSettingsPanel } from './components/WorkflowSettingsPanel';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { CreateWorkflowPage } from './pages/CreateWorkflowPage';
-import { SettingsPage } from './pages/SettingsPage';
 import { FunctionsPage } from './pages/FunctionsPage';
 import { McpServersPage } from './pages/McpServersPage';
+import { DocsPage } from './pages/DocsPage';
 import { WorkflowDetailPage, type WorkflowRevision } from './pages/WorkflowDetailPage';
 import {
   activateWorkflowRevision,
   getWorkflow,
   getWorkflowRevisions,
-  listWorkflows,
   listWorkflowAiConversations,
+  listWorkflows,
   updateWorkflowCanvasLayout,
   type WorkflowAiConversationSummaryDTO,
   type WorkflowDefinitionResponseDTO,
@@ -75,46 +75,6 @@ function formatDateTime(value?: string | null) {
 
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date);
-}
-
-function formatChatTime(value?: string | null) {
-  if (!value) return '';
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-
-  return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date);
-}
-
-function formatChatDate(value?: string | null) {
-  if (!value) return 'Unknown date';
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Unknown date';
-
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: '2-digit',
-    year: 'numeric',
-  }).format(date);
-}
-
-function formatChatDateTime(value?: string | null) {
-  if (!value) return '';
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
 
   return new Intl.DateTimeFormat(undefined, {
     month: 'short',
@@ -185,116 +145,33 @@ function buildGeneratedRevision(definition: any): WorkflowRevision {
   };
 }
 
-function ChatHistoryModal({
-  chats,
-  activeChatId,
-  onClose,
-  onSelect,
-}: {
-  chats: WorkflowAiConversationSummaryDTO[];
-  activeChatId?: string;
-  onClose: () => void;
-  onSelect: (chat: WorkflowAiConversationSummaryDTO) => void;
-}) {
-  let currentDate = '';
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex cursor-pointer items-start justify-center bg-background/80 px-4 pt-[12vh] backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <section
-        className="glass-shell w-full max-w-2xl cursor-default overflow-hidden rounded-xl border border-border-subtle bg-surface-container-lowest shadow-[0_26px_90px_rgba(0,0,0,0.5)]"
-        onClick={(event) => event.stopPropagation()}
-        aria-modal="true"
-        role="dialog"
-        aria-label="All chats"
-      >
-        <header className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
-          <div>
-            <h2 className="font-mono-sm text-[12px] font-semibold text-on-surface">All chats</h2>
-            <p className="mt-0.5 text-body-sm text-on-surface-variant">Sorted by latest activity</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border-subtle bg-surface-container-low text-on-surface-variant transition-colors hover:text-on-surface"
-            aria-label="Close all chats"
-            title="Close"
-          >
-            <span className="material-symbols-outlined text-[17px]">close</span>
-          </button>
-        </header>
-        <div className="max-h-[68vh] overflow-y-auto px-2 py-2">
-          {chats.length === 0 ? (
-            <div className="px-4 py-10 text-center text-body-sm text-on-surface-variant">No chats yet.</div>
-          ) : chats.map((chat) => {
-            const activityAt = chat.updatedAt || chat.createdAt;
-            const dateLabel = formatChatDate(activityAt);
-            const showDate = dateLabel !== currentDate;
-            currentDate = dateLabel;
-            const title = compactChatTitle(chat);
-            const active = chat.id === activeChatId;
-
-            return (
-              <div key={chat.id}>
-                {showDate && (
-                  <div className="px-2 pb-1 pt-3 font-mono-sm text-[10px] uppercase tracking-[0.12em] text-on-surface-variant">
-                    {dateLabel}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={() => onSelect(chat)}
-                  className={`group flex min-h-[52px] w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
-                    active
-                      ? 'bg-primary/10 text-on-surface'
-                      : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface'
-                  }`}
-                  title={title}
-                >
-                  <span className="material-symbols-outlined shrink-0 text-[17px] text-secondary">smart_toy</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-mono-sm text-[11px] text-on-surface">{title}</span>
-                    <span className="mt-0.5 block truncate text-body-sm text-on-surface-variant">
-                      {chat.modelDisplayName || 'AI model'}
-                    </span>
-                  </span>
-                  <span className="shrink-0 font-mono-sm text-[10px] text-on-surface-variant">
-                    {formatChatDateTime(activityAt)}
-                  </span>
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-    </div>
-  );
-}
-
 type AppRoute =
   | { page: 'workflows' }
   | { page: 'create' }
   | { page: 'chat'; chatId: string }
   | { page: 'workflow'; workflowId: string }
   | { page: 'workflow-edit'; workflowId: string; revision: number }
-  | { page: 'settings' }
   | { page: 'functions' }
-  | { page: 'mcp' };
+  | { page: 'mcp' }
+  | { page: 'docs'; slug?: string };
 
 function parseRoute(pathname: string): AppRoute {
   const normalized = pathname.replace(/\/+$/, '') || '/';
   if (normalized === '/') return { page: 'create' };
   if (normalized === '/workflows/new') return { page: 'create' };
   if (normalized === '/workflows') return { page: 'workflows' };
-  if (normalized === '/settings') return { page: 'settings' };
   if (normalized === '/functions') return { page: 'functions' };
   if (normalized === '/mcp') return { page: 'mcp' };
+  if (normalized === '/docs') return { page: 'docs' };
 
   const chatMatch = normalized.match(/^\/c\/([^/]+)$/);
   if (chatMatch?.[1]) {
     return { page: 'chat', chatId: decodeURIComponent(chatMatch[1]) };
+  }
+
+  const docsMatch = normalized.match(/^\/docs\/([^/]+)$/);
+  if (docsMatch?.[1]) {
+    return { page: 'docs', slug: decodeURIComponent(docsMatch[1]) };
   }
 
   const workflowEditMatch = normalized.match(/^\/workflows\/([^/]+)\/revisions\/(\d+)\/edit$/);
@@ -330,10 +207,12 @@ function canonicalPath(pathname: string) {
 }
 
 function App() {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [chatsOpen, setChatsOpen] = useState(false);
-  const [chatHistoryModalOpen, setChatHistoryModalOpen] = useState(false);
-  const [searchModalOpen, setSearchModalOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [chatsOpen, setChatsOpen] = useState(true);
+  const [chatSearch, setChatSearch] = useState('');
+  const [chatSummaries, setChatSummaries] = useState<WorkflowAiConversationSummaryDTO[]>([]);
+  const [chatListLoading, setChatListLoading] = useState(true);
+  const [chatListError, setChatListError] = useState<string | null>(null);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [revisionPanelOpen, setRevisionPanelOpen] = useState(false);
   const [workflowSettingsOpen, setWorkflowSettingsOpen] = useState(false);
@@ -342,7 +221,6 @@ function App() {
   const [functionsWorkbenchActive, setFunctionsWorkbenchActive] = useState(false);
   const [workflowPage, setWorkflowPage] = useState<WorkflowPageDTO | null>(null);
   const [workflowSummaries, setWorkflowSummaries] = useState<WorkflowSummary[]>([]);
-  const [chatSummaries, setChatSummaries] = useState<WorkflowAiConversationSummaryDTO[]>([]);
   const [workflowListLoading, setWorkflowListLoading] = useState(true);
   const [workflowListError, setWorkflowListError] = useState<string | null>(null);
   const [workflowDetail, setWorkflowDetail] = useState<WorkflowResponseDTO | null>(null);
@@ -439,15 +317,7 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setSearchModalOpen(true);
-        return;
-      }
-
       if (e.key === 'Escape') {
-        setSearchModalOpen(false);
-        setChatHistoryModalOpen(false);
         setDetailsPanelOpen(false);
         setRevisionPanelOpen(false);
       }
@@ -478,17 +348,21 @@ function App() {
     loadWorkflows();
   }, []);
 
-  const loadChats = () => {
+  const loadChats = useCallback(() => {
+    setChatListLoading(true);
+    setChatListError(null);
     listWorkflowAiConversations()
       .then(setChatSummaries)
       .catch((error: Error) => {
         console.warn('Workflow AI chat history unavailable.', error);
-      });
-  };
+        setChatListError('Chat history is unavailable.');
+      })
+      .finally(() => setChatListLoading(false));
+  }, []);
 
   useEffect(() => {
     loadChats();
-  }, []);
+  }, [loadChats]);
 
   useEffect(() => {
     if (route.page !== 'functions') {
@@ -627,26 +501,11 @@ function App() {
     navigate('/');
   };
 
-  const upsertChatSummary = (
-    previousId: string | null,
-    chat: WorkflowAiConversationSummaryDTO,
-  ) => {
-    setChatSummaries((current) => {
-      const filtered = current.filter((item) => (
-        item.id !== chat.id && (!previousId || item.id !== previousId)
-      ));
-      return [chat, ...filtered].sort((left, right) => (
-        new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
-      ));
-    });
-  };
-
   const handleChatSelected = (chat: WorkflowAiConversationSummaryDTO) => {
     setSelectedWorkflow(null);
     setRevisionPanelOpen(false);
     setDetailsPanelOpen(false);
-    setChatHistoryModalOpen(false);
-    navigate(`/c/${chat.id}`);
+    navigate(`/c/${encodeURIComponent(chat.id)}`);
   };
 
   const handleWorkflowCreated = (workflow: WorkflowResponseDTO) => {
@@ -832,12 +691,20 @@ function App() {
     setRevisionPanelOpen(false);
   };
 
-  const createViewActive = route.page === 'create' || route.page === 'chat' || route.page === 'workflow-edit';
+  const createViewActive = route.page === 'create'
+    || route.page === 'chat'
+    || route.page === 'workflow-edit';
   const hideMainHeader = createViewActive || (route.page === 'functions' && functionsWorkbenchActive);
-  const sortedChatSummaries = [...chatSummaries].sort((left, right) => chatSortTime(right) - chatSortTime(left));
-  const sidebarChatSummaries = sortedChatSummaries.slice(0, 5);
-  const hiddenChatCount = Math.max(sortedChatSummaries.length - sidebarChatSummaries.length, 0);
-  const hasSidebarChats = sortedChatSummaries.length > 0;
+  const normalizedChatSearch = chatSearch.trim().toLocaleLowerCase();
+  const sortedChatSummaries = [...chatSummaries]
+    .sort((left, right) => chatSortTime(right) - chatSortTime(left));
+  const filteredChatSummaries = normalizedChatSearch
+    ? sortedChatSummaries.filter((chat) => (
+        compactChatTitle(chat).toLocaleLowerCase().includes(normalizedChatSearch)
+        || chat.initialInstruction?.toLocaleLowerCase().includes(normalizedChatSearch)
+        || chat.modelDisplayName?.toLocaleLowerCase().includes(normalizedChatSearch)
+      ))
+    : sortedChatSummaries;
 
   // Shared sidebar nav-item styling (design: Voyager.dc.html). Active item gets a
   // surface fill; the accent bar is rendered separately via `navActiveBar`.
@@ -912,87 +779,113 @@ function App() {
               {route.page === 'create' && navActiveBar}
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>New Workflow</span>
             </button>
-            <button
-              onClick={() => setSearchModalOpen(true)}
-              className={navItemClass(false)}
-              aria-label="Search"
-              title="Search (Ctrl+K)"
-              type="button"
-            >
-              <span className="material-symbols-outlined shrink-0 text-[18px]">search</span>
-              <span className={sidebarOpen ? 'inline flex-1 truncate text-left' : 'hidden'}>Search</span>
-              {sidebarOpen && (
-                <span className="rounded-md border border-border-subtle bg-surface-container-low px-1.5 py-0.5 font-mono-sm text-[10px] text-on-surface-variant">
-                  Ctrl K
-                </span>
-              )}
-            </button>
-            {hasSidebarChats && (
-              <div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!sidebarOpen) {
-                      setSidebarOpen(true);
-                      setChatsOpen(true);
-                    } else {
-                      setChatsOpen((open) => !open);
-                    }
-                  }}
-                  className={navItemClass(false)}
-                  title="Chats"
-                  aria-label={chatsOpen ? 'Collapse chats' : 'Expand chats'}
-                  aria-expanded={chatsOpen}
-                >
-                  <span className="material-symbols-outlined shrink-0 text-[18px]">chat_bubble</span>
-                  <span className={sidebarOpen ? 'inline flex-1 truncate text-left' : 'hidden'}>Chats</span>
-                  {sidebarOpen && (
-                    <span className="material-symbols-outlined shrink-0 text-[16px]">
+            <div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!sidebarOpen) {
+                    setSidebarOpen(true);
+                    setChatsOpen(true);
+                    return;
+                  }
+                  setChatsOpen((open) => !open);
+                }}
+                className={navItemClass(route.page === 'chat')}
+                aria-label={!sidebarOpen ? 'Open chats' : chatsOpen ? 'Collapse chats' : 'Expand chats'}
+                aria-expanded={sidebarOpen && chatsOpen}
+                title="Chats"
+              >
+                <span className="material-symbols-outlined shrink-0 text-[18px]">forum</span>
+                {route.page === 'chat' && navActiveBar}
+                <span className={sidebarOpen ? 'inline min-w-0 flex-1 truncate text-left' : 'hidden'}>Chats</span>
+                {sidebarOpen && (
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    <span className="rounded-md border border-border-subtle px-1.5 py-0.5 font-mono-sm text-[9px] text-on-surface-variant">
+                      {chatSummaries.length}
+                    </span>
+                    <span className="material-symbols-outlined text-[16px]">
                       {chatsOpen ? 'expand_more' : 'chevron_right'}
                     </span>
-                  )}
-                </button>
-                <div className="mt-0.5 space-y-0.5">
-                  {sidebarOpen && chatsOpen && sidebarChatSummaries.map((chat) => {
-                    const active = route.page === 'chat' && route.chatId === chat.id;
-                    const title = compactChatTitle(chat);
-                    const modelLabel = chat.modelDisplayName || 'AI model';
-                    const timeLabel = formatChatTime(chat.updatedAt || chat.createdAt);
-                    return (
+                  </span>
+                )}
+              </button>
+
+              {sidebarOpen && chatsOpen && (
+                <div className="mx-1 mt-1 rounded-lg border border-border-subtle bg-surface-container-lowest/65 p-1.5">
+                  <div className="relative">
+                    <span className="material-symbols-outlined pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[15px] text-on-surface-variant">
+                      search
+                    </span>
+                    <input
+                      type="search"
+                      value={chatSearch}
+                      onChange={(event) => setChatSearch(event.target.value)}
+                      placeholder="Search chats"
+                      aria-label="Search chats"
+                      className="h-8 w-full rounded-md border border-border-subtle bg-surface-container-low pl-7 pr-7 font-mono-sm text-[10px] text-on-surface outline-none placeholder:text-on-surface-variant/65 focus:border-secondary/55 focus:ring-1 focus:ring-secondary/20"
+                    />
+                    {chatSearch && (
                       <button
-                        key={chat.id}
                         type="button"
-                        onClick={() => handleChatSelected(chat)}
-                        className={`group relative flex h-10 w-full min-w-0 items-center gap-2 rounded-lg px-2 font-mono-sm text-[12px] transition-colors ${active ? 'bg-primary/10 text-secondary' : 'text-on-surface-variant hover:bg-surface-container-low hover:text-secondary'}`}
-                        aria-label={`Open chat ${title}`}
-                        title={`${title} - ${modelLabel}`}
+                        onClick={() => setChatSearch('')}
+                        aria-label="Clear chat search"
+                        className="absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface"
                       >
-                        <span className="material-symbols-outlined shrink-0 text-[17px] text-on-surface-variant group-hover:text-secondary">smart_toy</span>
-                        {active && navActiveBar}
-                        <span className="min-w-0 flex-1 truncate text-left">
-                          <span className="text-on-surface-variant">&gt;_</span>
-                          <span className="ml-1.5 text-secondary">{title}</span>
-                          {timeLabel && <span className="ml-1.5 text-on-surface-variant">&middot; {timeLabel}</span>}
-                        </span>
+                        <span className="material-symbols-outlined text-[14px]">close</span>
                       </button>
-                    );
-                  })}
-                  {sidebarOpen && chatsOpen && hiddenChatCount > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setChatHistoryModalOpen(true)}
-                      className="flex h-8 w-full items-center gap-2 rounded-lg px-2 font-mono-sm text-[10px] text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface"
-                      aria-label="View all chats"
-                      title="View all chats"
-                    >
-                      <span className="material-symbols-outlined shrink-0 text-[16px]">more_horiz</span>
-                      <span className="min-w-0 flex-1 truncate text-left">View all chats</span>
-                      <span className="rounded-md border border-border-subtle px-1.5 py-0.5 text-[9px]">{hiddenChatCount}</span>
-                    </button>
-                  )}
+                    )}
+                  </div>
+
+                  <div className="mt-1.5 max-h-[min(42vh,360px)] space-y-0.5 overflow-y-auto pr-0.5" role="region" aria-label="Chat history">
+                    {chatListLoading && chatSummaries.length === 0 ? (
+                      <div className="px-2 py-3 text-center font-mono-sm text-[10px] text-on-surface-variant">Loading chats...</div>
+                    ) : chatListError && chatSummaries.length === 0 ? (
+                      <button
+                        type="button"
+                        onClick={loadChats}
+                        className="w-full rounded-md px-2 py-3 text-center font-mono-sm text-[10px] text-status-error transition-colors hover:bg-surface-container-low"
+                      >
+                        {chatListError} Retry
+                      </button>
+                    ) : filteredChatSummaries.length === 0 ? (
+                      <div className="px-2 py-3 text-center font-mono-sm text-[10px] text-on-surface-variant">
+                        {chatSearch ? 'No matching chats' : 'No previous chats yet'}
+                      </div>
+                    ) : filteredChatSummaries.map((chat) => {
+                      const active = route.page === 'chat' && route.chatId === chat.id;
+                      const title = compactChatTitle(chat);
+                      return (
+                        <button
+                          key={chat.id}
+                          type="button"
+                          onClick={() => handleChatSelected(chat)}
+                          aria-label={`Open chat ${title}`}
+                          aria-current={active ? 'page' : undefined}
+                          title={title}
+                          className={`group relative flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
+                            active
+                              ? 'bg-primary/10 text-on-surface'
+                              : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface'
+                          }`}
+                        >
+                          <span className={`material-symbols-outlined shrink-0 text-[15px] ${active ? 'text-secondary' : 'text-on-surface-variant group-hover:text-secondary'}`}>
+                            chat_bubble
+                          </span>
+                          {active && <span className="absolute left-0 top-1/2 h-5 w-[2px] -translate-y-1/2 rounded-r-full bg-secondary" />}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-mono-sm text-[10px] font-medium leading-4">{title}</span>
+                            <span className="block truncate font-mono-sm text-[9px] leading-3 text-on-surface-variant/70">
+                              {formatDateTime(chat.updatedAt || chat.createdAt)}
+                              {chat.modelDisplayName ? ` · ${chat.modelDisplayName}` : ''}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
             <div className="mx-2 my-3 h-px bg-border-subtle" />
             <button
               onClick={() => navigate('/workflows')}
@@ -1025,29 +918,15 @@ function App() {
               <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>MCP Servers</span>
             </button>
             <div className="mx-2 my-3 h-px bg-border-subtle" />
-            <button className={navItemClass(false)} aria-label="Docs" title="Docs">
-              <span className="material-symbols-outlined shrink-0 text-[18px]">description</span>
-              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Docs</span>
-            </button>
-            <button onClick={() => navigate('/settings')} className={navItemClass(route.page === 'settings')} aria-label="Settings" title="Settings">
-              <span className="material-symbols-outlined shrink-0 text-[18px]">settings</span>
-              {route.page === 'settings' && navActiveBar}
-              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Settings</span>
-            </button>
-          </div>
-          <div className="mt-auto border-border-subtle p-2.5">
             <button
-              type="button"
-              className={`flex w-full items-center gap-2.5 rounded-xl border border-border-subtle bg-surface-container-lowest p-2 text-left transition-colors hover:bg-surface-container-low ${sidebarOpen ? 'justify-start' : 'justify-center'}`}
-              aria-label="Account"
-              title="admin"
+              onClick={() => navigate('/docs')}
+              className={navItemClass(route.page === 'docs')}
+              aria-label="Docs"
+              title="Docs"
             >
-              <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-primary to-primary-fixed font-mono-sm text-[12px] font-semibold text-on-primary">
-                AD
-              </span>
-              {sidebarOpen && (
-                  <span className="block truncate text-[12px] font-semibold text-on-surface">admin</span>
-              )}
+              <span className="material-symbols-outlined shrink-0 text-[18px]">description</span>
+              {route.page === 'docs' && navActiveBar}
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Docs</span>
             </button>
           </div>
         </aside>
@@ -1066,7 +945,7 @@ function App() {
                   </div>
                 ) : (
                   <span className="font-display text-[16px] font-semibold leading-6 text-primary">
-                {route.page === 'settings' ? 'Settings' : route.page === 'functions' ? 'Functions' : route.page === 'mcp' ? 'MCP Servers' : 'Workflow Executions'}
+                {route.page === 'functions' ? 'Functions' : route.page === 'mcp' ? 'MCP Servers' : route.page === 'docs' ? 'Docs' : 'Workflow Executions'}
                   </span>
                 )}
               </div>
@@ -1195,15 +1074,14 @@ function App() {
                   routeChatId={route.page === 'chat' ? route.chatId : undefined}
                   onWorkflowCreated={handleWorkflowCreated}
                   onNavigate={navigate}
-                  onChatStarted={(chat) => upsertChatSummary(null, chat)}
-                  onChatUpdated={upsertChatSummary}
+                  onConversationUpdated={loadChats}
                 />
-              ) : route.page === 'settings' ? (
-                <SettingsPage />
               ) : route.page === 'functions' ? (
                 <FunctionsPage onWorkbenchModeChange={setFunctionsWorkbenchActive} />
               ) : route.page === 'mcp' ? (
                 <McpServersPage />
+              ) : route.page === 'docs' ? (
+                <DocsPage slug={route.slug} onNavigate={navigate} />
               ) : workflowListLoading ? (
                 <WorkspaceState title="Loading workflows" message="Fetching workflow list from /app/v1/workflows." />
               ) : workflowListError ? (
@@ -1251,32 +1129,6 @@ function App() {
           onDirtyChange={handleWorkflowSettingsDirtyChange}
           onWorkflowUpdated={handleWorkflowUpdated}
           onWorkflowArchived={handleWorkflowArchived}
-        />
-      )}
-      {searchModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex cursor-pointer items-start justify-center bg-background/80 pt-[20vh] backdrop-blur-sm"
-          onClick={() => setSearchModalOpen(false)}
-        >
-          <div
-            className="w-full max-w-2xl cursor-default px-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <input
-              autoFocus
-              type="text"
-              placeholder="Search conversations ..."
-              className="w-full rounded-full border border-border-subtle bg-surface-container-highest px-6 py-4 font-mono-sm text-body-lg text-on-surface shadow-lg outline-none placeholder:text-on-surface-variant focus:border-primary/50 focus:ring-1 focus:ring-primary/50"
-            />
-          </div>
-        </div>
-      )}
-      {chatHistoryModalOpen && (
-        <ChatHistoryModal
-          chats={sortedChatSummaries}
-          activeChatId={route.page === 'chat' ? route.chatId : undefined}
-          onClose={() => setChatHistoryModalOpen(false)}
-          onSelect={handleChatSelected}
         />
       )}
     </div>

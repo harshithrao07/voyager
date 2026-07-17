@@ -7,3 +7,12 @@ target
 *.log
 .DS_Store
 Thumbs.db
+
+# The frontend image builds from this context too (it needs /docs), so the
+# frontend's own build artifacts are excluded here rather than in
+# frontend/.dockerignore, which Docker does not consult for a root context.
+**/node_modules
+**/dist
+**/test-results
+**/playwright-report
+frontend/dashboard-check.png

@@ -1,5 +1,6 @@
-import { useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Compass, Lightbulb, Sparkles, X } from 'lucide-react';
+import { useTemplateFilePicker, type TemplateImportHandler } from './useTemplateImport';
 
 const promptExamples = [
   {
@@ -29,24 +30,10 @@ export function WorkflowAiEmptyState({
   chatInputNode: ReactNode;
   onSubmitPrompt: (prompt: string) => void;
   onPreviewPrompt?: (prompt: string | null) => void;
-  onImportTemplate?: (raw: string, fileName?: string) => void;
+  onImportTemplate?: TemplateImportHandler;
 }) {
   const [examplesOpen, setExamplesOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const openTemplatePicker = () => fileInputRef.current?.click();
-
-  const handleTemplateFile = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    try {
-      const raw = await file.text();
-      onImportTemplate?.(raw, file.name);
-    } catch {
-      onImportTemplate?.('', file.name);
-    }
-  };
+  const { openTemplatePicker, templateFileInput } = useTemplateFilePicker(onImportTemplate);
 
   const previewExample = (prompt: string | null) => onPreviewPrompt?.(prompt);
 
@@ -71,14 +58,7 @@ export function WorkflowAiEmptyState({
           Not sure what to ask? Try one of these
         </div>
 
-        <input
-          ref={fileInputRef}
-          type="file"
-          data-testid="workflow-template-file"
-          accept=".json,.asl,application/json"
-          className="hidden"
-          onChange={handleTemplateFile}
-        />
+        {templateFileInput}
 
         <div className="mx-auto mt-4 grid max-w-[560px] gap-4 md:grid-cols-2">
           <ActionTile

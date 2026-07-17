@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS ai_model_configs (
     provider_type VARCHAR(64) NOT NULL,
     base_url VARCHAR(255) NOT NULL,
     model_name VARCHAR(255) NOT NULL,
-    api_key VARCHAR(1024),
+    credential_ref VARCHAR(128),
     enabled BOOLEAN NOT NULL,
     default_model BOOLEAN NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -12,7 +12,30 @@ CREATE TABLE IF NOT EXISTS ai_model_configs (
 );
 
 ALTER TABLE ai_model_configs
-    ADD COLUMN IF NOT EXISTS api_key VARCHAR(1024);
+    ADD COLUMN IF NOT EXISTS credential_ref VARCHAR(128);
+
+-- Legacy releases stored provider credentials directly. They cannot be safely
+-- converted into deployment references, so remove the plaintext column during
+-- the upgrade. Operators configure SCHEDULER_SECRETS_* and credential_ref instead.
+ALTER TABLE ai_model_configs
+    DROP COLUMN IF EXISTS api_key;
+
+-- Hibernate creates an enum check constraint on fresh local databases, but ddl-auto=update
+-- does not expand that constraint when a new enum value is added. Recreate it idempotently
+-- so existing installations can store cloud OpenAI-compatible providers as well.
+ALTER TABLE ai_model_configs
+    DROP CONSTRAINT IF EXISTS ai_model_configs_provider_type_check;
+
+ALTER TABLE ai_model_configs
+    ADD CONSTRAINT ai_model_configs_provider_type_check
+    CHECK (provider_type IN ('OPENAI_COMPATIBLE_LOCAL', 'OPENAI_COMPATIBLE_API'));
+
+ALTER TABLE ai_model_configs
+    DROP CONSTRAINT IF EXISTS ai_model_configs_credential_ref_check;
+
+ALTER TABLE ai_model_configs
+    ADD CONSTRAINT ai_model_configs_credential_ref_check
+    CHECK (credential_ref IS NULL OR credential_ref ~ '^[A-Z][A-Z0-9_]{0,127}$');
 
 CREATE INDEX IF NOT EXISTS idx_ai_model_configs_enabled
     ON ai_model_configs (enabled);
@@ -30,9 +53,25 @@ CREATE TABLE IF NOT EXISTS workflow_ai_conversations (
     draft_asl JSONB,
     final_plan JSONB,
     draft_workflow_payload JSONB,
+    canvas_layout JSONB,
+    workspace_settings JSONB,
+    conversation_summary TEXT,
+    summarized_through_message_id UUID,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
+
+ALTER TABLE workflow_ai_conversations
+    ADD COLUMN IF NOT EXISTS conversation_summary TEXT;
+
+ALTER TABLE workflow_ai_conversations
+    ADD COLUMN IF NOT EXISTS summarized_through_message_id UUID;
+
+ALTER TABLE workflow_ai_conversations
+    ADD COLUMN IF NOT EXISTS canvas_layout JSONB;
+
+ALTER TABLE workflow_ai_conversations
+    ADD COLUMN IF NOT EXISTS workspace_settings JSONB;
 
 CREATE INDEX IF NOT EXISTS idx_workflow_ai_conversations_stage
     ON workflow_ai_conversations (stage);

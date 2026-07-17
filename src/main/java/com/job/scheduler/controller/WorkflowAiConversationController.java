@@ -8,6 +8,7 @@ import com.job.scheduler.dto.WorkflowAiResponseDTO;
 import com.job.scheduler.dto.WorkflowAiRegenerateRequestDTO;
 import com.job.scheduler.dto.WorkflowAiReviewAslRequestDTO;
 import com.job.scheduler.dto.WorkflowAiStartRequestDTO;
+import com.job.scheduler.dto.WorkflowAiWorkspaceRequestDTO;
 import com.job.scheduler.service.WorkflowAiConversationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -18,6 +19,7 @@ import org.springframework.messaging.simp.annotation.SendToUser;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -45,6 +47,15 @@ public class WorkflowAiConversationController {
         );
     }
 
+    @PutMapping("/conversations/{conversationId}/workspace")
+    public ResponseEntity<Void> saveWorkspace(
+            @PathVariable UUID conversationId,
+            @Valid @RequestBody WorkflowAiWorkspaceRequestDTO request
+    ) {
+        workflowAiConversationService.saveWorkspace(conversationId, request);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/conversations")
     public ResponseEntity<WorkflowAiResponseDTO> startConversation(
             @Valid @RequestBody WorkflowAiStartRequestDTO request
@@ -52,7 +63,8 @@ public class WorkflowAiConversationController {
         return ResponseEntity.ok(workflowAiConversationService.startConversation(
                 request.instruction(),
                 request.modelConfigId(),
-                request.userDateTime()
+                request.userDateTime(),
+                request.definition()
         ));
     }
 
@@ -63,7 +75,8 @@ public class WorkflowAiConversationController {
         return ResponseEntity.ok(workflowAiConversationService.continueConversation(
                 request.conversationId(),
                 request.message(),
-                request.modelConfigId()
+                request.modelConfigId(),
+                request.definition()
         ));
     }
 
@@ -105,7 +118,8 @@ public class WorkflowAiConversationController {
         return workflowAiConversationService.startConversation(
                 request.instruction(),
                 request.modelConfigId(),
-                request.userDateTime()
+                request.userDateTime(),
+                request.definition()
         );
     }
 
@@ -117,7 +131,8 @@ public class WorkflowAiConversationController {
         return workflowAiConversationService.continueConversation(
                 request.conversationId(),
                 request.message(),
-                request.modelConfigId()
+                request.modelConfigId(),
+                request.definition()
         );
     }
 

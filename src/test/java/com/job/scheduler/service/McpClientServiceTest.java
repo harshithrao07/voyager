@@ -7,6 +7,7 @@ import com.job.scheduler.enums.McpTransport;
 import com.job.scheduler.enums.McpTrustLevel;
 import com.job.scheduler.exception.McpConnectionException;
 import com.job.scheduler.repository.McpServerRepository;
+import io.modelcontextprotocol.client.transport.McpHttpClientTransportAuthorizationException;
 import jakarta.persistence.EntityNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -14,9 +15,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.net.http.HttpClient;
+import java.net.http.HttpHeaders;
+import java.net.http.HttpResponse;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -25,13 +31,13 @@ class McpClientServiceTest {
     private McpServerRepository mcpServerRepository;
 
     @Mock
-    private McpTokenResolver tokenResolver;
+    private SecretResolver secretResolver;
 
     private McpClientService mcpClientService;
 
     @BeforeEach
     void setUp() {
-        mcpClientService = new McpClientService(mcpServerRepository, tokenResolver);
+        mcpClientService = new McpClientService(mcpServerRepository, secretResolver);
     }
 
     @Test
@@ -57,7 +63,8 @@ class McpClientServiceTest {
     void listToolsRejectsBearerTokenServerWhenNoTokenConfigured() {
         when(mcpServerRepository.findByServerId("local-tools"))
                 .thenReturn(Optional.of(server(McpServerStatus.ENABLED, McpAuthType.BEARER_TOKEN)));
-        when(tokenResolver.resolve(org.mockito.ArgumentMatchers.any())).thenReturn(Optional.empty());
+        when(secretResolver.require("LOCAL_TOOLS_TOKEN"))
+                .thenThrow(new IllegalStateException("not configured"));
 
         assertThatThrownBy(() -> mcpClientService.listTools("local-tools").block())
                 .isInstanceOf(IllegalStateException.class)
@@ -73,6 +80,36 @@ class McpClientServiceTest {
                 .isInstanceOf(McpConnectionException.class)
                 .hasMessageContaining("command 'voyager-no-such-command-zzz' was not found")
                 .hasMessageContaining("use HTTP transport or install the runtime");
+    }
+
+    @Test
+    void recognizesSdk401AuthorizationFailureForRetry() {
+        HttpResponse.ResponseInfo unauthorized = new HttpResponse.ResponseInfo() {
+            @Override
+            public int statusCode() {
+                return 401;
+            }
+
+            @Override
+            public HttpHeaders headers() {
+                return HttpHeaders.of(Map.of(), (name, value) -> true);
+            }
+
+            @Override
+            public HttpClient.Version version() {
+                return HttpClient.Version.HTTP_1_1;
+            }
+        };
+        var exception = new McpHttpClientTransportAuthorizationException(
+                "unauthorized",
+                null,
+                unauthorized
+        );
+
+        assertThat(mcpClientService.isAuthenticationFailure(exception)).isTrue();
+        assertThat(mcpClientService.isAuthenticationFailure(
+                new IllegalStateException("other failure")
+        )).isFalse();
     }
 
     private McpServer stdioServer(String command) {
@@ -97,7 +134,7 @@ class McpClientServiceTest {
         server.setEndpoint("/mcp");
         server.setTransport(McpTransport.HTTP);
         server.setAuthType(authType);
-        server.setAuthTokenRef(authType == McpAuthType.BEARER_TOKEN ? "secret/local-tools/token" : null);
+        server.setAuthTokenRef(authType == McpAuthType.BEARER_TOKEN ? "LOCAL_TOOLS_TOKEN" : null);
         server.setTrustLevel(McpTrustLevel.READ_ONLY);
         server.setStatus(status);
         return server;

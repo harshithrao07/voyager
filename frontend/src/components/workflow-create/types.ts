@@ -1,5 +1,3 @@
-import type { WorkflowAiStage } from '../../api';
-
 export type DefinitionMode = 'manual' | 'ai';
 
 export type AiModel = {
@@ -10,6 +8,8 @@ export type AiModel = {
   provider: 'local' | 'api';
   enabled?: boolean;
   defaultModel?: boolean;
+  credentialRef?: string | null;
+  hasCredential?: boolean;
 };
 
 export type ChatMessage = {
@@ -17,6 +17,7 @@ export type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
   createdAt: number;
+  persisted?: boolean;
   modelConfigId?: string | null;
   modelDisplayName?: string | null;
   durationMs?: number | null;
@@ -28,22 +29,6 @@ export type ChatMessage = {
   regeneratedFromMessageId?: string | null;
   streamingStatus?: 'processing' | 'streaming';
   streamingPhase?: 'thinking' | 'answer';
-};
-
-export type ChatSnapshot = {
-  messages: ChatMessage[];
-  isEditorOpen: boolean;
-  conversationId: string | null;
-  conversationStage: WorkflowAiStage;
-  name: string;
-  maxAttempts: number;
-  cronExpression: string;
-  timezone: string;
-  idempotencyKey: string;
-  definitionText: string;
-  validationIssues: string[];
-  modelId: string;
-  error: string | null;
 };
 
 export type DefinitionStatus = {
@@ -70,6 +55,8 @@ export type EndpointModelGroup = {
   host: string;
   models: AiModel[];
   enabledCount: number;
+  provider: 'local' | 'api';
+  hasCredential: boolean;
 };
 
-export type ModelSettingsTab = 'add' | 'added' | 'defaults' | 'search';
+export type ModelSettingsTab = 'add' | 'added';

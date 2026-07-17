@@ -11,6 +11,8 @@ public record AiModelConfigDTO(
         String baseUrl,
         String modelName,
         boolean enabled,
-        boolean defaultModel
+        boolean defaultModel,
+        String credentialRef,
+        boolean hasCredential
 ) {
 }

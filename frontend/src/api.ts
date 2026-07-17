@@ -23,25 +23,28 @@ export type WorkflowAiStage =
 export interface AiModelConfigDTO {
   id: string;
   displayName: string;
-  providerType: 'OPENAI_COMPATIBLE_LOCAL';
+  providerType: 'OPENAI_COMPATIBLE_LOCAL' | 'OPENAI_COMPATIBLE_API';
   baseUrl: string;
   modelName: string;
   enabled: boolean;
   defaultModel: boolean;
+  credentialRef: string | null;
+  hasCredential: boolean;
 }
 
 export interface AiModelConfigRequest {
   displayName: string;
+  providerType?: 'OPENAI_COMPATIBLE_LOCAL' | 'OPENAI_COMPATIBLE_API';
   baseUrl: string;
   modelName: string;
-  apiKey?: string | null;
+  credentialRef?: string | null;
   defaultModel: boolean;
 }
 
 export interface AiModelTestRequest {
   baseUrl: string;
   modelName?: string | null;
-  apiKey?: string | null;
+  credentialRef?: string | null;
 }
 
 export interface AiModelTestResponse {
@@ -51,7 +54,8 @@ export interface AiModelTestResponse {
 
 export interface AiModelDiscoverRequest {
   baseUrl: string;
-  apiKey?: string | null;
+  credentialRef?: string | null;
+  providerType?: 'OPENAI_COMPATIBLE_LOCAL' | 'OPENAI_COMPATIBLE_API';
 }
 
 export interface AiModelEnabledRequest {
@@ -71,21 +75,16 @@ export interface WorkflowAiStartRequest {
   instruction: string;
   modelConfigId?: string | null;
   userDateTime?: string;
+  /** ASL already open in the editor, so the assistant amends it instead of starting over. */
+  definition?: any;
 }
 
 export interface WorkflowAiChatRequest {
   conversationId: string;
   message: string;
   modelConfigId?: string | null;
-}
-
-export interface WorkflowAiReviewAslRequest {
-  conversationId: string;
-  definition: any;
-}
-
-export interface WorkflowAiAcceptPlanRequest {
-  conversationId: string;
+  /** ASL already open in the editor, so the assistant amends it instead of starting over. */
+  definition?: any;
 }
 
 export interface WorkflowAiResponse {
@@ -133,7 +132,23 @@ export interface WorkflowAiConversationDetailDTO extends WorkflowAiConversationS
   aslDefinition?: any | null;
   finalPlan?: any | null;
   draftWorkflowPayload?: CreateWorkflowRequest | null;
+  canvasLayout?: Record<string, { x: number; y: number }> | null;
+  workspaceSettings?: WorkflowAiWorkspaceSettingsDTO | null;
   messages: WorkflowAiMessageDTO[];
+}
+
+export interface WorkflowAiWorkspaceSettingsDTO {
+  name?: string | null;
+  cronExpression?: string | null;
+  maxAttempts?: number | null;
+  idempotencyKey?: string | null;
+  timezone?: string | null;
+}
+
+export interface WorkflowAiWorkspaceRequest {
+  definition: any;
+  canvasLayout: Record<string, { x: number; y: number }>;
+  settings: WorkflowAiWorkspaceSettingsDTO;
 }
 
 export interface WorkflowAiRegenerateRequest {
@@ -507,34 +522,6 @@ export interface FunctionLanguageDTO {
   multiFileSupported: boolean;
 }
 
-export interface Judge0LimitsDTO {
-  cpuTimeLimit: number | null;
-  maxCpuTimeLimit: number | null;
-  wallTimeLimit: number | null;
-  maxWallTimeLimit: number | null;
-  memoryLimit: number | null;
-  maxMemoryLimit: number | null;
-  maxFileSize: number | null;
-  maxExtractSize: number | null;
-  enableNetwork: boolean | null;
-  allowEnableNetwork: boolean | null;
-}
-
-export interface Judge0RuntimeInfoDTO {
-  reachable: boolean;
-  error: string | null;
-  languageCount: number;
-  statusCount: number;
-  workers: number;
-  availableWorkers: number;
-  languages: FunctionLanguageDTO[];
-  limits: Judge0LimitsDTO | null;
-}
-
-export function getFunctionRuntimeInfo(): Promise<Judge0RuntimeInfoDTO> {
-  return getJson<Judge0RuntimeInfoDTO>('/app/v1/functions/runtime');
-}
-
 async function sendJson<T>(url: string, method: string, body: unknown): Promise<T> {
   const response = await fetch(url, {
     method,
@@ -884,6 +871,35 @@ export function listAllAiModels(): Promise<AiModelConfigDTO[]> {
   return getJson<AiModelConfigDTO[]>('/app/v1/ai/models/all');
 }
 
+export function getWorkflowAiConversation(
+  conversationId: string,
+): Promise<WorkflowAiConversationDetailDTO> {
+  return getJson<WorkflowAiConversationDetailDTO>(
+    `/app/v1/workflow-ai/conversations/${encodeURIComponent(conversationId)}`,
+  );
+}
+
+export function listWorkflowAiConversations(): Promise<WorkflowAiConversationSummaryDTO[]> {
+  return getJson<WorkflowAiConversationSummaryDTO[]>('/app/v1/workflow-ai/conversations');
+}
+
+export async function saveWorkflowAiWorkspace(
+  conversationId: string,
+  request: WorkflowAiWorkspaceRequest,
+): Promise<void> {
+  const response = await fetch(
+    `/app/v1/workflow-ai/conversations/${encodeURIComponent(conversationId)}/workspace`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to save conversation workspace: ${await readError(response)}`);
+  }
+}
+
 export async function createAiModel(request: AiModelConfigRequest): Promise<AiModelConfigDTO> {
   const response = await fetch('/app/v1/ai/models', {
     method: 'POST',
@@ -960,14 +976,6 @@ export async function deleteAiModel(modelId: string): Promise<void> {
     throw new Error(`Failed to delete model: ${await readError(response)}`);
   }
 }
-export function listWorkflowAiConversations(): Promise<WorkflowAiConversationSummaryDTO[]> {
-  return getJson<WorkflowAiConversationSummaryDTO[]>('/app/v1/workflow-ai/conversations');
-}
-
-export function getWorkflowAiConversation(conversationId: string): Promise<WorkflowAiConversationDetailDTO> {
-  return getJson<WorkflowAiConversationDetailDTO>(`/app/v1/workflow-ai/conversations/${conversationId}`);
-}
-
 export async function createWorkflow(request: CreateWorkflowRequest): Promise<WorkflowResponseDTO> {
   const response = await fetch('/app/v1/workflows', {
     method: 'POST',
@@ -1088,14 +1096,6 @@ export function startWorkflowAiConversation(request: WorkflowAiStartRequest): Pr
 
 export function continueWorkflowAiConversation(request: WorkflowAiChatRequest): Promise<WorkflowAiResponse> {
   return sendWorkflowAiSocket('/app/workflow-ai/message', request);
-}
-
-export function reviewWorkflowAiAsl(request: WorkflowAiReviewAslRequest): Promise<WorkflowAiResponse> {
-  return sendWorkflowAiSocket('/app/workflow-ai/review-asl', request);
-}
-
-export function acceptWorkflowAiPlan(request: WorkflowAiAcceptPlanRequest): Promise<WorkflowAiResponse> {
-  return sendWorkflowAiSocket('/app/workflow-ai/accept', request);
 }
 
 export async function regenerateWorkflowAiMessage(

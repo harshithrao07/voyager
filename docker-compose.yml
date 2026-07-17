@@ -34,7 +34,9 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      # Repo root, so the build can reach /docs for the Docs page.
+      context: .
+      dockerfile: frontend/Dockerfile
     ports:
       - "3000:80"
     depends_on:

@@ -90,10 +90,14 @@ Click **Register server**:
 
 ## Authentication and secrets
 
-Secrets are never stored in Voyager's database. Authenticated servers persist only a **token reference** (`authTokenRef`, e.g. `MCP_GITHUB_TOKEN`); the secret itself lives in the deployment tier and is resolved at connect time:
+Secrets are never stored in Voyager's database. Authenticated servers persist only a **token reference** (`authTokenRef`, e.g. `MCP_GITHUB_TOKEN`); the shared `SecretResolver` obtains the value from the deployment tier when a client is created:
 
-- Inline value: property `scheduler.mcp.tokens.MCP_GITHUB_TOKEN` (environment variable `SCHEDULER_MCP_TOKENS_MCP_GITHUB_TOKEN`), or
-- File path: property `scheduler.mcp.token-files.MCP_GITHUB_TOKEN` pointing at a mounted secret file. The file is read fresh on every resolve, so a rotated Docker/Kubernetes secret is picked up without a restart. The file variant wins when both are set.
+- Inline value: property `scheduler.secrets.values.MCP_GITHUB_TOKEN` (environment variable `SCHEDULER_SECRETS_VALUES_MCP_GITHUB_TOKEN`), or
+- File path: property `scheduler.secrets.files.MCP_GITHUB_TOKEN` (environment variable `SCHEDULER_SECRETS_FILES_MCP_GITHUB_TOKEN`) pointing at a mounted secret file. The file variant wins when both are set.
+
+STDIO environment values may reference the same resolver with `${secret:MCP_GITHUB_TOKEN}` or `ref:MCP_GITHUB_TOKEN`. Non-secret literals such as `LOG_LEVEL=info` remain valid, but variables whose names look sensitive (`*_TOKEN`, `*_PASSWORD`, `*_API_KEY`, and similar) are rejected unless their value is a reference.
+
+If an HTTP MCP client receives a 401, Voyager evicts the pooled client, resolves the secret again, recreates the client immediately, and retries the operation once. This makes mounted-secret rotation transparent when the replacement credential is already available.
 
 How each auth type uses the resolved token:
 
@@ -234,8 +238,8 @@ Base path: `/app/v1/mcp/servers`
 | `scheduler.mcp.request-timeout-ms` | `30000` | Default per-request timeout when a server doesn't override it. |
 | `scheduler.mcp.tool-sync-delay-ms` | `900000` (15 min) | Background catalog re-sync interval for enabled servers. |
 | `scheduler.mcp.tool-sync-initial-delay-ms` | `60000` | Delay before the first background sync after startup. |
-| `scheduler.mcp.tokens.<REF>` | — | Inline secret for a server whose `authTokenRef` is `<REF>` (env: `SCHEDULER_MCP_TOKENS_<REF>`). |
-| `scheduler.mcp.token-files.<REF>` | — | Path to a mounted secret file for `<REF>`; re-read on every resolve, wins over the inline value. |
+| `scheduler.secrets.values.<REF>` | — | Inline deployment secret for any subsystem (env: `SCHEDULER_SECRETS_VALUES_<REF>`). |
+| `scheduler.secrets.files.<REF>` | — | Path to a mounted Kubernetes/Docker Secret file; read on every resolve and wins over the inline value (env: `SCHEDULER_SECRETS_FILES_<REF>`). |
 
 The app exposes an `mcp` health indicator at `/actuator/health` reporting the number of enabled servers and, per server, its known-tool count and the most recent `lastSeenAt` — a quick way to spot a catalog that stopped syncing.
 

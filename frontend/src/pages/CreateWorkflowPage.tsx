@@ -3,7 +3,6 @@ import {
   type WorkflowRevisionEditContext,
 } from '../components/CreateWorkflowView';
 import type {
-  WorkflowAiConversationSummaryDTO,
   WorkflowDefinitionResponseDTO,
   WorkflowResponseDTO,
 } from '../api';
@@ -16,9 +15,8 @@ type Props = {
   ) => void | Promise<void>;
   onUnsavedChangesChange?: (dirty: boolean) => void;
   onNavigate: (path: string, options?: { replace?: boolean }) => void;
+  onConversationUpdated?: () => void;
   routeChatId?: string;
-  onChatStarted?: (chat: WorkflowAiConversationSummaryDTO) => void;
-  onChatUpdated?: (previousId: string | null, chat: WorkflowAiConversationSummaryDTO) => void;
   revisionEdit?: WorkflowRevisionEditContext;
 };
 
@@ -27,9 +25,8 @@ export function CreateWorkflowPage({
   onWorkflowRevisionSaved,
   onUnsavedChangesChange,
   onNavigate,
+  onConversationUpdated,
   routeChatId,
-  onChatStarted,
-  onChatUpdated,
   revisionEdit,
 }: Props) {
   return (
@@ -38,9 +35,8 @@ export function CreateWorkflowPage({
       onWorkflowRevisionSaved={onWorkflowRevisionSaved}
       onUnsavedChangesChange={onUnsavedChangesChange}
       onNavigate={onNavigate}
+      onConversationUpdated={onConversationUpdated}
       routeChatId={routeChatId}
-      onChatStarted={onChatStarted}
-      onChatUpdated={onChatUpdated}
       revisionEdit={revisionEdit}
     />
   );

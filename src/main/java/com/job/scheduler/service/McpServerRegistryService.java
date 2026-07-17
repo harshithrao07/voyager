@@ -87,7 +87,9 @@ public class McpServerRegistryService {
         server.setAuthEnvVar(blankToNull(request.authEnvVar()));
         server.setTransport(request.transport());
         server.setAuthType(request.authType());
-        server.setAuthTokenRef(blankToNull(request.authTokenRef()));
+        server.setAuthTokenRef(request.authType() == McpAuthType.NONE
+                ? null
+                : SecretReferences.requireValidReference(request.authTokenRef()));
         server.setAuthHeaderName(blankToNull(request.authHeaderName()));
         server.setAuthUsername(blankToNull(request.authUsername()));
         server.setTrustLevel(request.trustLevel() == null ? McpTrustLevel.UNTRUSTED : request.trustLevel());
@@ -96,6 +98,7 @@ public class McpServerRegistryService {
     }
 
     private void validateRequest(McpServerRequestDTO request) {
+        SecretReferences.validateEnvironment(request.env());
         if (request.transport() == McpTransport.HTTP) {
             String baseUrl = blankToNull(request.baseUrl());
             if (baseUrl == null) {
@@ -131,6 +134,8 @@ public class McpServerRegistryService {
         } else if (blankToNull(request.authTokenRef()) == null) {
             throw new IllegalArgumentException(
                     "authTokenRef is required for " + request.authType() + " auth");
+        } else {
+            SecretReferences.requireValidReference(request.authTokenRef());
         }
         // Per-type extra config.
         if (request.authType() == McpAuthType.API_KEY

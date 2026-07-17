@@ -22,6 +22,8 @@ type Props = {
   generating: boolean;
   canGenerate: boolean;
   placeholder?: string;
+  /** Narrow the model picker for the sidebar, where a full-width dropdown would overflow. */
+  compact?: boolean;
 };
 
 export function ChatComposer({
@@ -44,6 +46,7 @@ export function ChatComposer({
   generating,
   canGenerate,
   placeholder = 'Describe a workflow...',
+  compact = false,
 }: Props) {
   const hasPrompt = instruction.trim().length > 0;
   const openModelPicker = () => {
@@ -113,7 +116,9 @@ export function ChatComposer({
         </button>
 
         {modelPickerOpen && (
-          <div className={`absolute left-0 z-50 w-[min(448px,calc(100vw-32px))] rounded-DEFAULT border border-border-subtle bg-surface-container-lowest p-2 shadow-[0_18px_60px_rgba(0,0,0,0.55)] ${
+          <div className={`absolute left-0 z-50 rounded-DEFAULT border border-border-subtle bg-surface-container-lowest p-2 shadow-[0_18px_60px_rgba(0,0,0,0.55)] ${
+            compact ? 'w-[244px]' : 'w-[min(448px,calc(100vw-32px))]'
+          } ${
             modelPickerPlacement === 'up' ? 'bottom-[46px]' : 'top-[46px]'
           }`}
           >
@@ -147,13 +152,20 @@ export function ChatComposer({
                     onModelSelected(model.id);
                     setModelPickerOpen(false);
                   }}
-                  className="grid h-8 w-full grid-cols-[minmax(0,1fr)_minmax(140px,1fr)_16px] items-center gap-3 rounded-DEFAULT px-2 text-left transition-colors hover:bg-surface-container"
+                  title={compact ? `${model.label} - ${model.endpoint}` : undefined}
+                  className={`grid h-8 w-full items-center gap-3 rounded-DEFAULT px-2 text-left transition-colors hover:bg-surface-container ${
+                    compact
+                      ? 'grid-cols-[minmax(0,1fr)_16px]'
+                      : 'grid-cols-[minmax(0,1fr)_minmax(140px,1fr)_16px]'
+                  }`}
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     <Bot size={14} className="shrink-0 text-primary" />
                     <span className="truncate font-mono-sm text-[12px] font-semibold text-primary">{model.label}</span>
                   </span>
-                  <span className="truncate font-mono-sm text-[11px] text-on-surface-variant">{model.endpoint}</span>
+                  {!compact && (
+                    <span className="truncate font-mono-sm text-[11px] text-on-surface-variant">{model.endpoint}</span>
+                  )}
                   <span className={`h-2 w-2 rounded-full ${model.id === modelId ? 'bg-primary' : 'bg-border-muted'}`} />
                 </button>
               ))}
