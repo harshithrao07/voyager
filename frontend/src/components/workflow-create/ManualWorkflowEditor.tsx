@@ -1,5 +1,5 @@
 import Editor from '@monaco-editor/react';
-import { useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { AlertCircle, Braces, ChevronRight, FileUp, FlaskConical, ListPlus, Loader2, PanelRightClose, PanelRightOpen, Plus, Save, Sliders, Sparkles, Wand2, X } from 'lucide-react';
 import type { DefinitionStatus, WorkflowPreview } from './types';
 import { useTemplateFilePicker, type TemplateImportHandler } from './useTemplateImport';
@@ -45,6 +45,8 @@ type Props = {
   canSave: boolean;
   onSave: () => void;
   onSaveWithoutActivation?: () => void;
+  /** The workspace is already linked to a workflow, so Save creates another revision. */
+  saveCreatesRevision?: boolean;
   revisionEdit?: RevisionEditDetails;
   onCancelRevisionEdit?: () => void;
   name: string;
@@ -80,6 +82,7 @@ export function ManualWorkflowEditor({
   canSave,
   onSave,
   onSaveWithoutActivation,
+  saveCreatesRevision,
   revisionEdit,
   onCancelRevisionEdit,
   name,
@@ -112,6 +115,12 @@ export function ManualWorkflowEditor({
   const [machinePath, setMachinePath] = useState<MachinePath>([]);
   const bodyRef = useRef<HTMLDivElement>(null);
   const validationTooltipId = useId();
+
+  useEffect(() => {
+    if (!saveCreatesRevision) return;
+    setSidebarTab('workflow');
+    setSidebarOpen(true);
+  }, [saveCreatesRevision]);
 
   const uniqueValidationIssues = useMemo(() => (
     [...new Set(validationIssues.map((issue) => issue.trim()).filter(Boolean))]
@@ -501,6 +510,8 @@ export function ManualWorkflowEditor({
                         initialNodePositions={scopedNodePositions}
                         onNodePositionsChange={handleScopedNodePositionsChange}
                         layoutVersion={layoutVersion}
+                        onOpenNestedScope={handleOpenNestedScope}
+                        fitViewKey={currentScopeKey}
                       />
                     ) : (
                       <div className="flex h-full items-center justify-center bg-surface-lowest px-6 text-center font-mono-sm text-[12px] text-on-surface-variant">
@@ -524,6 +535,7 @@ export function ManualWorkflowEditor({
                 initialNodePositions={scopedNodePositions}
                 onNodePositionsChange={handleScopedNodePositionsChange}
                 onOpenNestedScope={handleOpenNestedScope}
+                fitViewKey={currentScopeKey}
               />
             ) : (
               <div className="flex flex-1 items-center justify-center px-6 text-center font-mono-sm text-[12px] text-on-surface-variant">
@@ -626,8 +638,22 @@ export function ManualWorkflowEditor({
               className="flex h-10 w-full items-center justify-center gap-2 rounded-DEFAULT bg-primary px-4 font-body-sm text-[12px] font-medium text-on-primary shadow-[0_12px_30px_rgba(242,121,90,0.18)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
-              {revisionEdit?.recurring ? 'Save & activate' : revisionEdit ? 'Save revision' : 'Save workflow'}
+              {revisionEdit?.recurring
+                ? 'Save & activate'
+                : revisionEdit
+                  ? 'Save revision'
+                  : saveCreatesRevision
+                    ? 'Save new revision'
+                    : 'Save workflow'}
             </button>
+            {saveCreatesRevision && !revisionEdit && (
+              <p
+                data-testid="workflow-save-revision-note"
+                className="mt-2 text-center font-mono-sm text-[10px] leading-4 text-on-surface-variant"
+              >
+                Creates a new immutable revision of the linked workflow.
+              </p>
+            )}
             {revisionEdit && !revisionEdit.hasUnsavedChanges && (
               <p className="mt-2 text-center font-mono-sm text-[10px] text-on-surface-variant">
                 Change the definition or canvas before saving.
@@ -663,7 +689,9 @@ export function ManualWorkflowEditor({
               </div>
             ) : (
               <div className="mt-5 rounded-DEFAULT border border-secondary/35 bg-secondary-container/45 p-4 text-body-sm text-secondary-fixed">
-                {revisionEdit
+                {saveCreatesRevision && !revisionEdit
+                  ? 'Ready to create a new immutable revision of the linked workflow.'
+                  : revisionEdit
                   ? revisionEdit.recurring
                     ? 'Ready to save as a draft revision or save and activate it.'
                     : 'Ready to save. Manual workflow revisions activate immediately.'

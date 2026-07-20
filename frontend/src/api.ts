@@ -14,11 +14,46 @@ export interface WorkflowGenerationResponse {
 export type WorkflowStatusDTO = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
 export type WorkflowAiStage =
   | 'COLLECTING_WORKFLOW_DETAILS'
+  | 'RESOURCES_PROPOSED'
   | 'ASL_READY'
   | 'ASL_UNDER_REVIEW'
   | 'COLLECTING_SCHEDULE_DETAILS'
   | 'PLAN_READY'
   | 'ACCEPTED';
+
+export interface WorkflowAiFunctionTestCase {
+  name?: string | null;
+  input?: string | null;
+  expectedOutput?: string | null;
+  expectedError?: string | null;
+}
+
+export interface WorkflowAiProposedFunction {
+  name: string;
+  description?: string | null;
+  languageId?: number | null;
+  sourceCode?: string | null;
+  testCases?: WorkflowAiFunctionTestCase[] | null;
+  rationale?: string | null;
+}
+
+export interface WorkflowAiMcpRequirement {
+  capability: string;
+  suggestedToolName?: string | null;
+  reason?: string | null;
+  trustLevelHint?: string | null;
+}
+
+export interface WorkflowAiResourcePlan {
+  functions?: WorkflowAiProposedFunction[] | null;
+  mcpRequirements?: WorkflowAiMcpRequirement[] | null;
+}
+
+export interface WorkflowAiProvisionRequest {
+  conversationId: string;
+  functions: WorkflowAiProposedFunction[];
+  modelConfigId?: string | null;
+}
 
 export interface AiModelConfigDTO {
   id: string;
@@ -28,7 +63,6 @@ export interface AiModelConfigDTO {
   modelName: string;
   enabled: boolean;
   defaultModel: boolean;
-  credentialRef: string | null;
   hasCredential: boolean;
 }
 
@@ -37,14 +71,15 @@ export interface AiModelConfigRequest {
   providerType?: 'OPENAI_COMPATIBLE_LOCAL' | 'OPENAI_COMPATIBLE_API';
   baseUrl: string;
   modelName: string;
-  credentialRef?: string | null;
+  // Actual secret / API key, encrypted server-side. Omit to leave unchanged; "" to clear.
+  credential?: string | null;
   defaultModel: boolean;
 }
 
 export interface AiModelTestRequest {
   baseUrl: string;
   modelName?: string | null;
-  credentialRef?: string | null;
+  credential?: string | null;
 }
 
 export interface AiModelTestResponse {
@@ -54,7 +89,7 @@ export interface AiModelTestResponse {
 
 export interface AiModelDiscoverRequest {
   baseUrl: string;
-  credentialRef?: string | null;
+  credential?: string | null;
   providerType?: 'OPENAI_COMPATIBLE_LOCAL' | 'OPENAI_COMPATIBLE_API';
 }
 
@@ -77,6 +112,8 @@ export interface WorkflowAiStartRequest {
   userDateTime?: string;
   /** ASL already open in the editor, so the assistant amends it instead of starting over. */
   definition?: any;
+  /** Raw editor buffer, sent even when incomplete/invalid so the AI can see in-progress edits. */
+  definitionText?: string | null;
 }
 
 export interface WorkflowAiChatRequest {
@@ -85,6 +122,8 @@ export interface WorkflowAiChatRequest {
   modelConfigId?: string | null;
   /** ASL already open in the editor, so the assistant amends it instead of starting over. */
   definition?: any;
+  /** Raw editor buffer, sent even when incomplete/invalid so the AI can see in-progress edits. */
+  definitionText?: string | null;
 }
 
 export interface WorkflowAiResponse {
@@ -96,6 +135,8 @@ export interface WorkflowAiResponse {
   validationIssues: string[];
   finalPlan?: any | null;
   draftWorkflowPayload?: CreateWorkflowRequest | null;
+  resourcePlan?: WorkflowAiResourcePlan | null;
+  resourcePlanMessageId?: string | null;
   workflowId?: string | null;
   workflow?: WorkflowResponseDTO | null;
   assistantMessage?: WorkflowAiMessageDTO | null;
@@ -125,15 +166,22 @@ export interface WorkflowAiMessageDTO {
   thinkingContent?: string | null;
   finishReason?: string | null;
   regeneratedFromMessageId?: string | null;
+  resourcePlan?: WorkflowAiResourcePlan | null;
   createdAt: string;
 }
 
 export interface WorkflowAiConversationDetailDTO extends WorkflowAiConversationSummaryDTO {
   aslDefinition?: any | null;
+  /** Exact autosaved editor buffer; may contain temporarily invalid/incomplete JSON. */
+  workspaceDefinitionText?: string | null;
   finalPlan?: any | null;
   draftWorkflowPayload?: CreateWorkflowRequest | null;
+  resourcePlan?: WorkflowAiResourcePlan | null;
+  resourcePlanMessageId?: string | null;
   canvasLayout?: Record<string, { x: number; y: number }> | null;
   workspaceSettings?: WorkflowAiWorkspaceSettingsDTO | null;
+  /** Workflow created from this chat; later saves create revisions of it. */
+  workflowId?: string | null;
   messages: WorkflowAiMessageDTO[];
 }
 
@@ -146,7 +194,8 @@ export interface WorkflowAiWorkspaceSettingsDTO {
 }
 
 export interface WorkflowAiWorkspaceRequest {
-  definition: any;
+  /** Exact editor buffer. The backend promotes it to authoritative ASL only when valid. */
+  definitionText: string;
   canvasLayout: Record<string, { x: number; y: number }>;
   settings: WorkflowAiWorkspaceSettingsDTO;
 }
@@ -879,8 +928,113 @@ export function getWorkflowAiConversation(
   );
 }
 
+export interface WorkflowAiSaveWorkflowRequest {
+  workflow: CreateWorkflowRequest;
+  canvasLayout: CanvasNodePositions;
+}
+
+export interface WorkflowAiSaveWorkflowResponse {
+  workflow: WorkflowResponseDTO;
+  revision: WorkflowDefinitionResponseDTO;
+}
+
+export function getWorkflowAiDraft(
+  draftId: string,
+): Promise<WorkflowAiConversationDetailDTO> {
+  return getJson<WorkflowAiConversationDetailDTO>(
+    `/app/v1/workflow-ai/drafts/${encodeURIComponent(draftId)}`,
+  );
+}
+
 export function listWorkflowAiConversations(): Promise<WorkflowAiConversationSummaryDTO[]> {
   return getJson<WorkflowAiConversationSummaryDTO[]>('/app/v1/workflow-ai/conversations');
+}
+
+export function listWorkflowAiDrafts(): Promise<WorkflowAiConversationSummaryDTO[]> {
+  return getJson<WorkflowAiConversationSummaryDTO[]>('/app/v1/workflow-ai/drafts');
+}
+
+async function renameWorkflowAiWorkspace(
+  workspaceKind: 'conversations' | 'drafts',
+  workspaceId: string,
+  name: string,
+): Promise<WorkflowAiConversationSummaryDTO> {
+  const response = await fetch(
+    `/app/v1/workflow-ai/${workspaceKind}/${encodeURIComponent(workspaceId)}/name`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to rename workspace: ${await readError(response)}`);
+  }
+  return response.json();
+}
+
+export function renameWorkflowAiConversation(
+  conversationId: string,
+  name: string,
+): Promise<WorkflowAiConversationSummaryDTO> {
+  return renameWorkflowAiWorkspace('conversations', conversationId, name);
+}
+
+export function renameWorkflowAiDraft(
+  draftId: string,
+  name: string,
+): Promise<WorkflowAiConversationSummaryDTO> {
+  return renameWorkflowAiWorkspace('drafts', draftId, name);
+}
+
+export async function createWorkflowAiDraft(
+  request: WorkflowAiWorkspaceRequest,
+): Promise<WorkflowAiConversationDetailDTO> {
+  const response = await fetch('/app/v1/workflow-ai/drafts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to create workflow draft: ${await readError(response)}`);
+  }
+  return response.json();
+}
+
+export async function deleteWorkflowAiConversation(conversationId: string): Promise<void> {
+  const response = await fetch(
+    `/app/v1/workflow-ai/conversations/${encodeURIComponent(conversationId)}`,
+    { method: 'DELETE' },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to delete chat: ${await readError(response)}`);
+  }
+}
+
+export async function deleteAllWorkflowAiConversations(): Promise<void> {
+  const response = await fetch('/app/v1/workflow-ai/conversations', {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to delete chats: ${await readError(response)}`);
+  }
+}
+
+export async function deleteWorkflowAiDraft(draftId: string): Promise<void> {
+  const response = await fetch(
+    `/app/v1/workflow-ai/drafts/${encodeURIComponent(draftId)}`,
+    { method: 'DELETE' },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to delete draft: ${await readError(response)}`);
+  }
+}
+
+export async function deleteAllWorkflowAiDrafts(): Promise<void> {
+  const response = await fetch('/app/v1/workflow-ai/drafts', { method: 'DELETE' });
+  if (!response.ok) {
+    throw new Error(`Failed to delete drafts: ${await readError(response)}`);
+  }
 }
 
 export async function saveWorkflowAiWorkspace(
@@ -897,6 +1051,59 @@ export async function saveWorkflowAiWorkspace(
   );
   if (!response.ok) {
     throw new Error(`Failed to save conversation workspace: ${await readError(response)}`);
+  }
+}
+
+export async function saveWorkflowAiConversation(
+  conversationId: string,
+  request: WorkflowAiSaveWorkflowRequest,
+): Promise<WorkflowAiSaveWorkflowResponse> {
+  const response = await fetch(
+    `/app/v1/workflow-ai/conversations/${encodeURIComponent(conversationId)}/workflow`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to save conversation workflow: ${await readError(response)}`);
+  }
+  return response.json();
+}
+
+export async function saveWorkflowAiDraft(
+  draftId: string,
+  request: WorkflowAiSaveWorkflowRequest,
+): Promise<WorkflowAiSaveWorkflowResponse> {
+  const response = await fetch(
+    `/app/v1/workflow-ai/drafts/${encodeURIComponent(draftId)}/workflow`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to save draft workflow: ${await readError(response)}`);
+  }
+  return response.json();
+}
+
+export async function saveWorkflowAiDraftWorkspace(
+  draftId: string,
+  request: WorkflowAiWorkspaceRequest,
+): Promise<void> {
+  const response = await fetch(
+    `/app/v1/workflow-ai/drafts/${encodeURIComponent(draftId)}/workspace`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to save workflow draft: ${await readError(response)}`);
   }
 }
 
@@ -1098,6 +1305,24 @@ export function continueWorkflowAiConversation(request: WorkflowAiChatRequest): 
   return sendWorkflowAiSocket('/app/workflow-ai/message', request);
 }
 
+export async function provisionWorkflowAiResources(
+  request: WorkflowAiProvisionRequest,
+): Promise<WorkflowAiResponse> {
+  const response = await fetch('/app/v1/workflow-ai/provision-resources', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to create resources: ${await readError(response)}`);
+  }
+
+  return response.json();
+}
+
 export async function regenerateWorkflowAiMessage(
   messageId: string,
   request: WorkflowAiRegenerateRequest,
@@ -1118,7 +1343,7 @@ export async function regenerateWorkflowAiMessage(
 }
 
 export type McpTransport = 'HTTP' | 'STDIO';
-export type McpAuthType = 'NONE' | 'BEARER_TOKEN' | 'API_KEY' | 'BASIC';
+export type McpAuthType = 'NONE' | 'BEARER_TOKEN' | 'API_KEY' | 'BASIC' | 'CUSTOM_HEADERS';
 export type McpTrustLevel = 'UNTRUSTED' | 'READ_ONLY' | 'WRITE' | 'DESTRUCTIVE';
 export type McpServerStatus = 'ENABLED' | 'DISABLED';
 export type McpToolExecutionStatus = 'RUNNING' | 'SUCCESS' | 'FAILED' | 'REJECTED';
@@ -1134,10 +1359,14 @@ export interface McpServerDTO {
   command: string | null;
   args: string[];
   env: Record<string, string>;
+  // Names of configured secret env vars; values are never returned.
+  secretEnvKeys: string[];
+  // Names of configured encrypted custom auth headers; values are never returned.
+  secretHeaderNames: string[];
   authEnvVar: string | null;
   transport: McpTransport;
   authType: McpAuthType;
-  authTokenRef: string | null;
+  hasAuthToken: boolean;
   authHeaderName: string | null;
   authUsername: string | null;
   trustLevel: McpTrustLevel;
@@ -1157,10 +1386,17 @@ export interface McpServerRequest {
   command?: string | null;
   args?: string[] | null;
   env?: Record<string, string> | null;
+  // Secret env vars (name -> plaintext value); encrypted server-side, never returned.
+  // Omit a key to drop it; send an empty value to keep the existing encrypted value.
+  secretEnv?: Record<string, string> | null;
+  // CUSTOM_HEADERS auth values, encrypted server-side and never returned.
+  // Blank values keep existing encrypted values; omitted names are removed.
+  secretHeaders?: Record<string, string> | null;
   authEnvVar?: string | null;
   transport: McpTransport;
   authType: McpAuthType;
-  authTokenRef?: string | null;
+  // Actual token, encrypted server-side. Omit/blank to leave unchanged on edit.
+  authToken?: string | null;
   authHeaderName?: string | null;
   authUsername?: string | null;
   trustLevel?: McpTrustLevel | null;

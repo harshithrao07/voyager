@@ -1,6 +1,7 @@
 package com.job.scheduler.controller;
 
 import com.job.scheduler.dto.McpServerResponseDTO;
+import com.job.scheduler.dto.McpServerRequestDTO;
 import com.job.scheduler.dto.McpToolExecutionResponseDTO;
 import com.job.scheduler.dto.McpToolResponseDTO;
 import com.job.scheduler.dto.McpToolSyncResultDTO;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
@@ -30,9 +32,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -113,6 +117,51 @@ class McpServerControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("VALIDATION_ERROR"))
                 .andExpect(jsonPath("$.fieldErrors.length()").value(3));
+    }
+
+    @Test
+    void registerServerAcceptsWriteOnlyCustomAuthenticationHeaders() throws Exception {
+        McpServerResponseDTO response = new McpServerResponseDTO(
+                UUID.randomUUID(), "multi-auth", "Multi Auth", "https://mcp.example.com",
+                "/mcp", null, List.of(), Map.of(), java.util.Set.of(),
+                java.util.Set.of("X-API-Key", "X-Client-Secret"), null,
+                McpTransport.HTTP, McpAuthType.CUSTOM_HEADERS, false, null, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null,
+                Instant.parse("2026-06-17T00:00:00Z"),
+                Instant.parse("2026-06-17T00:00:00Z")
+        );
+        when(mcpServerRegistryService.registerServer(any())).thenReturn(response);
+
+        String body = """
+                {
+                  "serverId": "multi-auth",
+                  "displayName": "Multi Auth",
+                  "baseUrl": "https://mcp.example.com",
+                  "endpoint": "/mcp",
+                  "transport": "HTTP",
+                  "authType": "CUSTOM_HEADERS",
+                  "secretHeaders": {
+                    "X-API-Key": "secret-one",
+                    "X-Client-Secret": "secret-two"
+                  }
+                }
+                """;
+
+        mockMvc.perform(post("/app/v1/mcp/servers")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.authType").value("CUSTOM_HEADERS"))
+                .andExpect(jsonPath("$.hasAuthToken").value(false))
+                .andExpect(jsonPath("$.secretHeaderNames.length()").value(2))
+                .andExpect(jsonPath("$.secretHeaders").doesNotExist());
+
+        ArgumentCaptor<McpServerRequestDTO> requestCaptor =
+                ArgumentCaptor.forClass(McpServerRequestDTO.class);
+        verify(mcpServerRegistryService).registerServer(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().secretHeaders())
+                .containsEntry("X-API-Key", "secret-one")
+                .containsEntry("X-Client-Secret", "secret-two");
     }
 
     @Test
@@ -264,10 +313,12 @@ class McpServerControllerTest {
                 null,
                 null,
                 null,
+                java.util.Set.of(),
+                java.util.Set.of(),
                 null,
                 McpTransport.HTTP,
                 McpAuthType.NONE,
-                null,
+                false,
                 null,
                 null,
                 McpTrustLevel.READ_ONLY,

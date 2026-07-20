@@ -9,6 +9,8 @@ public record WorkflowAiStartRequestDTO(
         @NotBlank(message = "Instruction cannot be empty") String instruction,
         UUID modelConfigId,
         String userDateTime,
-        JsonNode definition
+        JsonNode definition,
+        /** Raw editor buffer, sent even when incomplete/invalid so the AI can see in-progress edits. */
+        String definitionText
 ) {
 }

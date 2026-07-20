@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS ai_model_configs (
     provider_type VARCHAR(64) NOT NULL,
     base_url VARCHAR(255) NOT NULL,
     model_name VARCHAR(255) NOT NULL,
-    credential_ref VARCHAR(128),
+    credential_encrypted TEXT,
     enabled BOOLEAN NOT NULL,
     default_model BOOLEAN NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -12,13 +12,19 @@ CREATE TABLE IF NOT EXISTS ai_model_configs (
 );
 
 ALTER TABLE ai_model_configs
-    ADD COLUMN IF NOT EXISTS credential_ref VARCHAR(128);
+    ADD COLUMN IF NOT EXISTS credential_encrypted TEXT;
 
--- Legacy releases stored provider credentials directly. They cannot be safely
--- converted into deployment references, so remove the plaintext column during
--- the upgrade. Operators configure SCHEDULER_SECRETS_* and credential_ref instead.
+-- Legacy releases used either a plaintext api_key or a deployment reference.
+-- Neither can be converted to ciphertext without its plaintext value; operators
+-- re-enter credentials through the write-only UI/API after the upgrade.
 ALTER TABLE ai_model_configs
     DROP COLUMN IF EXISTS api_key;
+
+ALTER TABLE ai_model_configs
+    DROP CONSTRAINT IF EXISTS ai_model_configs_credential_ref_check;
+
+ALTER TABLE ai_model_configs
+    DROP COLUMN IF EXISTS credential_ref;
 
 -- Hibernate creates an enum check constraint on fresh local databases, but ddl-auto=update
 -- does not expand that constraint when a new enum value is added. Recreate it idempotently
@@ -30,13 +36,6 @@ ALTER TABLE ai_model_configs
     ADD CONSTRAINT ai_model_configs_provider_type_check
     CHECK (provider_type IN ('OPENAI_COMPATIBLE_LOCAL', 'OPENAI_COMPATIBLE_API'));
 
-ALTER TABLE ai_model_configs
-    DROP CONSTRAINT IF EXISTS ai_model_configs_credential_ref_check;
-
-ALTER TABLE ai_model_configs
-    ADD CONSTRAINT ai_model_configs_credential_ref_check
-    CHECK (credential_ref IS NULL OR credential_ref ~ '^[A-Z][A-Z0-9_]{0,127}$');
-
 CREATE INDEX IF NOT EXISTS idx_ai_model_configs_enabled
     ON ai_model_configs (enabled);
 
@@ -46,15 +45,21 @@ CREATE INDEX IF NOT EXISTS idx_ai_model_configs_default
 CREATE TABLE IF NOT EXISTS workflow_ai_conversations (
     id UUID PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
+    custom_name VARCHAR(120),
     initial_instruction TEXT NOT NULL,
-    model_config_id UUID NOT NULL
+    model_config_id UUID
         REFERENCES ai_model_configs (id),
+    workspace_kind VARCHAR(32) NOT NULL DEFAULT 'AI_CHAT',
     stage VARCHAR(64) NOT NULL,
     draft_asl JSONB,
+    workspace_definition_text TEXT,
     final_plan JSONB,
     draft_workflow_payload JSONB,
+    resource_plan JSONB,
+    resource_plan_message_id UUID,
     canvas_layout JSONB,
     workspace_settings JSONB,
+    workflow_id UUID,
     conversation_summary TEXT,
     summarized_through_message_id UUID,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -65,6 +70,20 @@ ALTER TABLE workflow_ai_conversations
     ADD COLUMN IF NOT EXISTS conversation_summary TEXT;
 
 ALTER TABLE workflow_ai_conversations
+    ADD COLUMN IF NOT EXISTS custom_name VARCHAR(120);
+
+ALTER TABLE workflow_ai_conversations
+    ADD COLUMN IF NOT EXISTS workspace_kind VARCHAR(32) NOT NULL DEFAULT 'AI_CHAT';
+
+-- A manual draft exists before the user chooses an AI model. The same row acquires a model when
+-- AI is first used, keeping the canonical /draft/{id} workspace instead of creating /c/{id}.
+ALTER TABLE workflow_ai_conversations
+    ALTER COLUMN model_config_id DROP NOT NULL;
+
+ALTER TABLE workflow_ai_conversations
+    ADD COLUMN IF NOT EXISTS workspace_definition_text TEXT;
+
+ALTER TABLE workflow_ai_conversations
     ADD COLUMN IF NOT EXISTS summarized_through_message_id UUID;
 
 ALTER TABLE workflow_ai_conversations
@@ -72,6 +91,42 @@ ALTER TABLE workflow_ai_conversations
 
 ALTER TABLE workflow_ai_conversations
     ADD COLUMN IF NOT EXISTS workspace_settings JSONB;
+
+-- Once a chat creates a workflow, all later saves from /c/{id} target this workflow's
+-- revision history instead of replaying the idempotent create request.
+ALTER TABLE workflow_ai_conversations
+    ADD COLUMN IF NOT EXISTS workflow_id UUID;
+
+-- Functions/MCP capabilities the model proposed but that don't yet exist in the catalog, held
+-- while the user reviews and approves them before any workflow ASL is generated.
+ALTER TABLE workflow_ai_conversations
+    ADD COLUMN IF NOT EXISTS resource_plan JSONB;
+
+-- Keeps a pending resource proposal anchored to the assistant turn that first requested it. A UUID
+-- (rather than a foreign key) avoids a circular conversation/message creation dependency.
+ALTER TABLE workflow_ai_conversations
+    ADD COLUMN IF NOT EXISTS resource_plan_message_id UUID;
+
+-- Hibernate creates an enum check constraint on the stage column on fresh local databases, but
+-- ddl-auto=update does not expand it when a new stage value is added. Recreate it idempotently so
+-- existing installations can persist the RESOURCES_PROPOSED stage.
+ALTER TABLE workflow_ai_conversations
+    DROP CONSTRAINT IF EXISTS workflow_ai_conversations_stage_check;
+
+ALTER TABLE workflow_ai_conversations
+    ADD CONSTRAINT workflow_ai_conversations_stage_check
+    CHECK (stage IN (
+        'COLLECTING_WORKFLOW_DETAILS',
+        'RESOURCES_PROPOSED',
+        'ASL_READY',
+        'ASL_UNDER_REVIEW',
+        'COLLECTING_SCHEDULE_DETAILS',
+        'PLAN_READY',
+        'ACCEPTED'
+    ));
+
+CREATE INDEX IF NOT EXISTS idx_workflow_ai_conversations_workflow
+    ON workflow_ai_conversations (workflow_id);
 
 CREATE INDEX IF NOT EXISTS idx_workflow_ai_conversations_stage
     ON workflow_ai_conversations (stage);

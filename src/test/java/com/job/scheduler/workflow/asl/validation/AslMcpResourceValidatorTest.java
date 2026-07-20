@@ -6,7 +6,6 @@ import com.job.scheduler.repository.McpServerRepository;
 import com.job.scheduler.repository.McpToolRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import tools.jackson.databind.JsonNode;
@@ -27,10 +26,18 @@ class AslMcpResourceValidatorTest {
     @Mock
     private McpToolRepository mcpToolRepository;
 
-    @InjectMocks
     private AslMcpResourceValidator validator;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @org.junit.jupiter.api.BeforeEach
+    void setUp() {
+        validator = new AslMcpResourceValidator(
+                mcpServerRepository,
+                mcpToolRepository,
+                objectMapper
+        );
+    }
 
     private List<AslValidationIssue> validate(String resource) {
         JsonNode definition = objectMapper.createObjectNode()
@@ -96,6 +103,62 @@ class AslMcpResourceValidatorTest {
 
         assertThat(issues).singleElement()
                 .satisfies(issue -> assertThat(issue.code()).isEqualTo("MCP_TOOL_NOT_FOUND"));
+    }
+
+    @Test
+    void validatesTaskArgumentKeysAgainstSyncedToolSchema() {
+        McpServer crm = server("crm");
+        McpTool tool = new McpTool();
+        tool.setToolName("get-customer");
+        tool.setInputSchema("""
+                {
+                  "type": "object",
+                  "properties": {"customerId": {"type": "string"}},
+                  "required": ["customerId"],
+                  "additionalProperties": false
+                }
+                """);
+        when(mcpServerRepository.findByServerId("crm")).thenReturn(Optional.of(crm));
+        when(mcpToolRepository.findByMcpServerAndToolName(crm, "get-customer"))
+                .thenReturn(Optional.of(tool));
+        JsonNode definition = objectMapper.readTree("""
+                {
+                  "StartAt": "Call",
+                  "States": {
+                    "Call": {
+                      "Type": "Task",
+                      "Resource": "voyager://mcp/crm/get-customer",
+                      "Arguments": {"payload": "{% $states.input.customerId %}"},
+                      "End": true
+                    }
+                  }
+                }
+                """);
+
+        assertThat(validator.validate(definition))
+                .extracting(AslValidationIssue::code)
+                .containsExactlyInAnyOrder("MCP_ARGUMENT_REQUIRED", "MCP_ARGUMENT_UNKNOWN");
+    }
+
+    @Test
+    void acceptsExactTaskArgumentKeysFromSyncedToolSchema() {
+        McpServer crm = server("crm");
+        McpTool tool = new McpTool();
+        tool.setToolName("get-customer");
+        tool.setInputSchema("""
+                {"type":"object","properties":{"customerId":{"type":"string"}},
+                 "required":["customerId"],"additionalProperties":false}
+                """);
+        when(mcpServerRepository.findByServerId("crm")).thenReturn(Optional.of(crm));
+        when(mcpToolRepository.findByMcpServerAndToolName(crm, "get-customer"))
+                .thenReturn(Optional.of(tool));
+        JsonNode definition = objectMapper.readTree("""
+                {"StartAt":"Call","States":{"Call":{"Type":"Task",
+                 "Resource":"voyager://mcp/crm/get-customer",
+                 "Arguments":{"customerId":"{% $states.input.customerId %}"},"End":true}}}
+                """);
+
+        assertThat(validator.validate(definition)).isEmpty();
     }
 
     @Test

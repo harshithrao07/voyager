@@ -1,5 +1,5 @@
-import type { Dispatch, RefObject, SetStateAction } from 'react';
-import { Bot, Check, ChevronDown, Copy, Globe2, KeyRound, Link, Loader2, Monitor, MoreHorizontal, Play, Plus, Power, RefreshCw, RotateCcw, Search, Sparkles, Trash2, X } from 'lucide-react';
+import type { Dispatch, SetStateAction } from 'react';
+import { Bot, Check, ChevronDown, Copy, Globe2, KeyRound, Link, Loader2, Monitor, Plus, Power, Sparkles, Trash2, X } from 'lucide-react';
 import { cloudProviderPreset, cloudProviderPresets } from './modelProviders';
 import type { AiModel, EndpointModelGroup, ModelSettingsTab } from './types';
 
@@ -8,28 +8,17 @@ type Props = {
   onSettingsTabChange: (tab: ModelSettingsTab) => void;
   onClose: () => void;
   fieldClass: string;
-  localActionsRef: RefObject<HTMLDivElement | null>;
-  localActionsOpen: boolean;
-  setLocalActionsOpen: Dispatch<SetStateAction<boolean>>;
   discoverEndpoint: string;
   onDiscoverEndpointChange: (value: string) => void;
-  onDiscoverModels: (endpointOverride?: string) => void;
-  onScanForServers: () => void;
-  onTestLocalEndpoint: () => void;
-  addingModel: boolean;
-  testingModel: boolean;
-  discoveringModels: boolean;
-  showLocalCredentialRef: boolean;
-  setShowLocalCredentialRef: Dispatch<SetStateAction<boolean>>;
+  localModelName: string;
+  onLocalModelNameChange: (value: string) => void;
+  onAddLocalModel: () => void;
+  addingModel: 'local' | 'api' | null;
   localCredentialRef: string;
   onLocalCredentialRefChange: (value: string) => void;
   localEndpointNeedsDockerHint: boolean;
   modelActionMessage: string | null;
   modelActionSuccess: boolean | null;
-  discoveredModelNames: string[];
-  apiActionsRef: RefObject<HTMLDivElement | null>;
-  apiActionsOpen: boolean;
-  setApiActionsOpen: Dispatch<SetStateAction<boolean>>;
   apiProvider: string;
   onApiProviderChange: (value: string) => void;
   apiEndpoint: string;
@@ -38,22 +27,16 @@ type Props = {
   onApiModelNameChange: (value: string) => void;
   apiCredentialRef: string;
   onApiCredentialRefChange: (value: string) => void;
-  onTestApiEndpoint: () => void;
-  onScanApiModels: () => void;
-  onResetApiProvider: () => void;
   onAddApiModel: () => void;
   apiActionMessage: string | null;
   apiActionSuccess: boolean | null;
-  apiDiscoveredModelNames: string[];
   endpointGroups: EndpointModelGroup[];
   expandedEndpoint: string | null;
   setExpandedEndpoint: Dispatch<SetStateAction<string | null>>;
   managingModels: boolean;
-  onProbeAllEndpoints: () => void;
   onCopyEndpoint: (endpoint: string) => void;
   onUpdateEndpointEnabled: (endpoint: string, enabled: boolean) => void;
   onDeleteEndpointModels: (endpoint: string) => void;
-  onRefreshEndpointModels: (endpoint: string) => void;
   onUpdateSingleModelEnabled: (model: AiModel, enabled: boolean) => void;
 };
 
@@ -71,28 +54,17 @@ export function ModelSettingsModal({
   onSettingsTabChange,
   onClose,
   fieldClass,
-  localActionsRef,
-  localActionsOpen,
-  setLocalActionsOpen,
   discoverEndpoint,
   onDiscoverEndpointChange,
-  onDiscoverModels,
-  onScanForServers,
-  onTestLocalEndpoint,
+  localModelName,
+  onLocalModelNameChange,
+  onAddLocalModel,
   addingModel,
-  testingModel,
-  discoveringModels,
-  showLocalCredentialRef,
-  setShowLocalCredentialRef,
   localCredentialRef,
   onLocalCredentialRefChange,
   localEndpointNeedsDockerHint,
   modelActionMessage,
   modelActionSuccess,
-  discoveredModelNames,
-  apiActionsRef,
-  apiActionsOpen,
-  setApiActionsOpen,
   apiProvider,
   onApiProviderChange,
   apiEndpoint,
@@ -101,22 +73,16 @@ export function ModelSettingsModal({
   onApiModelNameChange,
   apiCredentialRef,
   onApiCredentialRefChange,
-  onTestApiEndpoint,
-  onScanApiModels,
-  onResetApiProvider,
   onAddApiModel,
   apiActionMessage,
   apiActionSuccess,
-  apiDiscoveredModelNames,
   endpointGroups,
   expandedEndpoint,
   setExpandedEndpoint,
   managingModels,
-  onProbeAllEndpoints,
   onCopyEndpoint,
   onUpdateEndpointEnabled,
   onDeleteEndpointModels,
-  onRefreshEndpointModels,
   onUpdateSingleModelEnabled,
 }: Props) {
   return (
@@ -166,32 +132,21 @@ export function ModelSettingsModal({
             {settingsTab === 'add' && (
               <>
                 <AddLocalModelsSection
-                  localActionsRef={localActionsRef}
-                  localActionsOpen={localActionsOpen}
-                  setLocalActionsOpen={setLocalActionsOpen}
                   discoverEndpoint={discoverEndpoint}
                   onDiscoverEndpointChange={onDiscoverEndpointChange}
-                  onDiscoverModels={onDiscoverModels}
-                  onScanForServers={onScanForServers}
-                  onTestLocalEndpoint={onTestLocalEndpoint}
+                  localModelName={localModelName}
+                  onLocalModelNameChange={onLocalModelNameChange}
+                  onAddLocalModel={onAddLocalModel}
                   addingModel={addingModel}
-                  testingModel={testingModel}
-                  discoveringModels={discoveringModels}
-                  showLocalCredentialRef={showLocalCredentialRef}
-                  setShowLocalCredentialRef={setShowLocalCredentialRef}
                   localCredentialRef={localCredentialRef}
                   onLocalCredentialRefChange={onLocalCredentialRefChange}
                   localEndpointNeedsDockerHint={localEndpointNeedsDockerHint}
                   modelActionMessage={modelActionMessage}
                   modelActionSuccess={modelActionSuccess}
-                  discoveredModelNames={discoveredModelNames}
                 />
 
                 <AddApiModelsSection
                   fieldClass={fieldClass}
-                  apiActionsRef={apiActionsRef}
-                  apiActionsOpen={apiActionsOpen}
-                  setApiActionsOpen={setApiActionsOpen}
                   apiProvider={apiProvider}
                   onApiProviderChange={onApiProviderChange}
                   apiEndpoint={apiEndpoint}
@@ -200,16 +155,10 @@ export function ModelSettingsModal({
                   onApiModelNameChange={onApiModelNameChange}
                   apiCredentialRef={apiCredentialRef}
                   onApiCredentialRefChange={onApiCredentialRefChange}
-                  onTestApiEndpoint={onTestApiEndpoint}
-                  onScanApiModels={onScanApiModels}
-                  onResetApiProvider={onResetApiProvider}
                   onAddApiModel={onAddApiModel}
                   apiActionMessage={apiActionMessage}
                   apiActionSuccess={apiActionSuccess}
-                  apiDiscoveredModelNames={apiDiscoveredModelNames}
                   addingModel={addingModel}
-                  testingModel={testingModel}
-                  discoveringModels={discoveringModels}
                 />
               </>
             )}
@@ -220,11 +169,9 @@ export function ModelSettingsModal({
                 expandedEndpoint={expandedEndpoint}
                 setExpandedEndpoint={setExpandedEndpoint}
                 managingModels={managingModels}
-                onProbeAllEndpoints={onProbeAllEndpoints}
                 onCopyEndpoint={onCopyEndpoint}
                 onUpdateEndpointEnabled={onUpdateEndpointEnabled}
                 onDeleteEndpointModels={onDeleteEndpointModels}
-                onRefreshEndpointModels={onRefreshEndpointModels}
                 onUpdateSingleModelEnabled={onUpdateSingleModelEnabled}
               />
             )}
@@ -236,49 +183,36 @@ export function ModelSettingsModal({
 }
 
 function AddLocalModelsSection({
-  localActionsRef,
-  localActionsOpen,
-  setLocalActionsOpen,
   discoverEndpoint,
   onDiscoverEndpointChange,
-  onDiscoverModels,
-  onScanForServers,
-  onTestLocalEndpoint,
+  localModelName,
+  onLocalModelNameChange,
+  onAddLocalModel,
   addingModel,
-  testingModel,
-  discoveringModels,
-  showLocalCredentialRef,
-  setShowLocalCredentialRef,
   localCredentialRef,
   onLocalCredentialRefChange,
   localEndpointNeedsDockerHint,
   modelActionMessage,
   modelActionSuccess,
-  discoveredModelNames,
 }: Pick<Props,
-  | 'localActionsRef'
-  | 'localActionsOpen'
-  | 'setLocalActionsOpen'
   | 'discoverEndpoint'
   | 'onDiscoverEndpointChange'
-  | 'onDiscoverModels'
-  | 'onScanForServers'
-  | 'onTestLocalEndpoint'
+  | 'localModelName'
+  | 'onLocalModelNameChange'
+  | 'onAddLocalModel'
   | 'addingModel'
-  | 'testingModel'
-  | 'discoveringModels'
-  | 'showLocalCredentialRef'
-  | 'setShowLocalCredentialRef'
   | 'localCredentialRef'
   | 'onLocalCredentialRefChange'
   | 'localEndpointNeedsDockerHint'
   | 'modelActionMessage'
   | 'modelActionSuccess'
-  | 'discoveredModelNames'
 >) {
+  const busy = addingModel !== null;
+  const adding = addingModel === 'local';
+
   return (
     <section className="relative rounded-lg border border-primary/20 bg-surface-base p-4">
-      <div className="flex items-start justify-between gap-4 border-b border-border-subtle/40 pb-3">
+      <div className="flex items-start gap-4 border-b border-border-subtle/40 pb-3">
         <div className="flex items-center gap-3">
           <Monitor size={18} className="text-primary" />
           <div>
@@ -289,87 +223,26 @@ function AddLocalModelsSection({
             <p className="mt-1 text-body-sm text-on-surface-variant">Add a local model server (Ollama, llama.cpp, vLLM).</p>
           </div>
         </div>
-        <div ref={localActionsRef} className="relative flex shrink-0 gap-2">
-          <button
-            type="button"
-            onClick={onTestLocalEndpoint}
-            disabled={testingModel || discoveringModels || !discoverEndpoint.trim()}
-            className="flex h-10 items-center gap-2 rounded-DEFAULT border border-primary/30 px-3 text-body-sm text-primary transition-colors hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {testingModel ? <Loader2 className="animate-spin" size={14} /> : <Play size={14} />}
-            Test
-          </button>
-          <button
-            type="button"
-            onClick={() => setLocalActionsOpen((open) => !open)}
-            className="flex h-10 w-10 items-center justify-center rounded-DEFAULT border border-primary/30 text-primary transition-colors hover:bg-surface-container"
-            aria-label="Local model actions"
-          >
-            <MoreHorizontal size={16} />
-          </button>
-
-          {localActionsOpen && (
-            <div className="absolute right-0 top-[48px] z-20 w-[212px] rounded-lg border border-primary/30 bg-surface-lowest p-2 shadow-[0_18px_50px_rgba(0,0,0,0.45)]">
-              <button
-                type="button"
-                onClick={onScanForServers}
-                disabled={discoveringModels}
-                className="flex h-10 w-full items-center gap-3 rounded-DEFAULT px-3 text-left text-body-sm font-medium text-primary transition-colors hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {discoveringModels ? <Loader2 className="animate-spin" size={15} /> : <Search size={15} />}
-                Scan for Servers
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setLocalActionsOpen(false);
-                  onDiscoverEndpointChange('http://host.docker.internal:11434/v1');
-                  onDiscoverModels('http://host.docker.internal:11434/v1');
-                }}
-                disabled={addingModel}
-                className="flex h-10 w-full items-center gap-3 rounded-DEFAULT px-3 text-left text-body-sm font-medium text-primary transition-colors hover:bg-surface-container"
-              >
-                {addingModel ? <Loader2 className="animate-spin" size={15} /> : <Bot size={15} />}
-                Add Ollama
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowLocalCredentialRef((visible) => !visible);
-                  setLocalActionsOpen(false);
-                }}
-                className="flex h-10 w-full items-center gap-3 rounded-DEFAULT px-3 text-left text-body-sm font-medium text-primary transition-colors hover:bg-surface-container"
-              >
-                <KeyRound size={15} />
-                Credential reference
-              </button>
-            </div>
-          )}
-        </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-[84px_minmax(0,1fr)_72px] gap-2">
-        <div className="flex h-10 items-center rounded-DEFAULT border border-primary/30 bg-surface-container px-3 text-body-sm font-medium text-primary">
-          LLM
-        </div>
+      <div className="mt-3 grid grid-cols-[minmax(0,1fr)_72px] gap-2">
         <input
           id="discover-endpoint-input"
           value={discoverEndpoint}
           onChange={(event) => onDiscoverEndpointChange(event.target.value)}
-          onKeyDown={(event) => { if (event.key === 'Enter') onDiscoverModels(); }}
           className="h-10 rounded-DEFAULT border border-primary/30 bg-surface-container px-3 font-mono-sm text-body-sm text-on-surface outline-none placeholder:text-on-surface-variant/55 focus:border-primary/60"
           placeholder="Paste endpoint URL, e.g. http://host.docker.internal:11434/v1"
-          disabled={addingModel || discoveringModels}
+          disabled={busy}
         />
         <button
-          id="discover-models-btn"
+          id="add-local-model-btn"
           type="button"
-          onClick={() => onDiscoverModels()}
-          disabled={addingModel || discoveringModels || !discoverEndpoint.trim()}
+          onClick={onAddLocalModel}
+          disabled={busy || !discoverEndpoint.trim() || !localModelName.trim()}
           className="flex h-10 items-center justify-center gap-1.5 rounded-DEFAULT bg-primary px-3 text-body-sm font-medium text-surface-lowest transition-colors hover:bg-primary-fixed disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {addingModel && <Loader2 className="animate-spin" size={14} />}
-          Add
+          {adding && <Loader2 className="animate-spin" size={14} />}
+          {adding ? 'Adding…' : 'Add'}
         </button>
       </div>
       {localEndpointNeedsDockerHint && (
@@ -378,25 +251,35 @@ function AddLocalModelsSection({
         </p>
       )}
 
-      {(showLocalCredentialRef || localCredentialRef) && (
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
         <input
-          value={localCredentialRef}
-          onChange={(event) => onLocalCredentialRefChange(event.target.value.toUpperCase())}
-          className="mt-2 h-9 w-full rounded-DEFAULT border border-primary/30 bg-surface-container px-3 font-mono-sm text-body-sm text-on-surface outline-none placeholder:text-on-surface-variant/55 focus:border-primary/60"
-          placeholder="Secret reference, e.g. LOCAL_MODEL_TOKEN"
-          spellCheck={false}
-          aria-label="Local model credential reference"
+          value={localModelName}
+          onChange={(event) => onLocalModelNameChange(event.target.value)}
+          onKeyDown={(event) => { if (event.key === 'Enter') onAddLocalModel(); }}
+          className="h-9 w-full rounded-DEFAULT border border-primary/30 bg-surface-container px-3 font-mono-sm text-body-sm text-on-surface outline-none placeholder:text-on-surface-variant/55 focus:border-primary/60"
+          placeholder="Exact model name, e.g. qwen2.5:7b"
+          disabled={busy}
+          aria-label="Local model name"
         />
-      )}
+        <input
+          type="password"
+          value={localCredentialRef}
+          onChange={(event) => onLocalCredentialRefChange(event.target.value)}
+          className="h-9 w-full rounded-DEFAULT border border-primary/30 bg-surface-container px-3 font-mono-sm text-body-sm text-on-surface outline-none placeholder:text-on-surface-variant/55 focus:border-primary/60"
+          placeholder="API key / token (leave blank if none)"
+          spellCheck={false}
+          autoComplete="off"
+          aria-label="Local model API key"
+        />
+      </div>
+
+      <p className="mt-2 text-[11px] leading-5 text-on-surface-variant">
+        Enter the exact model identifier accepted by this endpoint. An optional key is encrypted before database storage. Voyager saves the model directly and does not require a model-list API.
+      </p>
 
       {modelActionMessage && (
         <div className={`mt-3 text-body-sm ${modelActionSuccess ? 'text-status-success' : 'text-status-error'}`}>
           {modelActionMessage}
-          {modelActionSuccess && discoveredModelNames.length > 0 && (
-            <span className="ml-2 font-mono-sm text-[11px] opacity-75">
-              {discoveredModelNames.join(', ')}
-            </span>
-          )}
         </div>
       )}
     </section>
@@ -405,9 +288,6 @@ function AddLocalModelsSection({
 
 function AddApiModelsSection({
   fieldClass,
-  apiActionsRef,
-  apiActionsOpen,
-  setApiActionsOpen,
   apiProvider,
   onApiProviderChange,
   apiEndpoint,
@@ -416,21 +296,12 @@ function AddApiModelsSection({
   onApiModelNameChange,
   apiCredentialRef,
   onApiCredentialRefChange,
-  onTestApiEndpoint,
-  onScanApiModels,
-  onResetApiProvider,
   onAddApiModel,
   apiActionMessage,
   apiActionSuccess,
-  apiDiscoveredModelNames,
   addingModel,
-  testingModel,
-  discoveringModels,
 }: Pick<Props,
   | 'fieldClass'
-  | 'apiActionsRef'
-  | 'apiActionsOpen'
-  | 'setApiActionsOpen'
   | 'apiProvider'
   | 'onApiProviderChange'
   | 'apiEndpoint'
@@ -439,84 +310,24 @@ function AddApiModelsSection({
   | 'onApiModelNameChange'
   | 'apiCredentialRef'
   | 'onApiCredentialRefChange'
-  | 'onTestApiEndpoint'
-  | 'onScanApiModels'
-  | 'onResetApiProvider'
   | 'onAddApiModel'
   | 'apiActionMessage'
   | 'apiActionSuccess'
-  | 'apiDiscoveredModelNames'
   | 'addingModel'
-  | 'testingModel'
-  | 'discoveringModels'
 >) {
   const providerPreset = cloudProviderPreset(apiProvider);
-  const busy = addingModel || testingModel || discoveringModels;
+  const busy = addingModel !== null;
+  const adding = addingModel === 'api';
 
   return (
     <section className="relative rounded-lg border border-primary/20 bg-surface-base p-4">
-      <div className="flex items-start justify-between gap-4 border-b border-border-subtle/40 pb-3">
+      <div className="flex items-start gap-4 border-b border-border-subtle/40 pb-3">
         <div className="flex items-center gap-3">
           <Globe2 size={18} className="text-primary" />
           <div>
             <h3 className="font-headline-md text-headline-md font-semibold text-primary">Add API Models</h3>
             <p className="mt-1 text-body-sm text-on-surface-variant">Connect a cloud provider endpoint.</p>
           </div>
-        </div>
-        <div ref={apiActionsRef} className="relative flex shrink-0 gap-2">
-          <button
-            type="button"
-            onClick={onTestApiEndpoint}
-            disabled={busy || !apiEndpoint.trim()}
-            className="flex h-10 items-center gap-2 rounded-DEFAULT border border-primary/30 px-3 text-body-sm text-primary transition-colors hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {testingModel ? <Loader2 className="animate-spin" size={14} /> : <Play size={14} />}
-            Test
-          </button>
-          <button
-            type="button"
-            onClick={() => setApiActionsOpen((open) => !open)}
-            className="flex h-10 w-10 items-center justify-center rounded-DEFAULT border border-primary/30 text-primary transition-colors hover:bg-surface-container"
-            aria-label="Cloud model actions"
-            aria-expanded={apiActionsOpen}
-          >
-            <MoreHorizontal size={16} />
-          </button>
-
-          {apiActionsOpen && (
-            <div className="absolute right-0 top-[48px] z-20 w-[224px] rounded-lg border border-primary/30 bg-surface-lowest p-2 shadow-[0_18px_50px_rgba(0,0,0,0.45)]">
-              <button
-                type="button"
-                onClick={onScanApiModels}
-                disabled={busy || !apiEndpoint.trim()}
-                className="flex h-10 w-full items-center gap-3 rounded-DEFAULT px-3 text-left text-body-sm font-medium text-primary transition-colors hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {discoveringModels ? <Loader2 className="animate-spin" size={15} /> : <Search size={15} />}
-                Scan models
-              </button>
-              <button
-                type="button"
-                onClick={onResetApiProvider}
-                disabled={busy}
-                className="flex h-10 w-full items-center gap-3 rounded-DEFAULT px-3 text-left text-body-sm font-medium text-primary transition-colors hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <RotateCcw size={15} />
-                Reset provider defaults
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  onApiCredentialRefChange('');
-                  setApiActionsOpen(false);
-                }}
-                disabled={!apiCredentialRef || busy}
-                className="flex h-10 w-full items-center gap-3 rounded-DEFAULT px-3 text-left text-body-sm font-medium text-primary transition-colors hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <KeyRound size={15} />
-                Clear credential reference
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
@@ -546,8 +357,8 @@ function AddApiModelsSection({
           disabled={busy || !apiEndpoint.trim() || !apiModelName.trim()}
           className="flex h-10 items-center justify-center gap-1.5 rounded-DEFAULT bg-primary px-3 text-body-sm font-medium text-surface-lowest transition-colors hover:bg-primary-fixed disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {addingModel && <Loader2 className="animate-spin" size={14} />}
-          Add
+          {adding && <Loader2 className="animate-spin" size={14} />}
+          {adding ? 'Adding…' : 'Add'}
         </button>
       </div>
       <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -561,28 +372,25 @@ function AddApiModelsSection({
           aria-label="Cloud model name"
         />
         <input
+          type="password"
           value={apiCredentialRef}
-          onChange={(event) => onApiCredentialRefChange(event.target.value.toUpperCase())}
+          onChange={(event) => onApiCredentialRefChange(event.target.value)}
           className={`${fieldClass} mt-0 font-mono-sm text-[12px]`}
-          placeholder="Secret reference, e.g. OPENAI_API_KEY"
+          placeholder="API key, e.g. sk-..."
           spellCheck={false}
+          autoComplete="off"
           disabled={busy}
-          aria-label="Cloud credential reference"
+          aria-label="Cloud API key"
         />
       </div>
 
       <p className="mt-2 text-[11px] leading-5 text-on-surface-variant">
-        Only the reference is stored. The backend resolves its value from a mounted secret file or environment variable.
+        The optional key is encrypted before database storage and is never returned to the browser.
       </p>
 
       {apiActionMessage && (
         <div className={`mt-2 text-body-sm ${apiActionSuccess ? 'text-status-success' : 'text-status-error'}`}>
           {apiActionMessage}
-          {apiActionSuccess && apiDiscoveredModelNames.length > 0 && (
-            <span className="ml-2 font-mono-sm text-[11px] opacity-75">
-              {apiDiscoveredModelNames.join(', ')}
-            </span>
-          )}
         </div>
       )}
     </section>
@@ -594,27 +402,23 @@ function AddedModelsSection({
   expandedEndpoint,
   setExpandedEndpoint,
   managingModels,
-  onProbeAllEndpoints,
   onCopyEndpoint,
   onUpdateEndpointEnabled,
   onDeleteEndpointModels,
-  onRefreshEndpointModels,
   onUpdateSingleModelEnabled,
 }: Pick<Props,
   | 'endpointGroups'
   | 'expandedEndpoint'
   | 'setExpandedEndpoint'
   | 'managingModels'
-  | 'onProbeAllEndpoints'
   | 'onCopyEndpoint'
   | 'onUpdateEndpointEnabled'
   | 'onDeleteEndpointModels'
-  | 'onRefreshEndpointModels'
   | 'onUpdateSingleModelEnabled'
 >) {
   return (
     <section className="rounded-lg border border-primary/20 bg-surface-base p-4">
-      <div className="flex items-start justify-between gap-4 border-b border-border-subtle/40 pb-3">
+      <div className="flex items-start gap-4 border-b border-border-subtle/40 pb-3">
         <div className="flex items-center gap-3">
           <Check size={18} className="text-primary" />
           <div>
@@ -622,18 +426,9 @@ function AddedModelsSection({
               <h3 className="font-headline-md text-headline-md font-semibold text-primary">Added Models</h3>
               <span className="font-mono-sm text-[12px] text-on-surface-variant">(Endpoints)</span>
             </div>
-            <p className="mt-1 text-body-sm text-on-surface-variant">Endpoints you've connected. Refresh re-checks a server; disabled models stay out of chat.</p>
+            <p className="mt-1 text-body-sm text-on-surface-variant">Endpoints you've connected. Disabled models stay out of chat.</p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onProbeAllEndpoints}
-          disabled={managingModels}
-          className="flex h-10 items-center gap-2 rounded-DEFAULT border border-primary/30 px-3 text-body-sm text-primary transition-colors hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {managingModels ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
-          Probe
-        </button>
       </div>
 
       <div className="mt-4 space-y-3">
@@ -668,7 +463,7 @@ function AddedModelsSection({
                     {group.hasCredential && (
                       <span className="flex items-center gap-1 rounded-DEFAULT bg-status-success/15 px-2 py-0.5 font-mono-sm text-[10px] font-semibold text-status-success">
                         <KeyRound size={10} />
-                        Secret ref
+                        Encrypted key
                       </span>
                     )}
                     <span className="rounded-DEFAULT bg-status-error/15 px-2 py-0.5 font-mono-sm text-[10px] font-semibold text-status-error">
@@ -729,7 +524,6 @@ function AddedModelsSection({
                     <div className="font-mono-sm text-[11px] font-semibold uppercase tracking-normal text-on-surface-variant">Models</div>
                     <div className="flex items-center gap-2 font-mono-sm text-[11px] text-on-surface-variant">
                       <span>{group.enabledCount}/{group.models.length} enabled</span>
-                      <button type="button" onClick={() => onRefreshEndpointModels(group.endpoint)} disabled={managingModels} className="text-primary hover:text-primary-fixed disabled:opacity-50">Refresh</button>
                       <button type="button" onClick={() => onUpdateEndpointEnabled(group.endpoint, true)} disabled={managingModels} className="text-primary hover:text-primary-fixed disabled:opacity-50">All</button>
                       <button type="button" onClick={() => onUpdateEndpointEnabled(group.endpoint, false)} disabled={managingModels} className="text-primary hover:text-primary-fixed disabled:opacity-50">None</button>
                     </div>

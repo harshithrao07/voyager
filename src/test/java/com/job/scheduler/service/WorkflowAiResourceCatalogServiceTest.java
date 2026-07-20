@@ -1,0 +1,167 @@
+package com.job.scheduler.service;
+
+import com.job.scheduler.entity.FunctionDefinition;
+import com.job.scheduler.entity.McpServer;
+import com.job.scheduler.entity.McpTool;
+import com.job.scheduler.dto.WorkflowAiMcpRequirementDTO;
+import com.job.scheduler.enums.FunctionStatus;
+import com.job.scheduler.enums.McpServerStatus;
+import com.job.scheduler.enums.McpTrustLevel;
+import com.job.scheduler.repository.FunctionDefinitionRepository;
+import com.job.scheduler.repository.McpToolRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import tools.jackson.databind.ObjectMapper;
+
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class WorkflowAiResourceCatalogServiceTest {
+    @Mock
+    private FunctionDefinitionRepository functionRepository;
+    @Mock
+    private McpToolRepository mcpToolRepository;
+    @Mock
+    private FunctionRuntimePolicy functionRuntimePolicy;
+
+    private WorkflowAiResourceCatalogService service;
+
+    @BeforeEach
+    void setUp() {
+        service = new WorkflowAiResourceCatalogService(
+                functionRepository,
+                mcpToolRepository,
+                functionRuntimePolicy,
+                new ObjectMapper()
+        );
+        lenient().when(functionRuntimePolicy.supportedSelectableLanguages())
+                .thenReturn(List.of());
+    }
+
+    @Test
+    void documentsOnlyInvokableFunctionsAndEnabledServers() {
+        FunctionDefinition enabledFunction = function("normalize-order", FunctionStatus.ENABLED, 2);
+        enabledFunction.setDescription("Normalizes incoming order fields");
+        FunctionDefinition unpublishedFunction = function("draft-only", FunctionStatus.ENABLED, null);
+        when(functionRepository.findByStatusNotOrderByUpdatedAtDesc(FunctionStatus.ARCHIVED))
+                .thenReturn(List.of(enabledFunction, unpublishedFunction));
+
+        McpServer readServer = server("crm", McpServerStatus.ENABLED, McpTrustLevel.READ_ONLY);
+        McpTool readTool = tool(readServer, "get-customer", "Loads one customer");
+        readTool.setInputSchema("""
+                {"type":"object","properties":{"customerId":{"type":"string"}}}
+                """);
+        McpServer writeServer = server("fulfillment", McpServerStatus.ENABLED, McpTrustLevel.WRITE);
+        McpTool writeTool = tool(writeServer, "reserve-inventory", "Reserves order stock");
+        McpServer disabledServer = server("disabled", McpServerStatus.DISABLED, McpTrustLevel.READ_ONLY);
+        McpTool disabledTool = tool(disabledServer, "hidden-tool", "Must not be visible");
+        when(mcpToolRepository.findByEnabledTrue())
+                .thenReturn(List.of(readTool, writeTool, disabledTool));
+
+        String catalog = service.buildCatalog();
+
+        assertThat(catalog)
+                .contains("SYSTEM RESOURCES:")
+                .contains("voyager://system/webhook args: {url:string, method:string optional default POST")
+                .contains("headers:object<string,string> optional")
+                .contains("GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS")
+                .contains("Each MCP args object is the Task Arguments shape")
+                .contains("do not wrap them in payload")
+                .contains("$states.result.structuredContent")
+                .contains("voyager://function/normalize-order@v2")
+                .contains("voyager://mcp/crm/get-customer [trust: READ_ONLY]")
+                .contains("args: {customerId:string}")
+                .contains("voyager://mcp/fulfillment/reserve-inventory?trust=WRITE")
+                .doesNotContain("draft-only")
+                .doesNotContain("hidden-tool")
+                .doesNotContain("SUPPORTED FUNCTION LANGUAGES");
+        assertThat(service.buildFunctionCreationContext())
+                .contains("SUPPORTED FUNCTION LANGUAGES")
+                .contains("Language list unavailable.");
+    }
+
+    @Test
+    void matchesProviderSuggestionToItsDiscoveredSearchTool() {
+        McpServer tavily = server(
+                "tavily-web-search",
+                McpServerStatus.ENABLED,
+                McpTrustLevel.READ_ONLY
+        );
+        McpTool search = tool(
+                tavily,
+                "tavily_search",
+                "Search the web for current information on any topic"
+        );
+        when(mcpToolRepository.findByEnabledTrue()).thenReturn(List.of(search));
+
+        var matches = service.findMcpRequirementMatches(List.of(
+                new WorkflowAiMcpRequirementDTO(
+                        "search the web for a company name",
+                        "tavily-web-search",
+                        "extract the title of the top result",
+                        "READ_ONLY"
+                )
+        ));
+
+        assertThat(matches).singleElement().satisfies(match -> {
+            assertThat(match.capability()).isEqualTo("search the web for a company name");
+            assertThat(match.resourceUri())
+                    .isEqualTo("voyager://mcp/tavily-web-search/tavily_search");
+        });
+    }
+
+    @Test
+    void doesNotMatchARequirementFromOnlyOneGenericWord() {
+        McpServer crm = server("crm", McpServerStatus.ENABLED, McpTrustLevel.READ_ONLY);
+        McpTool search = tool(crm, "search-customers", "Search customer records by name");
+        when(mcpToolRepository.findByEnabledTrue()).thenReturn(List.of(search));
+
+        var matches = service.findMcpRequirementMatches(List.of(
+                new WorkflowAiMcpRequirementDTO(
+                        "search the public web",
+                        null,
+                        "return the top result",
+                        "READ_ONLY"
+                )
+        ));
+
+        assertThat(matches).isEmpty();
+    }
+
+    private FunctionDefinition function(String name, FunctionStatus status, Integer activeVersion) {
+        FunctionDefinition function = new FunctionDefinition();
+        function.setName(name);
+        function.setStatus(status);
+        function.setActiveVersion(activeVersion);
+        return function;
+    }
+
+    private McpServer server(
+            String serverId,
+            McpServerStatus status,
+            McpTrustLevel trustLevel
+    ) {
+        McpServer server = new McpServer();
+        server.setServerId(serverId);
+        server.setStatus(status);
+        server.setTrustLevel(trustLevel);
+        return server;
+    }
+
+    private McpTool tool(McpServer server, String name, String description) {
+        McpTool tool = new McpTool();
+        tool.setMcpServer(server);
+        tool.setToolName(name);
+        tool.setDescription(description);
+        tool.setEnabled(true);
+        tool.setInputSchema("{\"type\":\"object\"}");
+        return tool;
+    }
+}

@@ -68,6 +68,14 @@ public class McpServer {
     @Column(name = "env", columnDefinition = "TEXT")
     private Map<String, String> env;
 
+    /**
+     * STDIO transport: secret environment variables for the child process, values
+     * stored AES-256-GCM encrypted and decrypted only at spawn time.
+     */
+    @Convert(converter = StringMapJsonConverter.class)
+    @Column(name = "secret_env", columnDefinition = "TEXT")
+    private Map<String, String> secretEnv;
+
     /** STDIO + BEARER_TOKEN: env var the resolved token is injected into. */
     @Column(name = "auth_env_var")
     private String authEnvVar;
@@ -80,8 +88,17 @@ public class McpServer {
     @Column(name = "auth_type", nullable = false)
     private McpAuthType authType;
 
-    @Column(name = "auth_token_ref")
-    private String authTokenRef;
+    /** AES-256-GCM encrypted auth token/secret, stored inline. Null when none. */
+    @Column(name = "auth_token_encrypted", columnDefinition = "TEXT")
+    private String authTokenEncrypted;
+
+    /**
+     * CUSTOM_HEADERS auth (HTTP): request headers (name -> encrypted value),
+     * decrypted and added to every request. Empty for other auth types.
+     */
+    @Convert(converter = StringMapJsonConverter.class)
+    @Column(name = "secret_headers", columnDefinition = "TEXT")
+    private Map<String, String> secretHeaders;
 
     /** API_KEY auth: the header name the resolved secret is sent in (HTTP). */
     @Column(name = "auth_header_name")

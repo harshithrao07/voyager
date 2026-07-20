@@ -1,11 +1,6 @@
 package com.job.scheduler.service;
 
 import com.job.scheduler.dto.WorkflowGenerationResponseDTO;
-import com.job.scheduler.entity.FunctionDefinition;
-import com.job.scheduler.entity.McpTool;
-import com.job.scheduler.enums.FunctionStatus;
-import com.job.scheduler.repository.FunctionDefinitionRepository;
-import com.job.scheduler.repository.McpToolRepository;
 import com.job.scheduler.workflow.asl.validation.AslDefinitionValidator;
 import com.job.scheduler.workflow.asl.validation.AslValidationIssue;
 import com.job.scheduler.workflow.asl.validation.AslValidationResult;
@@ -30,8 +25,7 @@ import java.util.stream.Collectors;
 public class WorkflowGenerationService {
 
     private final ObjectProvider<ChatLanguageModel> chatLanguageModelProvider;
-    private final McpToolRepository mcpToolRepository;
-    private final FunctionDefinitionRepository functionRepository;
+    private final WorkflowAiResourceCatalogService resourceCatalogService;
     private final AslDefinitionValidator validator;
     private final ObjectMapper objectMapper;
 
@@ -50,7 +44,9 @@ public class WorkflowGenerationService {
             7. OUTPUT STRICTLY RAW JSON. No markdown, no explanations.
             
             RESOURCES:
-            - voyager://system/webhook: args url(str), body(obj)
+            - voyager://system/webhook: args url(str), method(str optional, default POST),
+              headers(obj<string,string> optional), body(any optional). Supported methods:
+              GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
             - voyager://system/send-email: args to(str), subject(str), body(str)
 
             FUNCTIONS (voyager://function/<name>; omit @version for the active one):
@@ -68,8 +64,8 @@ public class WorkflowGenerationService {
 
         String systemPrompt = String.format(
                 SYSTEM_PROMPT_TEMPLATE,
-                buildFunctionsDocumentation(),
-                buildMcpToolsDocumentation());
+                resourceCatalogService.buildFunctionsDocumentation(),
+                resourceCatalogService.buildMcpToolsDocumentation());
         
         SystemMessage sysMsg = SystemMessage.systemMessage(systemPrompt);
         UserMessage userMsg = UserMessage.userMessage(instruction);
@@ -125,70 +121,4 @@ public class WorkflowGenerationService {
         return new WorkflowGenerationResponseDTO(parsedDefinition, rawOutput, validationIssues);
     }
 
-    private String buildFunctionsDocumentation() {
-        List<FunctionDefinition> functions = functionRepository
-                .findByStatusNotOrderByUpdatedAtDesc(FunctionStatus.ARCHIVED);
-        StringBuilder doc = new StringBuilder();
-        for (FunctionDefinition function : functions) {
-            // Only functions that can actually be invoked from a Task.
-            if (function.getStatus() != FunctionStatus.ENABLED || function.getActiveVersion() == null) {
-                continue;
-            }
-            doc.append("- voyager://function/").append(function.getName())
-                    .append("@v").append(function.getActiveVersion());
-            if (function.getDescription() != null && !function.getDescription().isBlank()) {
-                doc.append(" (").append(function.getDescription()).append(")");
-            }
-            doc.append("\n");
-        }
-        return doc.length() == 0 ? "None." : doc.toString();
-    }
-
-    private String buildMcpToolsDocumentation() {
-        List<McpTool> tools = mcpToolRepository.findByEnabledTrue();
-        if (tools.isEmpty()) {
-            return "None.";
-        }
-
-        StringBuilder doc = new StringBuilder();
-        for (McpTool tool : tools) {
-            doc.append("- voyager://mcp/").append(tool.getMcpServer().getServerId()).append("/").append(tool.getToolName());
-            // The server's trust level tells the model whether the call needs a
-            // ?trust= grant: READ_ONLY tools need none; WRITE/DESTRUCTIVE do.
-            Object trustLevel = tool.getMcpServer().getTrustLevel();
-            doc.append(" [trust: ").append(trustLevel == null ? "UNTRUSTED" : trustLevel).append("]");
-            if (tool.getInputSchema() != null) {
-                doc.append(" args: ").append(flattenJsonSchema(tool.getInputSchema()));
-            }
-            if (tool.getDescription() != null) {
-                doc.append(" (").append(tool.getDescription()).append(")");
-            }
-            doc.append("\n");
-        }
-        return doc.toString();
-    }
-
-    private String flattenJsonSchema(String jsonSchema) {
-        if (jsonSchema == null || jsonSchema.isBlank()) return "{}";
-        try {
-            JsonNode root = objectMapper.readTree(jsonSchema);
-            JsonNode properties = root.path("properties");
-            if (properties.isMissingNode() || !properties.isObject()) return "{}";
-            
-            StringBuilder sb = new StringBuilder("{");
-            for (java.util.Map.Entry<String, JsonNode> entry : properties.properties()) {
-                String name = entry.getKey();
-                JsonNode typeNode = entry.getValue().path("type");
-                String type = typeNode.isTextual() ? typeNode.asText() : "any";
-                sb.append(name).append(":").append(type).append(",");
-            }
-            if (sb.length() > 1) {
-                sb.setLength(sb.length() - 1); // remove trailing comma
-            }
-            sb.append("}");
-            return sb.toString();
-        } catch (Exception e) {
-            return "{}";
-        }
-    }
 }

@@ -289,19 +289,13 @@ function formatEnv(env: Record<string, string> | null | undefined): string {
   return Object.entries(env ?? {}).map(([key, value]) => `${key}=${value}`).join('\n');
 }
 
-const secretReferencePattern = /^(?:\$\{secret:[A-Z][A-Z0-9_]{0,127}}|ref:[A-Z][A-Z0-9_]{0,127})$/;
-const sensitiveEnvNamePattern = /(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|CREDENTIAL|ACCESS_KEY|AUTH)(_|$)/;
-
-function validateEnvironmentReferences(env: Record<string, string>): string | null {
-  for (const [name, value] of Object.entries(env)) {
-    const normalizedName = name.trim().toUpperCase();
-    const normalizedValue = value.trim();
-    if ((normalizedValue.startsWith('${secret:') || normalizedValue.startsWith('ref:'))
-      && !secretReferencePattern.test(normalizedValue)) {
-      return `${normalizedName} must use \${secret:UPPER_SNAKE_CASE} or ref:UPPER_SNAKE_CASE.`;
-    }
-    if (sensitiveEnvNamePattern.test(normalizedName) && !secretReferencePattern.test(normalizedValue)) {
-      return `${normalizedName} looks sensitive and must use a secret reference.`;
+function validateKeyValueText(text: string, label: string): string | null {
+  const lines = text.split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    const trimmed = lines[index].trim();
+    if (!trimmed) continue;
+    if (trimmed.indexOf('=') <= 0) {
+      return `${label} line ${index + 1} must use NAME=VALUE.`;
     }
   }
   return null;
@@ -320,6 +314,7 @@ function authTypeLabel(authType: McpAuthType): string {
     case 'BEARER_TOKEN': return 'Bearer';
     case 'API_KEY': return 'API key';
     case 'BASIC': return 'Basic';
+    case 'CUSTOM_HEADERS': return 'Custom headers';
     default: return 'No auth';
   }
 }
@@ -341,9 +336,17 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
   const [command, setCommand] = useState(initial?.command ?? '');
   const [argsText, setArgsText] = useState((initial?.args ?? []).join('\n'));
   const [envText, setEnvText] = useState(formatEnv(initial?.env));
+  // Secret env values are never returned; prefill existing keys with empty values
+  // (blank = keep the stored encrypted value on save).
+  const [secretEnvText, setSecretEnvText] = useState(
+    (initial?.secretEnvKeys ?? []).map((name) => `${name}=`).join('\n'),
+  );
+  const [secretHeadersText, setSecretHeadersText] = useState(
+    [...(initial?.secretHeaderNames ?? [])].sort().map((name) => `${name}=`).join('\n'),
+  );
   const [authEnvVar, setAuthEnvVar] = useState(initial?.authEnvVar ?? '');
   const [authType, setAuthType] = useState<McpAuthType>(initial?.authType ?? 'NONE');
-  const [authTokenRef, setAuthTokenRef] = useState(initial?.authTokenRef ?? '');
+  const [authToken, setAuthToken] = useState('');
   const [authHeaderName, setAuthHeaderName] = useState(initial?.authHeaderName ?? '');
   const [authUsername, setAuthUsername] = useState(initial?.authUsername ?? '');
   const [trustLevel, setTrustLevel] = useState<McpTrustLevel>(initial?.trustLevel ?? 'UNTRUSTED');
@@ -371,14 +374,23 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
       if (authType === 'BEARER_TOKEN' && !authEnvVar.trim()) {
         return 'A token env var is required to inject the token for STDIO bearer auth.';
       }
-      const environmentError = validateEnvironmentReferences(parseEnvText(envText));
-      if (environmentError) return environmentError;
+      const secretEnvError = validateKeyValueText(secretEnvText, 'Secret environment');
+      if (secretEnvError) return secretEnvError;
     }
-    if (authType !== 'NONE' && !authTokenRef.trim()) {
-      return 'A secret reference is required for authenticated servers.';
+    if (authType !== 'NONE' && authType !== 'CUSTOM_HEADERS'
+      && !authToken.trim() && !(mode === 'edit' && initial?.hasAuthToken)) {
+      return 'A token is required for authenticated servers.';
     }
-    if (authType !== 'NONE' && !/^[A-Z][A-Z0-9_]{0,127}$/.test(authTokenRef.trim())) {
-      return 'Secret references must use UPPER_SNAKE_CASE.';
+    if (authType === 'CUSTOM_HEADERS') {
+      const headerTextError = validateKeyValueText(secretHeadersText, 'Custom header');
+      if (headerTextError) return headerTextError;
+      const headers = parseEnvText(secretHeadersText);
+      if (Object.keys(headers).length === 0) {
+        return 'At least one custom authentication header is required.';
+      }
+      if (mode === 'create' && Object.values(headers).some((value) => !value)) {
+        return 'Custom authentication header values are required when registering a server.';
+      }
     }
     if (authType === 'API_KEY' && !authHeaderName.trim()) {
       return 'A header name is required for API key auth.';
@@ -409,9 +421,14 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
       command: isStdio ? command.trim() : null,
       args: isStdio ? parseArgsText(argsText) : null,
       env: isStdio ? parseEnvText(envText) : null,
+      secretEnv: isStdio ? parseEnvText(secretEnvText) : null,
+      secretHeaders: authType === 'CUSTOM_HEADERS' ? parseEnvText(secretHeadersText) : null,
       authEnvVar: isStdio && authType === 'BEARER_TOKEN' ? authEnvVar.trim() : null,
       authType,
-      authTokenRef: authType !== 'NONE' ? authTokenRef.trim() : null,
+      // Blank on edit keeps the existing encrypted token; NONE clears it.
+      authToken: authType !== 'NONE' && authType !== 'CUSTOM_HEADERS'
+        ? (authToken.trim() || null)
+        : null,
       authHeaderName: authType === 'API_KEY' ? authHeaderName.trim() : null,
       authUsername: authType === 'BASIC' ? authUsername.trim() : null,
       trustLevel,
@@ -572,12 +589,25 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
                 <textarea
                   value={envText}
                   onChange={(event) => setEnvText(event.target.value)}
-                  placeholder={'LOG_LEVEL=info\nGITHUB_TOKEN=${secret:MCP_GITHUB_TOKEN}'}
+                  placeholder={'LOG_LEVEL=info\nMCP_MODE=stdio'}
                   rows={2}
                   className={`${fieldClass} font-mono-sm`}
                 />
                 <span className="mt-1 block text-[10.5px] leading-4 text-on-surface-variant/70">
-                  Use literals for non-secret settings. Sensitive variables must use ${'{secret:REF}'} or ref:REF.
+                  Non-secret settings only — these are stored and shown in plaintext.
+                </span>
+              </label>
+              <label className="sm:col-span-2">
+                <span className={labelClass}>Secret environment (KEY=VALUE per line)</span>
+                <textarea
+                  value={secretEnvText}
+                  onChange={(event) => setSecretEnvText(event.target.value)}
+                  placeholder={'GITHUB_TOKEN=ghp_...'}
+                  rows={2}
+                  className={`${fieldClass} font-mono-sm`}
+                />
+                <span className="mt-1 block text-[10.5px] leading-4 text-on-surface-variant/70">
+                  Values are encrypted and never shown again. Leave a value blank to keep the stored secret; remove the line to drop it.
                 </span>
               </label>
             </>
@@ -605,28 +635,48 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
               <option value="BEARER_TOKEN">Bearer token</option>
               <option value="API_KEY">API key (header)</option>
               <option value="BASIC">Basic</option>
+              {transport === 'HTTP' && <option value="CUSTOM_HEADERS">Multiple custom headers</option>}
             </select>
           </label>
-          {authType !== 'NONE' ? (
+          {authType !== 'NONE' && authType !== 'CUSTOM_HEADERS' ? (
             <label>
               <span className={labelClass}>
                 <KeyRound size={11} />
-                Secret reference
+                {authType === 'BASIC' ? 'Password' : 'Token / secret'}
               </span>
               <input
-                value={authTokenRef}
-                onChange={(event) => setAuthTokenRef(event.target.value.toUpperCase())}
-                placeholder="MCP_GITHUB_TOKEN"
+                type="password"
+                value={authToken}
+                onChange={(event) => setAuthToken(event.target.value)}
+                placeholder={mode === 'edit' && initial?.hasAuthToken ? 'Leave blank to keep the stored value' : 'Paste the token/secret'}
+                autoComplete="off"
                 className={`${fieldClass} font-mono-sm`}
               />
               <span className="mt-1 block text-[10.5px] leading-4 text-on-surface-variant/70">
-                {authType === 'BASIC'
-                  ? 'Reference to the password in the shared secret resolver — never the password itself.'
-                  : 'Reference to the token/key in the shared secret resolver — never the value itself.'}
+                Encrypted and stored in the database; never shown again.
               </span>
             </label>
           ) : (
             <div />
+          )}
+          {authType === 'CUSTOM_HEADERS' && (
+            <label className="sm:col-span-2">
+              <span className={labelClass}>
+                <KeyRound size={11} />
+                Secret request headers (NAME=VALUE per line)
+              </span>
+              <textarea
+                data-testid="mcp-secret-headers"
+                value={secretHeadersText}
+                onChange={(event) => setSecretHeadersText(event.target.value)}
+                placeholder={'X-API-Key=secret-value\nX-Client-Secret=another-secret'}
+                rows={3}
+                className={`${fieldClass} font-mono-sm`}
+              />
+              <span className="mt-1 block text-[10.5px] leading-4 text-on-surface-variant/70">
+                Values are encrypted and never returned. On edit, leave a value blank to keep it; remove the line to delete that header.
+              </span>
+            </label>
           )}
           {authType === 'API_KEY' && (
             <label>
@@ -1120,7 +1170,7 @@ function PlaygroundPanel({
     setResult(null);
     setRunError(null);
     setLastDurationMs(null);
-  }, [selectedTool?.id]);
+  }, [selectedTool]);
 
   const preflightWarning = server.status !== 'ENABLED'
     ? 'This server is disabled — every call will be rejected until it is enabled.'
@@ -1518,7 +1568,9 @@ function ServerDetail({
                     icon={<KeyRound size={13} />}
                     label={server.authType === 'NONE'
                       ? 'No auth'
-                      : <span>{authTypeLabel(server.authType)} · <span className="font-mono-sm text-[11px]">{server.authTokenRef}</span></span>}
+                      : server.authType === 'CUSTOM_HEADERS'
+                        ? `${authTypeLabel(server.authType)} · ${server.secretHeaderNames.length}`
+                        : <span>{authTypeLabel(server.authType)}{server.hasAuthToken ? '' : ' · no token'}</span>}
                   />
                   <HeroChip
                     icon={<Timer size={13} />}

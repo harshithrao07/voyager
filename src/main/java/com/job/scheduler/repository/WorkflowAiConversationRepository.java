@@ -1,6 +1,7 @@
 package com.job.scheduler.repository;
 
 import com.job.scheduler.entity.WorkflowAiConversation;
+import com.job.scheduler.enums.WorkflowAiWorkspaceKind;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -19,5 +20,11 @@ public interface WorkflowAiConversationRepository
             @Param("conversationId") UUID conversationId
     );
 
-    List<WorkflowAiConversation> findTop50ByOrderByUpdatedAtDesc();
+    List<WorkflowAiConversation> findTop50ByWorkspaceKindOrderByUpdatedAtDesc(
+            WorkflowAiWorkspaceKind workspaceKind
+    );
+
+    List<WorkflowAiConversation> findAllByWorkspaceKind(
+            WorkflowAiWorkspaceKind workspaceKind
+    );
 }

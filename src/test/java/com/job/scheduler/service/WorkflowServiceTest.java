@@ -80,7 +80,11 @@ class WorkflowServiceTest {
                 new WorkflowDefinitionCanonicalizer(objectMapper),
                 objectMapper,
                 new AslRuntimeCapabilityValidator(),
-                new AslMcpResourceValidator(mcpServerRepository, mcpToolRepository),
+                new AslMcpResourceValidator(
+                        mcpServerRepository,
+                        mcpToolRepository,
+                        objectMapper
+                ),
                 new AslFunctionResourceValidator(
                         functionDefinitionRepository,
                         functionVersionRepository

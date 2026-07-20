@@ -33,6 +33,12 @@ public record McpServerRequestDTO(
 
         Map<String, String> env,
 
+        // STDIO secret env vars (name -> plaintext value); encrypted on save, never returned.
+        Map<String, String> secretEnv,
+
+        // CUSTOM_HEADERS auth: request headers (name -> plaintext value); encrypted on save, never returned.
+        Map<String, String> secretHeaders,
+
         String authEnvVar,
 
         @NotNull
@@ -41,7 +47,8 @@ public record McpServerRequestDTO(
         @NotNull
         McpAuthType authType,
 
-        String authTokenRef,
+        // Plaintext auth token/secret; encrypted on save, never returned.
+        String authToken,
 
         String authHeaderName,
 

@@ -27,7 +27,7 @@ import tools.jackson.databind.ObjectMapper;
 public class AiModelConfigService {
     private final AiModelConfigRepository repository;
     private final ObjectMapper objectMapper;
-    private final SecretResolver secretResolver;
+    private final SecretCipher secretCipher;
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .build();
@@ -71,7 +71,7 @@ public class AiModelConfigService {
         String baseUrl = normalizeBaseUrl(request.baseUrl());
         String modelName = requireText(request.modelName(), "Model name");
         String displayName = requireText(request.displayName(), "Display name");
-        String credentialRef = optionalSecretReference(request.credentialRef());
+        String credential = request.credential();
         AiModelProviderType providerType = request.providerType() == null
                 ? AiModelProviderType.OPENAI_COMPATIBLE_LOCAL
                 : request.providerType();
@@ -83,8 +83,9 @@ public class AiModelConfigService {
         model.setProviderType(providerType);
         model.setBaseUrl(baseUrl);
         model.setModelName(modelName);
-        if (credentialRef != null || newModel) {
-            model.setCredentialRef(credentialRef);
+        // null credential = leave unchanged (except on create); "" = clear.
+        if (credential != null || newModel) {
+            model.setCredentialEncrypted(secretCipher.encrypt(credential));
         }
         model.setEnabled(true);
         model.setDefaultModel(request.defaultModel());
@@ -103,18 +104,22 @@ public class AiModelConfigService {
     @Transactional
     public List<AiModelConfigDTO> discoverAndOnboardModels(
             String requestedBaseUrl,
-            String requestedCredentialRef,
+            String requestedCredential,
             AiModelProviderType requestedProviderType
     ) {
         String baseUrl = normalizeBaseUrl(requestedBaseUrl);
         AiModelConfig existingEndpoint = repository
                 .findFirstByBaseUrlOrderByCreatedAtAsc(baseUrl)
                 .orElse(null);
-        String credentialRef = optionalSecretReference(requestedCredentialRef);
-        if (credentialRef == null && existingEndpoint != null) {
-            credentialRef = optionalSecretReference(existingEndpoint.getCredentialRef());
-        }
-        String credential = resolveCredential(credentialRef);
+        // A provided credential is encrypted and stored on discovered models; when
+        // omitted, reuse the endpoint's existing encrypted credential as-is.
+        String providedCredential = optionalText(requestedCredential);
+        String encryptedToStore = providedCredential != null
+                ? secretCipher.encrypt(providedCredential)
+                : existingEndpoint != null ? existingEndpoint.getCredentialEncrypted() : null;
+        String credential = providedCredential != null
+                ? providedCredential
+                : secretCipher.decrypt(encryptedToStore);
         AiModelProviderType providerType = requestedProviderType != null
                 ? requestedProviderType
                 : existingEndpoint == null
@@ -193,8 +198,8 @@ public class AiModelConfigService {
             model.setProviderType(providerType);
             model.setBaseUrl(baseUrl);
             model.setModelName(modelId);
-            if (credentialRef != null || newModel) {
-                model.setCredentialRef(credentialRef);
+            if (providedCredential != null || newModel) {
+                model.setCredentialEncrypted(encryptedToStore);
             }
             model.setEnabled(true);
             if (noExistingModels && i == 0) {
@@ -242,14 +247,13 @@ public class AiModelConfigService {
         String modelName = optionalText(request.modelName());
 
         try {
-            String credentialRef = optionalSecretReference(request.credentialRef());
-            if (credentialRef == null) {
-                credentialRef = repository.findFirstByBaseUrlOrderByCreatedAtAsc(baseUrl)
-                        .map(AiModelConfig::getCredentialRef)
-                        .map(this::optionalSecretReference)
+            String credential = optionalText(request.credential());
+            if (credential == null) {
+                credential = repository.findFirstByBaseUrlOrderByCreatedAtAsc(baseUrl)
+                        .map(AiModelConfig::getCredentialEncrypted)
+                        .map(secretCipher::decrypt)
                         .orElse(null);
             }
-            String credential = resolveCredential(credentialRef);
             HttpRequest.Builder modelsRequestBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + "/models"))
                     .timeout(Duration.ofSeconds(10))
@@ -324,8 +328,7 @@ public class AiModelConfigService {
                 model.getModelName(),
                 model.isEnabled(),
                 model.isDefaultModel(),
-                optionalSecretReference(model.getCredentialRef()),
-                optionalSecretReference(model.getCredentialRef()) != null
+                model.getCredentialEncrypted() != null
         );
     }
 
@@ -359,17 +362,6 @@ public class AiModelConfigService {
 
     private String optionalText(String value) {
         return value == null || value.isBlank() ? null : value.trim();
-    }
-
-    private String optionalSecretReference(String value) {
-        String reference = optionalText(value);
-        return reference == null
-                ? null
-                : SecretReferences.requireValidReference(reference);
-    }
-
-    private String resolveCredential(String credentialRef) {
-        return credentialRef == null ? null : secretResolver.require(credentialRef);
     }
 
     private void applyAuthorization(HttpRequest.Builder builder, String credential) {

@@ -47,9 +47,9 @@ public class AiModelConfig {
     @Column(name = "model_name", nullable = false)
     private String modelName;
 
-    /** Reference only; the credential value lives in the deployment secret store. */
-    @Column(name = "credential_ref", length = 128)
-    private String credentialRef;
+    /** AES-256-GCM encrypted credential (e.g. API key), stored inline. Null when none. */
+    @Column(name = "credential_encrypted", columnDefinition = "TEXT")
+    private String credentialEncrypted;
 
     @Column(name = "enabled", nullable = false)
     private boolean enabled = true;

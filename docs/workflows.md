@@ -60,15 +60,48 @@ The Workflows page lists everything with status chips, schedule (`cron - timezon
 
 ### Path 1: the AI Generator
 
-Describe the workflow in plain language; a stage strip tracks the conversation through **Details → ASL ready → Reviewing → Schedule → Ready → Accepted**. The generated ASL opens in a review panel where you can edit the JSON directly, ask the model to **Check ASL** against your original request, and finally **Accept workflow** — which creates the workflow server-side and lands you on its detail page. Schedule metadata (name, cron, timezone, attempts) is collected conversationally rather than through a form.
+Describe the workflow in plain language. The first successful turn creates a durable conversation at
+`/c/<conversationId>`, opens the generated ASL in the manual editor, and keeps the assistant beside
+the canvas for follow-up changes. The **Chats** section in the main sidebar lists and searches old
+conversations; reopening one restores both user and assistant messages, the latest valid ASL, moved
+canvas nodes, and workflow settings. Merely viewing a chat does not change its last-updated time.
+
+The model receives the current editor definition and a live Task catalog containing built-in system
+resources, enabled published functions, and enabled synced MCP tools. Long conversations keep recent
+turns verbatim and compact older turns into a source-grounded summary without deleting the original
+messages. **Retry** is intentionally available only for the latest assistant response.
+
+A stage strip tracks the conversation through **Details → ASL ready → Reviewing → Schedule → Ready
+→ Accepted**. You can edit the JSON directly, ask the model to review it against the original request,
+and finally accept the workflow, which creates it server-side and opens its detail page. The complete
+model setup, persistence, context, summarization, retry, and API behavior is documented in
+[AI Workflow Generator](ai-workflows.md).
 
 ![Create page with the AI generator](images/workflows/02-create-ai-generator.png)
 
-The AI path needs at least one model endpoint configured (the model picker's **+** opens Settings; local Ollama/llama.cpp/vLLM endpoints and cloud providers are supported). The two tiles below the composer also matter for the manual path: **Import from template** loads an ASL JSON file straight into the manual editor, and **Explore examples** offers ready-made prompts.
+The AI path needs at least one model endpoint configured (the model picker's **+** opens Settings;
+local Ollama/llama.cpp/vLLM endpoints and OpenAI-compatible cloud providers are supported). Provider
+keys are entered as values and stored encrypted, never as secret-reference names. The two tiles below
+the composer also matter for the manual path: **Import from template** loads an ASL JSON file straight
+into the manual editor, and **Explore examples** offers ready-made prompts.
 
 ### Path 2: Manual ASL
 
-Switch the top-right toggle to **Manual ASL** (or just import a file — importing switches automatically). The editor has two views:
+Switch the top-right toggle to **Manual ASL** (or just import a file — importing switches
+automatically). Switching modes alone stays on `/` and does not create an empty draft. When the first
+state is added—through the builder, code editor, or an imported definition—Voyager creates
+`/draft/<draftId>` and continuously saves the exact definition editor text, canvas positions, and
+workflow settings. Incomplete JSON is restored exactly after refresh while the last valid ASL remains
+protected. The **Drafts** sidebar below Chats supports search, reopen, rename, delete, and delete all.
+
+Use the pencil action on any Chat or Draft sidebar row to give it a memorable custom name. That name
+is searchable, survives refresh, and does not change the workflow name stored in draft settings.
+
+Opening AI from a manual draft attaches the messages and selected model to the same draft. The route
+stays `/draft/<draftId>` and the workspace does not create a separate `/c/<conversationId>`. Saving
+the workflow removes the manual draft and opens `/workflows/<workflowId>`.
+
+The editor has two views:
 
 - **Builder** — a canvas with a palette of all eight state types. Adding a state drops a sensible template (a new Task starts with a placeholder `voyager://` resource, which intentionally fails validation until you pick a real one); the first state becomes `StartAt`. Drag between nodes to connect transitions, right-click nodes for *Set as start* / *Delete state*, right-click edges to disconnect or mark a Choice default. Renaming a state rewires every transition that targets it; deleting one converts referrers to `End: true`.
 
@@ -173,6 +206,30 @@ Task states invoke resources by URI; each family has its own guide:
 | `voyager://mcp/<serverId>/<tool>[?trust=…]` | [MCP servers](mcp.md) — registered external tools behind the trust ladder (mutating calls are never auto-retried) |
 | `voyager://system/webhook` | Built-in HTTP call (`Scheduler.Webhook.*` errors) |
 | `voyager://system/send-email` | Built-in email (`Scheduler.Email.SendFailed`) |
+
+Webhook Tasks accept `url`, optional `method`, optional `headers`, and optional `body` arguments.
+The method defaults to `POST`; supported methods are `GET`, `POST`, `PUT`, `PATCH`, `DELETE`,
+`HEAD`, and `OPTIONS`. Header values must be strings and cannot contain line breaks.
+
+```json
+{
+  "Type": "Task",
+  "Resource": "voyager://system/webhook",
+  "Arguments": {
+    "url": "https://example.test/orders",
+    "method": "PATCH",
+    "headers": {
+      "Authorization": "{% $states.input.authorization %}",
+      "X-Correlation-ID": "{% $states.input.orderId %}"
+    },
+    "body": "{% $states.input.update %}"
+  },
+  "End": true
+}
+```
+
+Static header values are persisted as part of the immutable workflow definition, so do not put
+long-lived credentials directly in ASL. JSONata expressions are evaluated before the request.
 
 Retry/Catch semantics, the stable error vocabulary, and every JSONata data-flow field are covered in [ASL with JSONata](asl-jsonata.md); the durable execution model behind all of it is in [interpreter internals](interpreter.md).
 

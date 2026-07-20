@@ -1,0 +1,10 @@
+# Production-style image override used by Jenkins local CD. The base Compose
+# file still owns dependencies, health checks, ports, and persistent volumes.
+services:
+  app:
+    image: ${VOYAGER_APP_IMAGE:?Set VOYAGER_APP_IMAGE to an immutable GHCR tag}
+    pull_policy: always
+
+  frontend:
+    image: ${VOYAGER_FRONTEND_IMAGE:?Set VOYAGER_FRONTEND_IMAGE to an immutable GHCR tag}
+    pull_policy: always

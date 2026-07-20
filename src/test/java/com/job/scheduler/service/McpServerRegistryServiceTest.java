@@ -18,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -29,38 +30,20 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class McpServerRegistryServiceTest {
+    private static final String KEY = "xYZP4KD/T0APHH/9GMLiO9vt8D/GFCJXwLzh5ALiGV0=";
+
     @Mock
     private McpServerRepository mcpServerRepository;
 
+    private final SecretCipher cipher = new SecretCipher(KEY);
     private McpServerRegistryService mcpServerRegistryService;
 
     @BeforeEach
     void setUp() {
-        mcpServerRegistryService = new McpServerRegistryService(mcpServerRepository);
+        mcpServerRegistryService = new McpServerRegistryService(mcpServerRepository, cipher);
     }
 
-    @Test
-    void registerServerDefaultsToDisabledAndUntrusted() {
-        McpServerRequestDTO request = new McpServerRequestDTO(
-                "local-tools",
-                "Local Tools",
-                "http://localhost:8081/",
-                "/mcp",
-                null,
-                null,
-                null,
-                null,
-                McpTransport.HTTP,
-                McpAuthType.NONE,
-                null,
-                null,
-                null,
-                null,
-                null,
-                5000
-        );
-
-        when(mcpServerRepository.existsByServerId("local-tools")).thenReturn(false);
+    private void stubSave() {
         when(mcpServerRepository.save(any(McpServer.class))).thenAnswer(invocation -> {
             McpServer server = invocation.getArgument(0);
             server.setId(UUID.randomUUID());
@@ -68,6 +51,18 @@ class McpServerRegistryServiceTest {
             server.setUpdatedAt(Instant.parse("2026-06-17T00:00:00Z"));
             return server;
         });
+    }
+
+    @Test
+    void registerServerDefaultsToDisabledAndUntrusted() {
+        McpServerRequestDTO request = new McpServerRequestDTO(
+                "local-tools", "Local Tools", "http://localhost:8081/", "/mcp",
+                null, null, null, null, null, null,
+                McpTransport.HTTP, McpAuthType.NONE, null, null, null,
+                null, null, 5000);
+
+        when(mcpServerRepository.existsByServerId("local-tools")).thenReturn(false);
+        stubSave();
 
         McpServerResponseDTO response = mcpServerRegistryService.registerServer(request);
 
@@ -76,70 +71,45 @@ class McpServerRegistryServiceTest {
         assertThat(response.trustLevel()).isEqualTo(McpTrustLevel.UNTRUSTED);
         assertThat(response.status()).isEqualTo(McpServerStatus.DISABLED);
         assertThat(response.requestTimeoutMs()).isEqualTo(5000);
+        assertThat(response.hasAuthToken()).isFalse();
 
         ArgumentCaptor<McpServer> serverCaptor = ArgumentCaptor.forClass(McpServer.class);
         verify(mcpServerRepository).save(serverCaptor.capture());
-
-        McpServer savedServer = serverCaptor.getValue();
-        assertThat(savedServer.getServerId()).isEqualTo("local-tools");
-        assertThat(savedServer.getTrustLevel()).isEqualTo(McpTrustLevel.UNTRUSTED);
-        assertThat(savedServer.getStatus()).isEqualTo(McpServerStatus.DISABLED);
-        assertThat(savedServer.getRequestTimeoutMs()).isEqualTo(5000);
+        assertThat(serverCaptor.getValue().getAuthTokenEncrypted()).isNull();
     }
 
     @Test
     void registerServerRejectsDuplicateServerId() {
-        McpServerRequestDTO request = validRequest("local-tools");
         when(mcpServerRepository.existsByServerId("local-tools")).thenReturn(true);
 
-        assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
+        assertThatThrownBy(() -> mcpServerRegistryService.registerServer(validRequest("local-tools")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("MCP server already exists: local-tools");
     }
 
     @Test
-    void registerServerRequiresTokenReferenceForBearerAuth() {
+    void registerServerRequiresTokenForBearerAuth() {
         McpServerRequestDTO request = new McpServerRequestDTO(
-                "github-tools",
-                "GitHub Tools",
-                "https://mcp.example.com",
-                "/mcp",
-                null,
-                null,
-                null,
-                null,
-                McpTransport.HTTP,
-                McpAuthType.BEARER_TOKEN,
-                null,
-                null,
-                null,
-                McpTrustLevel.READ_ONLY,
-                McpServerStatus.DISABLED,
-                null
-        );
+                "github-tools", "GitHub Tools", "https://mcp.example.com", "/mcp",
+                null, null, null, null, null, null,
+                McpTransport.HTTP, McpAuthType.BEARER_TOKEN, null, null, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null);
 
         assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("authTokenRef is required for BEARER_TOKEN auth");
+                .hasMessage("authToken is required for BEARER_TOKEN auth");
     }
 
     @Test
-    void registersStdioServerWithCommandArgsAndEnv() {
+    void registersStdioServerWithCommandArgsAndPlaintextEnv() {
         McpServerRequestDTO request = new McpServerRequestDTO(
                 "local-fs", "Local FS", null, null,
                 "npx", List.of("-y", "@modelcontextprotocol/server-filesystem", "/data"),
-                java.util.Map.of("LOG_LEVEL", "info"), null,
+                Map.of("LOG_LEVEL", "info"), null, null, null,
                 McpTransport.STDIO, McpAuthType.NONE, null, null, null,
-                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null
-        );
+                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null);
         when(mcpServerRepository.existsByServerId("local-fs")).thenReturn(false);
-        when(mcpServerRepository.save(any(McpServer.class))).thenAnswer(invocation -> {
-            McpServer server = invocation.getArgument(0);
-            server.setId(UUID.randomUUID());
-            server.setCreatedAt(Instant.parse("2026-06-17T00:00:00Z"));
-            server.setUpdatedAt(Instant.parse("2026-06-17T00:00:00Z"));
-            return server;
-        });
+        stubSave();
 
         McpServerResponseDTO response = mcpServerRegistryService.registerServer(request);
 
@@ -148,56 +118,138 @@ class McpServerRegistryServiceTest {
         assertThat(response.args())
                 .containsExactly("-y", "@modelcontextprotocol/server-filesystem", "/data");
         assertThat(response.env()).containsEntry("LOG_LEVEL", "info");
+        assertThat(response.secretEnvKeys()).isEmpty();
     }
 
     @Test
-    void rejectsRawSecretInStdioEnvironment() {
+    void encryptsStdioSecretEnvAndReturnsOnlyKeys() {
         McpServerRequestDTO request = new McpServerRequestDTO(
                 "local-github", "Local GitHub", null, null,
                 "npx", List.of("github-mcp"),
-                java.util.Map.of("GITHUB_TOKEN", "ghp_plaintext"), null,
+                Map.of("LOG_LEVEL", "info"), Map.of("GITHUB_TOKEN", "ghp_plaintext"), null, null,
                 McpTransport.STDIO, McpAuthType.NONE, null, null, null,
-                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null
-        );
-
-        assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("GITHUB_TOKEN")
-                .hasMessageContaining("must use ${secret:REF} or ref:REF");
-    }
-
-    @Test
-    void storesOnlySecretReferenceMarkerInStdioEnvironment() {
-        McpServerRequestDTO request = new McpServerRequestDTO(
-                "local-github", "Local GitHub", null, null,
-                "npx", List.of("github-mcp"),
-                java.util.Map.of("GITHUB_TOKEN", "${secret:MCP_GITHUB_TOKEN}"), null,
-                McpTransport.STDIO, McpAuthType.NONE, null, null, null,
-                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null
-        );
+                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null);
         when(mcpServerRepository.existsByServerId("local-github")).thenReturn(false);
-        when(mcpServerRepository.save(any(McpServer.class))).thenAnswer(invocation -> {
-            McpServer server = invocation.getArgument(0);
-            server.setId(UUID.randomUUID());
-            server.setCreatedAt(Instant.parse("2026-06-17T00:00:00Z"));
-            server.setUpdatedAt(Instant.parse("2026-06-17T00:00:00Z"));
-            return server;
-        });
+        stubSave();
 
+        ArgumentCaptor<McpServer> serverCaptor = ArgumentCaptor.forClass(McpServer.class);
         McpServerResponseDTO response = mcpServerRegistryService.registerServer(request);
+        verify(mcpServerRepository).save(serverCaptor.capture());
 
-        assertThat(response.env())
-                .containsEntry("GITHUB_TOKEN", "${secret:MCP_GITHUB_TOKEN}");
+        // Non-secret env stays plaintext; secret env is encrypted and never returned.
+        assertThat(response.env()).containsEntry("LOG_LEVEL", "info");
+        assertThat(response.secretEnvKeys()).containsExactly("GITHUB_TOKEN");
+        String storedSecret = serverCaptor.getValue().getSecretEnv().get("GITHUB_TOKEN");
+        assertThat(storedSecret).startsWith("v1:").doesNotContain("ghp_plaintext");
+        assertThat(cipher.decrypt(storedSecret)).isEqualTo("ghp_plaintext");
+    }
+
+    @Test
+    void encryptsAuthTokenAndReportsHasAuthToken() {
+        McpServerRequestDTO request = new McpServerRequestDTO(
+                "kv", "KV", "https://mcp.example.com", "/mcp",
+                null, null, null, null, null, null,
+                McpTransport.HTTP, McpAuthType.API_KEY, "secret-key-value",
+                "X-API-Key", null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null);
+        when(mcpServerRepository.existsByServerId("kv")).thenReturn(false);
+        stubSave();
+
+        ArgumentCaptor<McpServer> serverCaptor = ArgumentCaptor.forClass(McpServer.class);
+        McpServerResponseDTO response = mcpServerRegistryService.registerServer(request);
+        verify(mcpServerRepository).save(serverCaptor.capture());
+
+        assertThat(response.hasAuthToken()).isTrue();
+        assertThat(response.authHeaderName()).isEqualTo("X-API-Key");
+        String stored = serverCaptor.getValue().getAuthTokenEncrypted();
+        assertThat(stored).startsWith("v1:").doesNotContain("secret-key-value");
+        assertThat(cipher.decrypt(stored)).isEqualTo("secret-key-value");
+    }
+
+    @Test
+    void encryptsMultipleCustomHeadersAndReturnsOnlyTheirNames() {
+        McpServerRequestDTO request = new McpServerRequestDTO(
+                "multi-auth", "Multi Auth", "https://mcp.example.com", "/mcp",
+                null, null, null, null,
+                Map.of("X-API-Key", "key-value", "X-Client-Secret", "client-value"),
+                null,
+                McpTransport.HTTP, McpAuthType.CUSTOM_HEADERS, null, null, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null);
+        when(mcpServerRepository.existsByServerId("multi-auth")).thenReturn(false);
+        stubSave();
+
+        ArgumentCaptor<McpServer> serverCaptor = ArgumentCaptor.forClass(McpServer.class);
+        McpServerResponseDTO response = mcpServerRegistryService.registerServer(request);
+        verify(mcpServerRepository).save(serverCaptor.capture());
+
+        assertThat(response.hasAuthToken()).isFalse();
+        assertThat(response.secretHeaderNames())
+                .containsExactlyInAnyOrder("X-API-Key", "X-Client-Secret");
+        Map<String, String> stored = serverCaptor.getValue().getSecretHeaders();
+        assertThat(stored.values()).allMatch(value -> value.startsWith("v1:"));
+        assertThat(cipher.decrypt(stored.get("X-API-Key"))).isEqualTo("key-value");
+        assertThat(cipher.decrypt(stored.get("X-Client-Secret"))).isEqualTo("client-value");
+    }
+
+    @Test
+    void customHeaderEditKeepsBlankExistingValueAndDropsRemovedNames() {
+        McpServer server = server("multi-auth", McpServerStatus.ENABLED);
+        server.setAuthType(McpAuthType.CUSTOM_HEADERS);
+        String existingCiphertext = cipher.encrypt("old-key");
+        server.setSecretHeaders(Map.of(
+                "X-API-Key", existingCiphertext,
+                "X-Removed", cipher.encrypt("remove-me")
+        ));
+        when(mcpServerRepository.findByServerId("multi-auth")).thenReturn(Optional.of(server));
+        when(mcpServerRepository.save(any(McpServer.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        McpServerRequestDTO request = new McpServerRequestDTO(
+                "multi-auth", "Multi Auth", "https://mcp.example.com", "/mcp",
+                null, null, null, null,
+                Map.of("X-API-Key", "", "X-New-Secret", "new-value"),
+                null,
+                McpTransport.HTTP, McpAuthType.CUSTOM_HEADERS, null, null, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null);
+
+        McpServerResponseDTO response = mcpServerRegistryService.updateServer("multi-auth", request);
+
+        assertThat(server.getSecretHeaders()).containsKey("X-API-Key");
+        assertThat(server.getSecretHeaders().get("X-API-Key")).isEqualTo(existingCiphertext);
+        assertThat(server.getSecretHeaders()).doesNotContainKey("X-Removed");
+        assertThat(cipher.decrypt(server.getSecretHeaders().get("X-New-Secret")))
+                .isEqualTo("new-value");
+        assertThat(response.secretHeaderNames())
+                .containsExactlyInAnyOrder("X-API-Key", "X-New-Secret");
+    }
+
+    @Test
+    void rejectsMissingOrUnsafeCustomHeaders() {
+        McpServerRequestDTO missing = new McpServerRequestDTO(
+                "multi-auth", "Multi Auth", "https://mcp.example.com", "/mcp",
+                null, null, null, null, Map.of(), null,
+                McpTransport.HTTP, McpAuthType.CUSTOM_HEADERS, null, null, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null);
+        McpServerRequestDTO restricted = new McpServerRequestDTO(
+                "multi-auth", "Multi Auth", "https://mcp.example.com", "/mcp",
+                null, null, null, null, Map.of("Host", "evil.example"), null,
+                McpTransport.HTTP, McpAuthType.CUSTOM_HEADERS, null, null, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null);
+
+        assertThatThrownBy(() -> mcpServerRegistryService.registerServer(missing))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("At least one header is required for CUSTOM_HEADERS auth");
+        assertThatThrownBy(() -> mcpServerRegistryService.registerServer(restricted))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("managed by the HTTP transport");
     }
 
     @Test
     void rejectsStdioServerWithoutCommand() {
         McpServerRequestDTO request = new McpServerRequestDTO(
                 "local-fs", "Local FS", null, null,
-                null, null, null, null,
+                null, null, null, null, null, null,
                 McpTransport.STDIO, McpAuthType.NONE, null, null, null,
-                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null
-        );
+                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null);
 
         assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -208,10 +260,9 @@ class McpServerRegistryServiceTest {
     void rejectsStdioBearerWithoutAuthEnvVar() {
         McpServerRequestDTO request = new McpServerRequestDTO(
                 "gh", "GitHub", null, null,
-                "gh-mcp", null, null, null,
-                McpTransport.STDIO, McpAuthType.BEARER_TOKEN, "GH_TOKEN_REF", null, null,
-                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null
-        );
+                "gh-mcp", null, null, null, null, null,
+                McpTransport.STDIO, McpAuthType.BEARER_TOKEN, "tok", null, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null);
 
         assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -222,10 +273,9 @@ class McpServerRegistryServiceTest {
     void rejectsHttpServerWithoutBaseUrl() {
         McpServerRequestDTO request = new McpServerRequestDTO(
                 "remote", "Remote", null, "/mcp",
-                null, null, null, null,
+                null, null, null, null, null, null,
                 McpTransport.HTTP, McpAuthType.NONE, null, null, null,
-                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null
-        );
+                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null);
 
         assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -236,11 +286,9 @@ class McpServerRegistryServiceTest {
     void rejectsApiKeyAuthWithoutHeaderName() {
         McpServerRequestDTO request = new McpServerRequestDTO(
                 "kv", "KV", "https://mcp.example.com", "/mcp",
-                null, null, null, null,
-                McpTransport.HTTP, McpAuthType.API_KEY, "KV_KEY_REF",
-                null, null,
-                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null
-        );
+                null, null, null, null, null, null,
+                McpTransport.HTTP, McpAuthType.API_KEY, "tok", null, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null);
 
         assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -251,11 +299,9 @@ class McpServerRegistryServiceTest {
     void rejectsBasicAuthWithoutUsername() {
         McpServerRequestDTO request = new McpServerRequestDTO(
                 "basic", "Basic", "https://mcp.example.com", "/mcp",
-                null, null, null, null,
-                McpTransport.HTTP, McpAuthType.BASIC, "BASIC_PW_REF",
-                null, null,
-                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null
-        );
+                null, null, null, null, null, null,
+                McpTransport.HTTP, McpAuthType.BASIC, "tok", null, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null);
 
         assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -266,11 +312,9 @@ class McpServerRegistryServiceTest {
     void rejectsStdioWithApiKeyAuth() {
         McpServerRequestDTO request = new McpServerRequestDTO(
                 "cli", "CLI", null, null,
-                "mcp-cli", null, null, null,
-                McpTransport.STDIO, McpAuthType.API_KEY, "REF",
-                "X-API-Key", null,
-                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null
-        );
+                "mcp-cli", null, null, null, null, null,
+                McpTransport.STDIO, McpAuthType.API_KEY, "tok", "X-API-Key", null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.DISABLED, null);
 
         assertThatThrownBy(() -> mcpServerRegistryService.registerServer(request))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -278,34 +322,9 @@ class McpServerRegistryServiceTest {
     }
 
     @Test
-    void registersApiKeyServerWithHeaderName() {
-        McpServerRequestDTO request = new McpServerRequestDTO(
-                "kv", "KV", "https://mcp.example.com", "/mcp",
-                null, null, null, null,
-                McpTransport.HTTP, McpAuthType.API_KEY, "KV_KEY_REF",
-                "X-API-Key", null,
-                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null
-        );
-        when(mcpServerRepository.existsByServerId("kv")).thenReturn(false);
-        when(mcpServerRepository.save(any(McpServer.class))).thenAnswer(invocation -> {
-            McpServer server = invocation.getArgument(0);
-            server.setId(UUID.randomUUID());
-            server.setCreatedAt(Instant.parse("2026-06-17T00:00:00Z"));
-            server.setUpdatedAt(Instant.parse("2026-06-17T00:00:00Z"));
-            return server;
-        });
-
-        McpServerResponseDTO response = mcpServerRegistryService.registerServer(request);
-
-        assertThat(response.authType()).isEqualTo(McpAuthType.API_KEY);
-        assertThat(response.authHeaderName()).isEqualTo("X-API-Key");
-    }
-
-    @Test
     void getServersCanFilterByStatus() {
-        McpServer enabledServer = server("enabled-tools", McpServerStatus.ENABLED);
         when(mcpServerRepository.findByStatusOrderByCreatedAtDesc(McpServerStatus.ENABLED))
-                .thenReturn(List.of(enabledServer));
+                .thenReturn(List.of(server("enabled-tools", McpServerStatus.ENABLED)));
 
         List<McpServerResponseDTO> result = mcpServerRegistryService.getServers(McpServerStatus.ENABLED);
 
@@ -336,23 +355,10 @@ class McpServerRegistryServiceTest {
 
     private McpServerRequestDTO validRequest(String serverId) {
         return new McpServerRequestDTO(
-                serverId,
-                "Local Tools",
-                "http://localhost:8081",
-                "/mcp",
-                null,
-                null,
-                null,
-                null,
-                McpTransport.HTTP,
-                McpAuthType.NONE,
-                null,
-                null,
-                null,
-                McpTrustLevel.READ_ONLY,
-                McpServerStatus.ENABLED,
-                null
-        );
+                serverId, "Local Tools", "http://localhost:8081", "/mcp",
+                null, null, null, null, null, null,
+                McpTransport.HTTP, McpAuthType.NONE, null, null, null,
+                McpTrustLevel.READ_ONLY, McpServerStatus.ENABLED, null);
     }
 
     private McpServer server(String serverId, McpServerStatus status) {

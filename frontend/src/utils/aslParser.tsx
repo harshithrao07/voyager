@@ -1,11 +1,14 @@
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { Edge, Node } from '@xyflow/react';
 import { getStateVisual } from './stateVisuals';
+import { NestedScopePreview } from '../components/NestedScopePreview';
+import type { MachinePathSegment } from '../components/workflow-create/nestedMachine';
 
 type AslToReactFlowOptions = {
   selectedStateName?: string;
   onStateSelect?: (stateName: string) => void;
   onStateContextMenu?: (stateName: string, event: ReactMouseEvent) => void;
+  onOpenNestedScope?: (segment: MachinePathSegment) => void;
   connectable?: boolean;
 };
 
@@ -48,9 +51,16 @@ export function aslToReactFlow(asl: any, options: AslToReactFlowOptions = {}): {
         branchSide: branchSides[stateName],
         connectable: Boolean(options.connectable),
         label: (
-          <button
-            type="button"
+          <div
+            role="button"
+            tabIndex={0}
             onClick={(event) => {
+              event.stopPropagation();
+              options.onStateSelect?.(stateName);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
               event.stopPropagation();
               options.onStateSelect?.(stateName);
             }}
@@ -91,8 +101,18 @@ export function aslToReactFlow(asl: any, options: AslToReactFlowOptions = {}): {
                 </span>
               </div>
             </div>
-          </button>
-        ) 
+
+            {(state.Type === 'Parallel' || state.Type === 'Map') && (
+              <div className="pl-1">
+                <NestedScopePreview
+                  stateName={stateName}
+                  state={state}
+                  onOpenNestedScope={options.onOpenNestedScope}
+                />
+              </div>
+            )}
+          </div>
+        )
       },
       style: { 
         background: 'transparent', 

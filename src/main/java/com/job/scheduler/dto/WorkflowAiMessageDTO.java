@@ -18,6 +18,7 @@ public record WorkflowAiMessageDTO(
         String thinkingContent,
         String finishReason,
         UUID regeneratedFromMessageId,
+        WorkflowAiResourcePlanDTO resourcePlan,
         Instant createdAt
 ) {
 }

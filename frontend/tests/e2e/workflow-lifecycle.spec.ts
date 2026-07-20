@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 const createdWorkflowIds = new Set<string>();
+const createdDraftIds = new Set<string>();
 
 const manualChoiceDefinition = {
   StartAt: 'Route',
@@ -250,6 +251,102 @@ test.afterEach(async ({ request }) => {
     await request.post(`/app/v1/workflows/${workflowId}/archive`, { data: {} });
   }
   createdWorkflowIds.clear();
+
+  for (const draftId of createdDraftIds) {
+    await request.delete(`/app/v1/workflow-ai/drafts/${draftId}`);
+  }
+  createdDraftIds.clear();
+});
+
+test('manual mode creates a draft only after the first state is added', async ({ page, request }) => {
+  const beforeResponse = await request.get('/app/v1/workflow-ai/drafts');
+  expect(beforeResponse).toBeOK();
+  const beforeDrafts = await beforeResponse.json() as Array<{ id: string }>;
+
+  await page.goto('/');
+  await page.getByTestId('workflow-mode-manual').click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByTestId('workflow-editor-builder')).toBeVisible();
+
+  const unchangedResponse = await request.get('/app/v1/workflow-ai/drafts');
+  expect(unchangedResponse).toBeOK();
+  expect((await unchangedResponse.json() as Array<{ id: string }>)).toHaveLength(beforeDrafts.length);
+
+  await page.getByTestId('workflow-add-state-succeed').click();
+  await expect(page).toHaveURL(/\/draft\/[0-9a-f-]{36}$/);
+  const draftId = new URL(page.url()).pathname.split('/').at(-1)!;
+  createdDraftIds.add(draftId);
+
+  const draftResponse = await request.get(`/app/v1/workflow-ai/drafts/${draftId}`);
+  expect(draftResponse).toBeOK();
+  const draft = await draftResponse.json() as { workspaceDefinitionText: string };
+  expect(draft.workspaceDefinitionText).toContain('NewSucceed');
+});
+
+test('a draft can be named from the sidebar and found by that name after refresh', async ({ page, request }) => {
+  const name = uniqueName('Invoice approval draft');
+  await page.goto('/');
+  await page.getByTestId('workflow-mode-manual').click();
+  await page.getByTestId('workflow-add-state-succeed').click();
+  await expect(page).toHaveURL(/\/draft\/[0-9a-f-]{36}$/);
+  const draftId = new URL(page.url()).pathname.split('/').at(-1)!;
+  createdDraftIds.add(draftId);
+
+  await page.getByRole('button', { name: 'Expand sidebar' }).click();
+  await page.getByTestId(`rename-draft-${draftId}`).click();
+  await page.getByRole('textbox', { name: 'Draft name' }).fill(name);
+  await page.getByRole('button', { name: 'Save name' }).click();
+  await expect(page.getByRole('button', { name: `Open draft ${name}` })).toBeVisible();
+
+  const renamedResponse = await request.get(`/app/v1/workflow-ai/drafts/${draftId}`);
+  expect(renamedResponse).toBeOK();
+  expect((await renamedResponse.json() as { name: string }).name).toBe(name);
+
+  await page.reload();
+  await page.getByRole('button', { name: 'Open drafts' }).click();
+  await page.getByRole('searchbox', { name: 'Search drafts' }).fill(name);
+  await expect(page.getByRole('button', { name: `Open draft ${name}` })).toBeVisible();
+});
+
+test('a saved draft stays linked and clearly saves later edits as revisions', async ({ page, request }) => {
+  const name = uniqueName('Linked manual draft');
+  await openManualCreator(page);
+  await page.getByTestId('workflow-add-state-succeed').click();
+  await expect(page).toHaveURL(/\/draft\/[0-9a-f-]{36}$/);
+  const draftId = new URL(page.url()).pathname.split('/').at(-1)!;
+  createdDraftIds.add(draftId);
+
+  const workflowId = await saveWorkflow(page, name);
+  const savedDraftResponse = await request.get(`/app/v1/workflow-ai/drafts/${draftId}`);
+  expect(savedDraftResponse).toBeOK();
+  expect((await savedDraftResponse.json() as { workflowId: string }).workflowId).toBe(workflowId);
+
+  await page.goto(`/draft/${draftId}`);
+  const saveButton = page.getByTestId('workflow-save');
+  await expect(saveButton).toContainText('Save new revision');
+  await expect(page.getByTestId('workflow-save-revision-note'))
+    .toContainText('Creates a new immutable revision');
+
+  await page.getByTestId('workflow-template-file').setInputFiles({
+    name: 'linked-draft-revision.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({
+      StartAt: 'Done',
+      States: {
+        Done: {
+          Type: 'Succeed',
+          Output: "{% { 'revision': 2 } %}",
+        },
+      },
+    }, null, 2)),
+  });
+  await expect(saveButton).toBeEnabled();
+  await saveButton.click();
+  await expect(page).toHaveURL(new RegExp(`/workflows/${workflowId}$`));
+
+  const revisionsResponse = await request.get(`/app/v1/workflows/${workflowId}/revisions`);
+  expect(revisionsResponse).toBeOK();
+  expect(await revisionsResponse.json()).toHaveLength(2);
 });
 
 test('top ASL status lists every validation issue on hover', async ({ page }) => {

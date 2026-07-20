@@ -46,6 +46,7 @@ export function SidebarAiChat({
   onToggleThinking,
   regeneratingMessageId,
   onRegenerateMessage,
+  renderMessageAttachment,
 }: {
   messages: ChatMessage[];
   generating: boolean;
@@ -57,6 +58,7 @@ export function SidebarAiChat({
   onToggleThinking: (messageId: string) => void;
   regeneratingMessageId: string | null;
   onRegenerateMessage: (message: ChatMessage) => void;
+  renderMessageAttachment?: (message: ChatMessage) => ReactNode;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -114,6 +116,7 @@ export function SidebarAiChat({
                 canRegenerate={message.id === retryableMessageId}
                 regenerating={regeneratingMessageId === message.id}
                 onRegenerate={() => onRegenerateMessage(message)}
+                attachment={renderMessageAttachment?.(message)}
               />
             ))}
             {error && (
@@ -140,6 +143,7 @@ function SidebarChatMessage({
   canRegenerate,
   regenerating,
   onRegenerate,
+  attachment,
 }: {
   message: ChatMessage;
   thinkingExpanded: boolean;
@@ -147,6 +151,7 @@ function SidebarChatMessage({
   canRegenerate: boolean;
   regenerating: boolean;
   onRegenerate: () => void;
+  attachment?: ReactNode;
 }) {
   if (message.role === 'user') {
     return (
@@ -210,6 +215,8 @@ function SidebarChatMessage({
         {!streaming && (
           <MessageTimestamp createdAt={message.createdAt} align="left" />
         )}
+
+        {attachment && <div className="mt-3">{attachment}</div>}
 
         {!streaming && canRegenerate && (
           <button

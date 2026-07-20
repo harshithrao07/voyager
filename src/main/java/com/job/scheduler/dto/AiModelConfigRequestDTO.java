@@ -8,7 +8,7 @@ public record AiModelConfigRequestDTO(
         AiModelProviderType providerType,
         @NotBlank(message = "Base URL cannot be blank") String baseUrl,
         @NotBlank(message = "Model name cannot be blank") String modelName,
-        String credentialRef,
+        String credential,
         boolean defaultModel
 ) {
 }

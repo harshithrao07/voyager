@@ -24,16 +24,17 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class AiModelConfigServiceTest {
+    private static final String KEY = "xYZP4KD/T0APHH/9GMLiO9vt8D/GFCJXwLzh5ALiGV0=";
+
     @Mock
     private AiModelConfigRepository repository;
-    @Mock
-    private SecretResolver secretResolver;
 
+    private final SecretCipher cipher = new SecretCipher(KEY);
     private AiModelConfigService service;
 
     @BeforeEach
     void setUp() {
-        service = new AiModelConfigService(repository, new ObjectMapper(), secretResolver);
+        service = new AiModelConfigService(repository, new ObjectMapper(), cipher);
         lenient().when(repository.save(any(AiModelConfig.class))).thenAnswer(invocation -> {
             AiModelConfig model = invocation.getArgument(0);
             if (model.getId() == null) {
@@ -44,7 +45,7 @@ class AiModelConfigServiceTest {
     }
 
     @Test
-    void createsCloudModelWithCredentialReferenceOnly() throws Exception {
+    void encryptsCredentialAndNeverLeaksItInTheResponse() throws Exception {
         when(repository.findByBaseUrlAndModelName(
                 "https://api.example.com/v1",
                 "cloud-model"
@@ -55,37 +56,26 @@ class AiModelConfigServiceTest {
                 AiModelProviderType.OPENAI_COMPATIBLE_API,
                 "https://api.example.com/v1/",
                 "cloud-model",
-                "OPENAI_API_KEY",
+                "sk-super-secret",
                 false
         ));
 
-        ArgumentCaptor<AiModelConfig> savedModel = ArgumentCaptor.forClass(
-                AiModelConfig.class
-        );
+        ArgumentCaptor<AiModelConfig> savedModel = ArgumentCaptor.forClass(AiModelConfig.class);
         org.mockito.Mockito.verify(repository).save(savedModel.capture());
-        assertThat(savedModel.getValue().getProviderType())
-                .isEqualTo(AiModelProviderType.OPENAI_COMPATIBLE_API);
-        assertThat(savedModel.getValue().getBaseUrl())
-                .isEqualTo("https://api.example.com/v1");
-        assertThat(savedModel.getValue().getCredentialRef()).isEqualTo("OPENAI_API_KEY");
-        assertThat(result.credentialRef()).isEqualTo("OPENAI_API_KEY");
+        String stored = savedModel.getValue().getCredentialEncrypted();
+        assertThat(stored).startsWith("v1:").doesNotContain("sk-super-secret");
+        assertThat(cipher.decrypt(stored)).isEqualTo("sk-super-secret");
         assertThat(result.hasCredential()).isTrue();
 
         String responseJson = new ObjectMapper().writeValueAsString(result);
         assertThat(responseJson).contains("\"hasCredential\":true");
-        assertThat(responseJson).contains("OPENAI_API_KEY");
-        assertThat(responseJson).doesNotContain("apiKey");
+        assertThat(responseJson).doesNotContain("sk-super-secret");
+        assertThat(responseJson).doesNotContain("credential");
     }
 
     @Test
-    void preservesExistingCredentialReferenceWhenUpdateOmitsIt() {
-        AiModelConfig existing = new AiModelConfig();
-        existing.setId(UUID.randomUUID());
-        existing.setDisplayName("Existing");
-        existing.setProviderType(AiModelProviderType.OPENAI_COMPATIBLE_API);
-        existing.setBaseUrl("https://api.example.com/v1");
-        existing.setModelName("cloud-model");
-        existing.setCredentialRef("OPENAI_API_KEY");
+    void nullCredentialLeavesExistingValueUnchanged() {
+        AiModelConfig existing = existingModel(cipher.encrypt("sk-existing"));
         when(repository.findByBaseUrlAndModelName(
                 "https://api.example.com/v1",
                 "cloud-model"
@@ -96,26 +86,33 @@ class AiModelConfigServiceTest {
                 AiModelProviderType.OPENAI_COMPATIBLE_API,
                 "https://api.example.com/v1",
                 "cloud-model",
-                "  ",
+                null,
                 false
         ));
 
-        assertThat(existing.getCredentialRef()).isEqualTo("OPENAI_API_KEY");
+        assertThat(cipher.decrypt(existing.getCredentialEncrypted())).isEqualTo("sk-existing");
         assertThat(result.hasCredential()).isTrue();
     }
 
     @Test
-    void rejectsCredentialValueInsteadOfReference() {
-        assertThatThrownBy(() -> service.createModel(new AiModelConfigRequestDTO(
-                "Cloud model",
+    void emptyCredentialClearsTheStoredValue() {
+        AiModelConfig existing = existingModel(cipher.encrypt("sk-existing"));
+        when(repository.findByBaseUrlAndModelName(
+                "https://api.example.com/v1",
+                "cloud-model"
+        )).thenReturn(Optional.of(existing));
+
+        AiModelConfigDTO result = service.createModel(new AiModelConfigRequestDTO(
+                "Renamed model",
                 AiModelProviderType.OPENAI_COMPATIBLE_API,
                 "https://api.example.com/v1",
                 "cloud-model",
-                "sk-plaintext-value",
+                "",
                 false
-        )))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Secret reference must use UPPER_SNAKE_CASE");
+        ));
+
+        assertThat(existing.getCredentialEncrypted()).isNull();
+        assertThat(result.hasCredential()).isFalse();
     }
 
     @Test
@@ -130,5 +127,16 @@ class AiModelConfigServiceTest {
         )))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Base URL must be a valid HTTP or HTTPS endpoint");
+    }
+
+    private AiModelConfig existingModel(String credentialEncrypted) {
+        AiModelConfig existing = new AiModelConfig();
+        existing.setId(UUID.randomUUID());
+        existing.setDisplayName("Existing");
+        existing.setProviderType(AiModelProviderType.OPENAI_COMPATIBLE_API);
+        existing.setBaseUrl("https://api.example.com/v1");
+        existing.setModelName("cloud-model");
+        existing.setCredentialEncrypted(credentialEncrypted);
+        return existing;
     }
 }

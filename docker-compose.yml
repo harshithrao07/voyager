@@ -14,6 +14,8 @@ services:
       SPRING_DATA_REDIS_PORT: 6379
       OLLAMA_OPENAI_BASE_URL: ${OLLAMA_OPENAI_BASE_URL:-http://host.docker.internal:11434/v1}
       OLLAMA_OPENAI_API_KEY: ${OLLAMA_OPENAI_API_KEY:-ollama}
+      # Loaded from the ignored .env. Compose must not start with a shared fallback key.
+      SCHEDULER_SECRETS_MASTER_KEY: ${SCHEDULER_SECRETS_MASTER_KEY:?Set SCHEDULER_SECRETS_MASTER_KEY in .env or the deployment secret store}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
       JUDGE0_BASE_URL: ${JUDGE0_BASE_URL:-http://judge0-server:2358}
       JUDGE0_AUTH_TOKEN: ${JUDGE0_AUTH_TOKEN:-}
@@ -30,7 +32,17 @@ services:
       kafka:
         condition: service_healthy
       judge0-server:
-        condition: service_started
+        condition: service_healthy
+      judge0-worker:
+        condition: service_healthy
+    healthcheck:
+      # Compose has already gated the app on its external dependencies above;
+      # this probe confirms Spring has finished booting and can serve traffic.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/actuator/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
 
   frontend:
     build:
@@ -40,7 +52,38 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - app
+      app:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  demo-mcp:
+    image: node:22-alpine
+    profiles: ["demo-mcp"]
+    working_dir: /app
+    command: ["node", "/app/scripts/demo-mcp-servers.mjs"]
+    environment:
+      DEMO_MCP_PORT: 48765
+    volumes:
+      - ./scripts:/app/scripts:ro
+    ports:
+      - "48765:48765"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:48765/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
   postgres:
     image: postgres:16-alpine
@@ -106,7 +149,14 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     depends_on:
-      - app
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   judge0-server:
     image: judge0/judge0:latest
@@ -118,8 +168,16 @@ services:
     expose:
       - "2358"
     depends_on:
-      - judge0-db
-      - judge0-redis
+      judge0-db:
+        condition: service_healthy
+      judge0-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:2358/languages | grep -q '\"id\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 60s
     restart: unless-stopped
 
   judge0-worker:
@@ -136,14 +194,22 @@ services:
       - ./judge0.conf:/judge0.conf:ro
     depends_on:
       judge0-server:
-        condition: service_started
+        condition: service_healthy
       judge0-db:
-        condition: service_started
+        condition: service_healthy
       # Resque registers its worker exactly once at boot; if Redis is not
       # accepting connections yet the registration is silently lost and
       # /workers stays empty (health indicator DOWN) even though jobs run.
       judge0-redis:
         condition: service_healthy
+    healthcheck:
+      # Judge0's /workers response is empty before the first queue receives a
+      # submission, even though the Resque worker is ready and waiting.
+      test: ["CMD-SHELL", "ps aux | grep -q '[r]esque-2.0.0:'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
     restart: unless-stopped
 
   judge0-db:
@@ -151,6 +217,11 @@ services:
     env_file: judge0.conf
     volumes:
       - judge0-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
 
   judge0-redis:

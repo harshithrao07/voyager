@@ -58,7 +58,7 @@ public class AiModelController {
     ) {
         return ResponseEntity.ok(aiModelConfigService.discoverAndOnboardModels(
                 request.baseUrl(),
-                request.credentialRef(),
+                request.credential(),
                 request.providerType()
         ));
     }

@@ -7,6 +7,7 @@ Workflows are accepted through a Spring Boot REST API, stored durably in Postgre
 ## Table of Contents
 
 - [Getting Started](#getting-started)
+- [Documentation](#documentation)
 - [Workflow Engine Architecture (ASL)](#workflow-engine-architecture-asl)
 - [Testing and CI](#testing-and-ci)
 
@@ -17,8 +18,28 @@ Run the full scheduler stack locally with Docker Compose:
 ```bash
 git clone https://github.com/harshithrao07/distributed-scheduler.git scheduler
 cd scheduler
+openssl rand -base64 32
+```
+
+Put the generated value in the git-ignored `.env` file:
+
+```dotenv
+SCHEDULER_SECRETS_MASTER_KEY=<generated-base64-value>
+```
+
+Then start the stack:
+
+```bash
 docker compose up --build -d
 ```
+
+Compose starts the frontend only after PostgreSQL, Redis, Kafka, Judge0's database and API, a live
+Judge0 execution worker, the backend readiness probe, and Prometheus are all healthy. The UI is
+therefore not published while the default stack is still warming up. Optional profile services such
+as `demo-mcp` do not block the default frontend startup.
+
+Voyager refuses to start without this deployment-owned 32-byte key. It encrypts AI-provider and MCP
+credentials stored in PostgreSQL; keep it backed up and never commit `.env`.
 
 Then run the test suite:
 
@@ -50,6 +71,25 @@ Stop the stack with `docker compose down`. Use `docker compose down -v` when you
 
 ---
 
+## Documentation
+
+Open **Docs** in the Voyager sidebar at `http://localhost:3000/docs`. The Markdown files below are
+the source of truth and are bundled into that in-app documentation UI during the frontend build:
+
+- [Workflows](docs/workflows.md)
+- [AI Workflow Generator](docs/ai-workflows.md)
+- [Functions](docs/functions.md)
+- [MCP Servers](docs/mcp.md)
+- [ASL with JSONata](docs/asl-jsonata.md)
+- [Interpreter Internals](docs/interpreter.md)
+- [Secrets](docs/secrets.md)
+- [Jenkins CI/CD](docs/jenkins.md)
+
+The optional deterministic MCP fixture used by development and AI-generation tests is documented in
+[MCP Servers — Local demo MCP fixture](docs/mcp.md#local-demo-mcp-fixture).
+
+The local-first Jenkins setup, GHCR image names, credentials, guarded Docker Desktop deployment, and
+rollback procedure are documented in [Jenkins CI/CD](docs/jenkins.md).
 
 ---
 

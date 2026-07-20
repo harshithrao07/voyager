@@ -47,7 +47,7 @@ public class McpClientService {
     private static final String MCP_SERVER_NOT_FOUND_MESSAGE = "MCP server does not exist";
 
     private final McpServerRepository mcpServerRepository;
-    private final SecretResolver secretResolver;
+    private final SecretCipher secretCipher;
 
     /** Default per-request timeout when a server does not override it. */
     @Value("${scheduler.mcp.request-timeout-ms:30000}")
@@ -268,9 +268,11 @@ public class McpClientService {
                 server.getCommand() == null ? "" : server.getCommand(),
                 server.getArgs() == null ? "" : server.getArgs().toString(),
                 server.getEnv() == null ? "" : server.getEnv().toString(),
+                server.getSecretEnv() == null ? "" : server.getSecretEnv().toString(),
                 server.getAuthEnvVar() == null ? "" : server.getAuthEnvVar(),
                 server.getAuthType() == null ? "" : server.getAuthType().name(),
-                server.getAuthTokenRef() == null ? "" : server.getAuthTokenRef(),
+                server.getAuthTokenEncrypted() == null ? "" : server.getAuthTokenEncrypted(),
+                server.getSecretHeaders() == null ? "" : server.getSecretHeaders().toString(),
                 server.getAuthHeaderName() == null ? "" : server.getAuthHeaderName(),
                 server.getAuthUsername() == null ? "" : server.getAuthUsername(),
                 server.getRequestTimeoutMs() == null ? "" : server.getRequestTimeoutMs().toString());
@@ -341,7 +343,7 @@ public class McpClientService {
     }
 
     /** The seeded request builder carrying this server's auth header, or null for NONE. */
-    private HttpRequest.Builder authHeader(McpServer server) {
+    HttpRequest.Builder authHeader(McpServer server) {
         return switch (server.getAuthType()) {
             case NONE -> null;
             case BEARER_TOKEN -> HttpRequest.newBuilder()
@@ -352,6 +354,17 @@ public class McpClientService {
                     .header("Authorization", "Basic " + Base64.getEncoder().encodeToString(
                             (server.getAuthUsername() + ":" + resolveToken(server))
                                     .getBytes(StandardCharsets.UTF_8)));
+            case CUSTOM_HEADERS -> {
+                if (server.getSecretHeaders() == null || server.getSecretHeaders().isEmpty()) {
+                    throw new IllegalStateException(
+                            "No custom authentication headers configured for MCP server: "
+                                    + server.getServerId());
+                }
+                HttpRequest.Builder builder = HttpRequest.newBuilder();
+                server.getSecretHeaders().forEach(
+                        (name, encrypted) -> builder.header(name, secretCipher.decrypt(encrypted)));
+                yield builder;
+            }
         };
     }
 
@@ -369,13 +382,12 @@ public class McpClientService {
         }
         Map<String, String> env = new LinkedHashMap<>();
         if (server.getEnv() != null) {
-            SecretReferences.validateEnvironment(server.getEnv());
-            server.getEnv().forEach((name, value) -> env.put(
-                    name,
-                    SecretReferences.referenceFromValue(value)
-                            .map(secretResolver::require)
-                            .orElse(value)
-            ));
+            env.putAll(server.getEnv());
+        }
+        if (server.getSecretEnv() != null) {
+            // Decrypt secret env values only here, at spawn time; never persisted plaintext.
+            server.getSecretEnv().forEach((name, encrypted) ->
+                    env.put(name, secretCipher.decrypt(encrypted)));
         }
         if (server.getAuthType() == McpAuthType.BEARER_TOKEN) {
             // The resolved secret is injected into the child process environment,
@@ -390,13 +402,11 @@ public class McpClientService {
     }
 
     private String resolveToken(McpServer server) {
-        try {
-            return secretResolver.require(server.getAuthTokenRef());
-        } catch (IllegalStateException exception) {
+        String token = secretCipher.decrypt(server.getAuthTokenEncrypted());
+        if (token == null) {
             throw new IllegalStateException(
-                    "No token configured for MCP server: " + server.getServerId(),
-                    exception
-            );
+                    "No token configured for MCP server: " + server.getServerId());
         }
+        return token;
     }
 }

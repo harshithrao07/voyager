@@ -309,6 +309,22 @@ const edgeTypes = {
   dataFlow: DataFlowEdge,
 };
 
+function FitViewOnKey({ fitKey }: { fitKey?: string }) {
+  const { fitView } = useReactFlow();
+  const lastKeyRef = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    // Recenter only when the scope changes (canvas switch / branch switch), never on
+    // in-scope edits. Defer so the new scope's nodes are laid out and measured first.
+    if (fitKey === undefined || lastKeyRef.current === fitKey) return;
+    lastKeyRef.current = fitKey;
+    const timeout = window.setTimeout(() => fitView({ padding: 0.22, maxZoom: 1.05, duration: 300 }), 130);
+    return () => window.clearTimeout(timeout);
+  }, [fitKey, fitView]);
+
+  return null;
+}
+
 function CanvasControls() {
   const { fitView, zoomIn, zoomOut } = useReactFlow();
 
@@ -398,6 +414,9 @@ interface Props {
   layoutDirection?: LayoutDirection;
   layoutVersion?: number;
   onStateContextMenu?: (stateName: string, event: ReactMouseEvent) => void;
+  onOpenNestedScope?: (segment: import('./workflow-create/nestedMachine').MachinePathSegment) => void;
+  /** When this key changes the canvas recenters (fit view). Use it to reset pan on scope/branch switches. */
+  fitViewKey?: string;
   onEdgeContextMenu?: (transition: {
     sourceName: string;
     targetName: string;
@@ -420,7 +439,9 @@ export function AslGraphViewer({
   layoutDirection = 'TB',
   layoutVersion = 0,
   onStateContextMenu,
+  onOpenNestedScope,
   onEdgeContextMenu,
+  fitViewKey,
 }: Props) {
   const viewerRef = useRef<HTMLDivElement>(null);
   const lastLayoutVersionRef = useRef(layoutVersion);
@@ -454,6 +475,7 @@ export function AslGraphViewer({
       onStateSelect,
       connectable,
       onStateContextMenu,
+      onOpenNestedScope,
     });
     const edgesWithHandlers = initialEdges.map((edge) => ({
       ...edge,
@@ -495,7 +517,7 @@ export function AslGraphViewer({
       });
     });
     setEdges(layoutedEdges);
-  }, [connectable, definition, initialNodePositions, layoutDirection, layoutVersion, onEdgeContextMenu, onStateContextMenu, preserveNodePositions, selectedStateName, onStateSelect, setNodes, setEdges]);
+  }, [connectable, definition, initialNodePositions, layoutDirection, layoutVersion, onEdgeContextMenu, onStateContextMenu, onOpenNestedScope, preserveNodePositions, selectedStateName, onStateSelect, setNodes, setEdges]);
 
   return (
     <div ref={viewerRef} className="relative h-full w-full bg-surface-lowest">
@@ -518,6 +540,7 @@ export function AslGraphViewer({
         defaultEdgeOptions={{ type: 'dataFlow' }}
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1.4} color="rgba(135, 146, 172, 0.38)" />
+        <FitViewOnKey fitKey={fitViewKey} />
         <CanvasFullscreenButton targetRef={viewerRef} />
         <CanvasControls />
       </ReactFlow>

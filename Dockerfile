@@ -15,6 +15,8 @@ WORKDIR /app
 
 RUN addgroup -S scheduler && adduser -S scheduler -G scheduler
 
+LABEL org.opencontainers.image.source="https://github.com/harshithrao07/voyager"
+
 COPY --from=build /workspace/target/*.jar app.jar
 
 USER scheduler

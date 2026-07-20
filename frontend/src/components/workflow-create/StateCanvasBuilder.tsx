@@ -48,6 +48,7 @@ type Props = {
   initialNodePositions?: CanvasNodePositions;
   onNodePositionsChange?: (positions: CanvasNodePositions) => void;
   onOpenNestedScope?: (segment: MachinePathSegment) => void;
+  fitViewKey?: string;
 };
 
 export function StateCanvasBuilder({
@@ -62,6 +63,7 @@ export function StateCanvasBuilder({
   initialNodePositions,
   onNodePositionsChange,
   onOpenNestedScope,
+  fitViewKey,
 }: Props) {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [connectionNotice, setConnectionNotice] = useState<{ tone: 'ok' | 'warn'; message: string } | null>(null);
@@ -248,6 +250,8 @@ export function StateCanvasBuilder({
         layoutVersion={layoutVersion}
         onStateContextMenu={handleStateContextMenu}
         onEdgeContextMenu={handleEdgeContextMenu}
+        onOpenNestedScope={onOpenNestedScope}
+        fitViewKey={fitViewKey}
       />
 
       {connectionNotice && (

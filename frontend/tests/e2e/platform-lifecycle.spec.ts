@@ -30,6 +30,9 @@ type FunctionVersion = {
 type McpServer = {
   serverId: string;
   status: 'ENABLED' | 'DISABLED';
+  authType: 'NONE' | 'BEARER_TOKEN' | 'API_KEY' | 'BASIC' | 'CUSTOM_HEADERS';
+  hasAuthToken: boolean;
+  secretHeaderNames: string[];
 };
 
 const createdWorkflowIds = new Set<string>();
@@ -142,8 +145,16 @@ function mockMcpResponse(message: any) {
   return jsonRpcError(message.id, -32601, `Unsupported method: ${message.method}`);
 }
 
-async function startMockMcpHttpServer() {
+async function startMockMcpHttpServer(requiredHeaders: Record<string, string> = {}) {
   const server = http.createServer((request, response) => {
+    const authenticated = Object.entries(requiredHeaders).every(
+      ([name, value]) => request.headers[name.toLowerCase()] === value,
+    );
+    if (!authenticated) {
+      response.writeHead(401);
+      response.end();
+      return;
+    }
     if (request.method === 'GET') {
       response.writeHead(405);
       response.end();
@@ -176,7 +187,7 @@ async function startMockMcpHttpServer() {
         }
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify(result));
-      } catch (error) {
+      } catch {
         response.writeHead(400, { 'content-type': 'application/json' });
         response.end(JSON.stringify(jsonRpcError(null, -32700, 'Parse error')));
       }
@@ -504,7 +515,11 @@ test('MCP lifecycle is registered, synced, called, used by workflow, edited, and
   const serverId = uniqueSlug('mcp-e2e');
   const displayName = `E2E MCP ${serverId}`;
   const updatedDisplayName = `${displayName} updated`;
-  const mockMcp = await startMockMcpHttpServer();
+  const customHeaders = {
+    'X-E2E-API-Key': `key-${serverId}`,
+    'X-E2E-Client-Secret': `secret-${serverId}`,
+  };
+  const mockMcp = await startMockMcpHttpServer(customHeaders);
   const workflowName = `E2E MCP Workflow ${serverId}`;
 
   await page.goto('/mcp');
@@ -516,6 +531,10 @@ test('MCP lifecycle is registered, synced, called, used by workflow, edited, and
   await page.getByTestId('mcp-transport').selectOption('HTTP');
   await page.getByTestId('mcp-base-url').fill(mockMcp.baseUrl);
   await page.getByTestId('mcp-endpoint').fill('/mcp');
+  await page.getByTestId('mcp-auth-type').selectOption('CUSTOM_HEADERS');
+  await page.getByTestId('mcp-secret-headers').fill(
+    Object.entries(customHeaders).map(([name, value]) => `${name}=${value}`).join('\n'),
+  );
   await page.getByTestId('mcp-timeout').fill('10000');
   await page.getByTestId('mcp-trust-read-only').click();
   await page.getByTestId('mcp-enable').check();
@@ -523,10 +542,13 @@ test('MCP lifecycle is registered, synced, called, used by workflow, edited, and
   createdMcpServerIds.add(serverId);
 
   await expect(page.getByRole('heading', { name: displayName })).toBeVisible({ timeout: 15_000 });
-  await expect.poll(
-    async () => (await getMcpServer(request, serverId)).status,
-    { timeout: 10_000 },
-  ).toBe('ENABLED');
+  await expect.poll(async () => getMcpServer(request, serverId), { timeout: 10_000 })
+    .toMatchObject({
+      status: 'ENABLED',
+      authType: 'CUSTOM_HEADERS',
+      hasAuthToken: false,
+      secretHeaderNames: expect.arrayContaining(Object.keys(customHeaders)),
+    });
 
   await page.getByTestId('mcp-sync-tools').click();
   await expect(page.getByTestId('mcp-sync-result')).toContainText('1 discovered', { timeout: 30_000 });
@@ -552,6 +574,9 @@ test('MCP lifecycle is registered, synced, called, used by workflow, edited, and
   await page.getByTestId(`mcp-server-card-${serverId}`).click();
   await page.getByTestId('mcp-edit-server').click();
   await expect(page.getByTestId('mcp-server-form')).toBeVisible();
+  await expect(page.getByTestId('mcp-secret-headers')).toHaveValue(
+    Object.keys(customHeaders).sort().map((name) => `${name}=`).join('\n'),
+  );
   await page.getByTestId('mcp-display-name').fill(updatedDisplayName);
   await page.getByTestId('mcp-save-server').click();
   await expect(page.getByRole('heading', { name: updatedDisplayName })).toBeVisible({ timeout: 15_000 });

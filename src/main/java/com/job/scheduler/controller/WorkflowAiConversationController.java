@@ -4,9 +4,13 @@ import com.job.scheduler.dto.WorkflowAiConversationDetailDTO;
 import com.job.scheduler.dto.WorkflowAiConversationSummaryDTO;
 import com.job.scheduler.dto.WorkflowAiAcceptPlanRequestDTO;
 import com.job.scheduler.dto.WorkflowAiChatRequestDTO;
+import com.job.scheduler.dto.WorkflowAiProvisionRequestDTO;
 import com.job.scheduler.dto.WorkflowAiResponseDTO;
 import com.job.scheduler.dto.WorkflowAiRegenerateRequestDTO;
+import com.job.scheduler.dto.WorkflowAiRenameRequestDTO;
 import com.job.scheduler.dto.WorkflowAiReviewAslRequestDTO;
+import com.job.scheduler.dto.WorkflowAiSaveWorkflowRequestDTO;
+import com.job.scheduler.dto.WorkflowAiSaveWorkflowResponseDTO;
 import com.job.scheduler.dto.WorkflowAiStartRequestDTO;
 import com.job.scheduler.dto.WorkflowAiWorkspaceRequestDTO;
 import com.job.scheduler.service.WorkflowAiConversationService;
@@ -16,8 +20,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.annotation.SendToUser;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -38,6 +44,25 @@ public class WorkflowAiConversationController {
         return ResponseEntity.ok(workflowAiConversationService.listConversations());
     }
 
+    @GetMapping("/drafts")
+    public ResponseEntity<List<WorkflowAiConversationSummaryDTO>> listDrafts() {
+        return ResponseEntity.ok(workflowAiConversationService.listDrafts());
+    }
+
+    @PostMapping("/drafts")
+    public ResponseEntity<WorkflowAiConversationDetailDTO> createDraft(
+            @Valid @RequestBody WorkflowAiWorkspaceRequestDTO request
+    ) {
+        return ResponseEntity.ok(workflowAiConversationService.createDraft(request));
+    }
+
+    @GetMapping("/drafts/{draftId}")
+    public ResponseEntity<WorkflowAiConversationDetailDTO> getDraft(
+            @PathVariable UUID draftId
+    ) {
+        return ResponseEntity.ok(workflowAiConversationService.getDraft(draftId));
+    }
+
     @GetMapping("/conversations/{conversationId}")
     public ResponseEntity<WorkflowAiConversationDetailDTO> getConversation(
             @PathVariable UUID conversationId
@@ -45,6 +70,52 @@ public class WorkflowAiConversationController {
         return ResponseEntity.ok(
                 workflowAiConversationService.getConversation(conversationId)
         );
+    }
+
+    @DeleteMapping("/conversations")
+    public ResponseEntity<Void> deleteAllConversations() {
+        workflowAiConversationService.deleteAllConversations();
+        return ResponseEntity.noContent().build();
+    }
+
+    @PatchMapping("/conversations/{conversationId}/name")
+    public ResponseEntity<WorkflowAiConversationSummaryDTO> renameConversation(
+            @PathVariable UUID conversationId,
+            @Valid @RequestBody WorkflowAiRenameRequestDTO request
+    ) {
+        return ResponseEntity.ok(
+                workflowAiConversationService.renameConversation(conversationId, request.name())
+        );
+    }
+
+    @PatchMapping("/drafts/{draftId}/name")
+    public ResponseEntity<WorkflowAiConversationSummaryDTO> renameDraft(
+            @PathVariable UUID draftId,
+            @Valid @RequestBody WorkflowAiRenameRequestDTO request
+    ) {
+        return ResponseEntity.ok(
+                workflowAiConversationService.renameDraft(draftId, request.name())
+        );
+    }
+
+    @DeleteMapping("/drafts")
+    public ResponseEntity<Void> deleteAllDrafts() {
+        workflowAiConversationService.deleteAllDrafts();
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/drafts/{draftId}")
+    public ResponseEntity<Void> deleteDraft(@PathVariable UUID draftId) {
+        workflowAiConversationService.deleteDraft(draftId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/conversations/{conversationId}")
+    public ResponseEntity<Void> deleteConversation(
+            @PathVariable UUID conversationId
+    ) {
+        workflowAiConversationService.deleteConversation(conversationId);
+        return ResponseEntity.noContent().build();
     }
 
     @PutMapping("/conversations/{conversationId}/workspace")
@@ -56,6 +127,35 @@ public class WorkflowAiConversationController {
         return ResponseEntity.noContent().build();
     }
 
+    @PostMapping("/conversations/{conversationId}/workflow")
+    public ResponseEntity<WorkflowAiSaveWorkflowResponseDTO> saveConversationWorkflow(
+            @PathVariable UUID conversationId,
+            @Valid @RequestBody WorkflowAiSaveWorkflowRequestDTO request
+    ) {
+        return ResponseEntity.ok(
+                workflowAiConversationService.saveConversationWorkflow(conversationId, request)
+        );
+    }
+
+    @PostMapping("/drafts/{draftId}/workflow")
+    public ResponseEntity<WorkflowAiSaveWorkflowResponseDTO> saveDraftWorkflow(
+            @PathVariable UUID draftId,
+            @Valid @RequestBody WorkflowAiSaveWorkflowRequestDTO request
+    ) {
+        return ResponseEntity.ok(
+                workflowAiConversationService.saveDraftWorkflow(draftId, request)
+        );
+    }
+
+    @PutMapping("/drafts/{draftId}/workspace")
+    public ResponseEntity<Void> saveDraftWorkspace(
+            @PathVariable UUID draftId,
+            @Valid @RequestBody WorkflowAiWorkspaceRequestDTO request
+    ) {
+        workflowAiConversationService.saveWorkspace(draftId, request);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/conversations")
     public ResponseEntity<WorkflowAiResponseDTO> startConversation(
             @Valid @RequestBody WorkflowAiStartRequestDTO request
@@ -64,7 +164,8 @@ public class WorkflowAiConversationController {
                 request.instruction(),
                 request.modelConfigId(),
                 request.userDateTime(),
-                request.definition()
+                request.definition(),
+                request.definitionText()
         ));
     }
 
@@ -76,7 +177,8 @@ public class WorkflowAiConversationController {
                 request.conversationId(),
                 request.message(),
                 request.modelConfigId(),
-                request.definition()
+                request.definition(),
+                request.definitionText()
         ));
     }
 
@@ -110,6 +212,17 @@ public class WorkflowAiConversationController {
         );
     }
 
+    @PostMapping("/provision-resources")
+    public ResponseEntity<WorkflowAiResponseDTO> provisionResources(
+            @Valid @RequestBody WorkflowAiProvisionRequestDTO request
+    ) {
+        return ResponseEntity.ok(workflowAiConversationService.provisionResources(
+                request.conversationId(),
+                request.functions(),
+                request.modelConfigId()
+        ));
+    }
+
     @MessageMapping("/workflow-ai/start")
     @SendToUser("/queue/workflow-ai")
     public WorkflowAiResponseDTO startConversationSocket(
@@ -119,7 +232,8 @@ public class WorkflowAiConversationController {
                 request.instruction(),
                 request.modelConfigId(),
                 request.userDateTime(),
-                request.definition()
+                request.definition(),
+                request.definitionText()
         );
     }
 
@@ -132,7 +246,8 @@ public class WorkflowAiConversationController {
                 request.conversationId(),
                 request.message(),
                 request.modelConfigId(),
-                request.definition()
+                request.definition(),
+                request.definitionText()
         );
     }
 

@@ -16,14 +16,26 @@ import org.springframework.stereotype.Service;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
 public class McpServerRegistryService {
     private static final String MCP_SERVER_NOT_FOUND_MESSAGE = "MCP server does not exist";
+    private static final Pattern HTTP_HEADER_NAME = Pattern.compile(
+            "[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+    );
+    private static final Set<String> RESTRICTED_HTTP_HEADERS = Set.of(
+            "connection", "content-length", "expect", "host", "upgrade"
+    );
 
     private final McpServerRepository mcpServerRepository;
+    private final SecretCipher secretCipher;
 
     @Transactional
     public McpServerResponseDTO registerServer(McpServerRequestDTO request) {
@@ -84,12 +96,12 @@ public class McpServerRegistryService {
         server.setCommand(blankToNull(request.command()));
         server.setArgs(request.args() == null ? new ArrayList<>() : new ArrayList<>(request.args()));
         server.setEnv(request.env() == null ? new LinkedHashMap<>() : new LinkedHashMap<>(request.env()));
+        server.setSecretEnv(mergeEncryptedValues(server.getSecretEnv(), request.secretEnv()));
         server.setAuthEnvVar(blankToNull(request.authEnvVar()));
         server.setTransport(request.transport());
         server.setAuthType(request.authType());
-        server.setAuthTokenRef(request.authType() == McpAuthType.NONE
-                ? null
-                : SecretReferences.requireValidReference(request.authTokenRef()));
+        applyAuthToken(server, request);
+        applySecretHeaders(server, request);
         server.setAuthHeaderName(blankToNull(request.authHeaderName()));
         server.setAuthUsername(blankToNull(request.authUsername()));
         server.setTrustLevel(request.trustLevel() == null ? McpTrustLevel.UNTRUSTED : request.trustLevel());
@@ -98,7 +110,6 @@ public class McpServerRegistryService {
     }
 
     private void validateRequest(McpServerRequestDTO request) {
-        SecretReferences.validateEnvironment(request.env());
         if (request.transport() == McpTransport.HTTP) {
             String baseUrl = blankToNull(request.baseUrl());
             if (baseUrl == null) {
@@ -126,17 +137,6 @@ public class McpServerRegistryService {
                         "authEnvVar is required for STDIO BEARER_TOKEN auth");
             }
         }
-        // A secret reference is required for any authenticated type, invalid for NONE.
-        if (request.authType() == McpAuthType.NONE) {
-            if (blankToNull(request.authTokenRef()) != null) {
-                throw new IllegalArgumentException("authTokenRef is only valid for authenticated servers");
-            }
-        } else if (blankToNull(request.authTokenRef()) == null) {
-            throw new IllegalArgumentException(
-                    "authTokenRef is required for " + request.authType() + " auth");
-        } else {
-            SecretReferences.requireValidReference(request.authTokenRef());
-        }
         // Per-type extra config.
         if (request.authType() == McpAuthType.API_KEY
                 && blankToNull(request.authHeaderName()) == null) {
@@ -146,6 +146,102 @@ public class McpServerRegistryService {
                 && blankToNull(request.authUsername()) == null) {
             throw new IllegalArgumentException("authUsername is required for BASIC auth");
         }
+        if (request.authType() == McpAuthType.CUSTOM_HEADERS) {
+            validateSecretHeaders(request.secretHeaders());
+        }
+    }
+
+    private void validateSecretHeaders(Map<String, String> headers) {
+        if (headers == null || headers.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "At least one header is required for CUSTOM_HEADERS auth");
+        }
+        Set<String> normalizedNames = new LinkedHashSet<>();
+        headers.forEach((name, value) -> {
+            if (name == null || !HTTP_HEADER_NAME.matcher(name).matches()) {
+                throw new IllegalArgumentException(
+                        "Invalid custom authentication header name: " + name);
+            }
+            String normalizedName = name.toLowerCase(Locale.ROOT);
+            if (RESTRICTED_HTTP_HEADERS.contains(normalizedName)) {
+                throw new IllegalArgumentException(
+                        "Header is managed by the HTTP transport and cannot be configured: " + name);
+            }
+            if (!normalizedNames.add(normalizedName)) {
+                throw new IllegalArgumentException(
+                        "Duplicate custom authentication header name: " + name);
+            }
+            if (value != null && (value.contains("\r") || value.contains("\n"))) {
+                throw new IllegalArgumentException(
+                        "Custom authentication header values cannot contain line breaks");
+            }
+        });
+    }
+
+    /**
+     * Authenticated types require a token: a provided plaintext token is encrypted;
+     * a blank token keeps the existing encrypted value (so edits need not re-enter
+     * it), and is rejected only when none is stored yet. NONE clears the token.
+     */
+    private void applyAuthToken(McpServer server, McpServerRequestDTO request) {
+        // NONE and CUSTOM_HEADERS carry no single token.
+        if (request.authType() == McpAuthType.NONE
+                || request.authType() == McpAuthType.CUSTOM_HEADERS) {
+            server.setAuthTokenEncrypted(null);
+            return;
+        }
+        String plaintext = blankToNull(request.authToken());
+        if (plaintext != null) {
+            server.setAuthTokenEncrypted(secretCipher.encrypt(plaintext));
+        } else if (server.getAuthTokenEncrypted() == null) {
+            throw new IllegalArgumentException(
+                    "authToken is required for " + request.authType() + " auth");
+        }
+    }
+
+    /**
+     * CUSTOM_HEADERS stores an encrypted header map (at least one required); other
+     * auth types clear it. Merge semantics match secret env (blank value keeps the
+     * existing encrypted value; absent keys are dropped).
+     */
+    private void applySecretHeaders(McpServer server, McpServerRequestDTO request) {
+        if (request.authType() != McpAuthType.CUSTOM_HEADERS) {
+            server.setSecretHeaders(new LinkedHashMap<>());
+            return;
+        }
+        Map<String, String> merged = mergeEncryptedValues(
+                server.getSecretHeaders(), request.secretHeaders());
+        if (merged.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "At least one header is required for CUSTOM_HEADERS auth");
+        }
+        server.setSecretHeaders(merged);
+    }
+
+    /**
+     * Builds a stored encrypted map: a provided plaintext value is encrypted; a
+     * blank value keeps the existing encrypted value (unchanged) for that key; keys
+     * absent from the request are dropped.
+     */
+    private Map<String, String> mergeEncryptedValues(
+            Map<String, String> existing,
+            Map<String, String> requested
+    ) {
+        Map<String, String> result = new LinkedHashMap<>();
+        if (requested == null) {
+            return result;
+        }
+        Map<String, String> current = existing == null ? Map.of() : existing;
+        requested.forEach((name, value) -> {
+            if (value == null || value.isBlank()) {
+                if (current.containsKey(name)) {
+                    result.put(name, current.get(name));
+                }
+            } else {
+                result.put(name, secretCipher.encrypt(value));
+            }
+        });
+        return result;
     }
 
     private String trimTrailingSlash(String value) {
@@ -175,10 +271,12 @@ public class McpServerRegistryService {
                 server.getCommand(),
                 server.getArgs(),
                 server.getEnv(),
+                server.getSecretEnv() == null ? Set.of() : Set.copyOf(server.getSecretEnv().keySet()),
+                server.getSecretHeaders() == null ? Set.of() : Set.copyOf(server.getSecretHeaders().keySet()),
                 server.getAuthEnvVar(),
                 server.getTransport(),
                 server.getAuthType(),
-                server.getAuthTokenRef(),
+                server.getAuthTokenEncrypted() != null,
                 server.getAuthHeaderName(),
                 server.getAuthUsername(),
                 server.getTrustLevel(),

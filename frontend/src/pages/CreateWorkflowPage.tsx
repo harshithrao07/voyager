@@ -17,6 +17,7 @@ type Props = {
   onNavigate: (path: string, options?: { replace?: boolean }) => void;
   onConversationUpdated?: () => void;
   routeChatId?: string;
+  routeDraftId?: string;
   revisionEdit?: WorkflowRevisionEditContext;
 };
 
@@ -27,6 +28,7 @@ export function CreateWorkflowPage({
   onNavigate,
   onConversationUpdated,
   routeChatId,
+  routeDraftId,
   revisionEdit,
 }: Props) {
   return (
@@ -37,6 +39,7 @@ export function CreateWorkflowPage({
       onNavigate={onNavigate}
       onConversationUpdated={onConversationUpdated}
       routeChatId={routeChatId}
+      routeDraftId={routeDraftId}
       revisionEdit={revisionEdit}
     />
   );

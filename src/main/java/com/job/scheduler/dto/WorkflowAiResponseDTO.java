@@ -15,6 +15,8 @@ public record WorkflowAiResponseDTO(
         List<String> validationIssues,
         JsonNode finalPlan,
         CreateWorkflowRequestDTO draftWorkflowPayload,
+        WorkflowAiResourcePlanDTO resourcePlan,
+        UUID resourcePlanMessageId,
         UUID workflowId,
         WorkflowResponseDTO workflow,
         WorkflowAiMessageDTO assistantMessage

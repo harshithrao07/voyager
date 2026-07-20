@@ -38,6 +38,12 @@ const DOC_META: DocMeta[] = [
     summary: 'Create, validate, schedule, and run state machines.',
   },
   {
+    slug: 'ai-workflows',
+    title: 'AI Workflow Generator',
+    group: 'Guides',
+    summary: 'Build persistent AI chats and manual drafts that begin with the first workflow state.',
+  },
+  {
     slug: 'functions',
     title: 'Functions',
     group: 'Guides',
@@ -60,6 +66,18 @@ const DOC_META: DocMeta[] = [
     title: 'Interpreter Internals',
     group: 'Reference',
     summary: 'How the runtime executes a workflow, with worked traces.',
+  },
+  {
+    slug: 'secrets',
+    title: 'Secrets',
+    group: 'Reference',
+    summary: 'Encrypted model and MCP credentials, master key, and migration.',
+  },
+  {
+    slug: 'jenkins',
+    title: 'Jenkins CI/CD',
+    group: 'Reference',
+    summary: 'Test, publish GHCR images, deploy locally, and roll back safely.',
   },
 ];
 

@@ -8,6 +8,7 @@ This guide covers the whole surface: registering servers over HTTP or STDIO, aut
 - [Concepts: servers, tools, executions](#concepts-servers-tools-executions)
 - [The trust ladder](#the-trust-ladder)
 - [Registering a server](#registering-a-server)
+- [Local demo MCP fixture](#local-demo-mcp-fixture)
 - [Authentication and secrets](#authentication-and-secrets)
 - [The tool catalog and sync](#the-tool-catalog-and-sync)
 - [The playground](#the-playground)
@@ -84,31 +85,58 @@ Click **Register server**:
 | **Base URL** + **Endpoint** | required for HTTP; absolute URL + path starting with `/` | e.g. `http://host.docker.internal:3001` + `/mcp`. |
 | **Command**, **Arguments**, **Environment** | command required for STDIO | One argument per line; env as `KEY=VALUE` per line. The command must be resolvable *in the backend's environment* — if Voyager runs in a container, the runtime (Node, Python, …) must exist in the image, or use HTTP instead. The client checks this up front and fails with an actionable message rather than a generic timeout. |
 | **Request timeout (ms)** | positive; blank = application default (30 s) | Per-request budget for this server. |
-| **Authentication** | `None` / `Bearer token` / `API key` / `Basic` | See [Authentication and secrets](#authentication-and-secrets). |
+| **Authentication** | `None` / `Bearer token` / `API key` / `Basic` / `Multiple custom headers` | See [Authentication and secrets](#authentication-and-secrets). |
 | **Trust level** | defaults to `UNTRUSTED` | Pick deliberately — this is the ceiling on what the server's tools are allowed to do. |
 | **Enable server for workflow execution** | defaults to off | Until checked (or the status is set to `ENABLED`), nothing can call the server. |
 
+## Local demo MCP fixture
+
+The repository includes two deterministic HTTP MCP endpoints for development and AI workflow
+generation tests. Start them with the optional Compose profile:
+
+```bash
+docker compose --profile demo-mcp up -d demo-mcp
+```
+
+Register both servers in Voyager using base URL `http://host.docker.internal:48765`, then sync
+their tools:
+
+| Server ID | Endpoint | Trust | Tools |
+|---|---|---|---|
+| `demo-crm` | `/crm` | `READ_ONLY` | `get_customer`, `search_customers` |
+| `demo-fulfillment` | `/fulfillment` | `WRITE` | `reserve_inventory`, `create_shipment` |
+
+The fixture is implemented by `scripts/demo-mcp-servers.mjs`, publishes port `48765`, and exposes
+`GET /health` for Compose health checks. Stop it with
+`docker compose --profile demo-mcp stop demo-mcp`.
+
 ## Authentication and secrets
 
-Secrets are never stored in Voyager's database. Authenticated servers persist only a **token reference** (`authTokenRef`, e.g. `MCP_GITHUB_TOKEN`); the shared `SecretResolver` obtains the value from the deployment tier when a client is created:
+You enter the actual token in the form; Voyager encrypts it (AES-256-GCM) and stores only the
+ciphertext (`authToken` in the API is write-only — responses expose just `hasAuthToken`). The
+plaintext is decrypted in memory only when a client is created. STDIO servers can also carry
+**secret environment variables** (`secretEnv`, name→value), stored encrypted the same way and
+decrypted into the child process at spawn time, alongside the plaintext non-secret `env`. See
+[Secrets](secrets.md) for the encryption model and the required `SCHEDULER_SECRETS_MASTER_KEY`.
 
-- Inline value: property `scheduler.secrets.values.MCP_GITHUB_TOKEN` (environment variable `SCHEDULER_SECRETS_VALUES_MCP_GITHUB_TOKEN`), or
-- File path: property `scheduler.secrets.files.MCP_GITHUB_TOKEN` (environment variable `SCHEDULER_SECRETS_FILES_MCP_GITHUB_TOKEN`) pointing at a mounted secret file. The file variant wins when both are set.
+If an HTTP MCP client receives a 401, Voyager evicts the pooled client, recreates it, and retries
+the operation once.
 
-STDIO environment values may reference the same resolver with `${secret:MCP_GITHUB_TOKEN}` or `ref:MCP_GITHUB_TOKEN`. Non-secret literals such as `LOG_LEVEL=info` remain valid, but variables whose names look sensitive (`*_TOKEN`, `*_PASSWORD`, `*_API_KEY`, and similar) are rejected unless their value is a reference.
-
-If an HTTP MCP client receives a 401, Voyager evicts the pooled client, resolves the secret again, recreates the client immediately, and retries the operation once. This makes mounted-secret rotation transparent when the replacement credential is already available.
-
-How each auth type uses the resolved token:
+How each auth type uses the decrypted secret material:
 
 | Auth type | HTTP behavior | STDIO behavior | Extra fields |
 |---|---|---|---|
 | `NONE` | no auth | no auth | — |
-| `BEARER_TOKEN` | `Authorization: Bearer <token>` | token injected into the child process env var named by **Auth env var** | `authTokenRef` (+ `authEnvVar` for STDIO) |
-| `API_KEY` | `<Header name>: <token>` | HTTP only | `authTokenRef`, `authHeaderName` |
-| `BASIC` | `Authorization: Basic base64(username:token)` | HTTP only | `authTokenRef`, `authUsername` |
+| `BEARER_TOKEN` | `Authorization: Bearer <token>` | token injected into the child process env var named by **Auth env var** | `authToken` (+ `authEnvVar` for STDIO) |
+| `API_KEY` | `<Header name>: <token>` | HTTP only | `authToken`, `authHeaderName` |
+| `BASIC` | `Authorization: Basic base64(username:token)` | HTTP only | `authToken`, `authUsername` |
+| `CUSTOM_HEADERS` | One or more encrypted `<Header name>: <value>` pairs | HTTP only | `secretHeaders` (write-only; responses expose `secretHeaderNames`) |
 
-Use an `UPPER_SNAKE_CASE` ref so it maps cleanly onto an environment variable name.
+Use `CUSTOM_HEADERS` only when the server genuinely requires multiple authentication headers.
+In the UI, enter one `NAME=VALUE` pair per line. When editing, a blank value preserves the
+stored encrypted value, removing the line deletes that header, and adding a populated line creates
+another encrypted header. Transport-managed headers such as `Host` and `Content-Length` cannot be
+overridden.
 
 ## The tool catalog and sync
 
@@ -189,9 +217,11 @@ Reference a tool from a Task state as `voyager://mcp/<serverId>/<toolName>`, opt
 | `displayName` | — | Required. |
 | `transport` | — | `HTTP` (streamable) or `STDIO`. |
 | `baseUrl` / `endpoint` | — | HTTP only; absolute URL / path starting with `/`. |
-| `command` / `args` / `env` | — | STDIO only; command must resolve in the backend's environment. |
-| `authType` | — | `NONE`, `BEARER_TOKEN`, `API_KEY`, `BASIC`. |
-| `authTokenRef` | — | Required for any authenticated type; forbidden for `NONE`. A reference, never the secret. |
+| `command` / `args` / `env` | — | STDIO only; command must resolve in the backend's environment. `env` is plaintext (non-secret). |
+| `secretEnv` | — | STDIO only; secret env vars (name→value). Write-only; encrypted at rest, returned as `secretEnvKeys` (names). |
+| `authType` | — | `NONE`, `BEARER_TOKEN`, `API_KEY`, `BASIC`, `CUSTOM_HEADERS`. |
+| `authToken` | — | The actual token for `BEARER_TOKEN`, `API_KEY`, or `BASIC`. Write-only, encrypted at rest; responses expose `hasAuthToken`. |
+| `secretHeaders` | — | `CUSTOM_HEADERS` only; name→value map encrypted at rest. Responses expose names only as `secretHeaderNames`. |
 | `authEnvVar` | — | Required for STDIO + `BEARER_TOKEN` (env var that receives the token). |
 | `authHeaderName` | — | Required for `API_KEY`. |
 | `authUsername` | — | Required for `BASIC`. |
@@ -238,8 +268,7 @@ Base path: `/app/v1/mcp/servers`
 | `scheduler.mcp.request-timeout-ms` | `30000` | Default per-request timeout when a server doesn't override it. |
 | `scheduler.mcp.tool-sync-delay-ms` | `900000` (15 min) | Background catalog re-sync interval for enabled servers. |
 | `scheduler.mcp.tool-sync-initial-delay-ms` | `60000` | Delay before the first background sync after startup. |
-| `scheduler.secrets.values.<REF>` | — | Inline deployment secret for any subsystem (env: `SCHEDULER_SECRETS_VALUES_<REF>`). |
-| `scheduler.secrets.files.<REF>` | — | Path to a mounted Kubernetes/Docker Secret file; read on every resolve and wins over the inline value (env: `SCHEDULER_SECRETS_FILES_<REF>`). |
+| `scheduler.secrets.master-key` | — | Base64 32-byte key that encrypts all stored secrets (env: `SCHEDULER_SECRETS_MASTER_KEY`). Required at startup — see [Secrets](secrets.md). |
 
 The app exposes an `mcp` health indicator at `/actuator/health` reporting the number of enabled servers and, per server, its known-tool count and the most recent `lastSeenAt` — a quick way to spot a catalog that stopped syncing.
 

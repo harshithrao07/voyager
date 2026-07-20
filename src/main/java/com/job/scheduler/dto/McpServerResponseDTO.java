@@ -8,6 +8,7 @@ import com.job.scheduler.enums.McpTrustLevel;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public record McpServerResponseDTO(
@@ -19,10 +20,14 @@ public record McpServerResponseDTO(
         String command,
         List<String> args,
         Map<String, String> env,
+        // Names of configured secret env vars; values are never returned.
+        Set<String> secretEnvKeys,
+        // Names of configured custom auth headers; values are never returned.
+        Set<String> secretHeaderNames,
         String authEnvVar,
         McpTransport transport,
         McpAuthType authType,
-        String authTokenRef,
+        boolean hasAuthToken,
         String authHeaderName,
         String authUsername,
         McpTrustLevel trustLevel,

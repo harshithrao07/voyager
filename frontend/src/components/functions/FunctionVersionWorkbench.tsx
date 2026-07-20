@@ -1561,6 +1561,28 @@ export function FunctionVersionWorkbench({
   // If the picked language can't, drop back to single-file so the user can't get
   // stuck on an unusable combination.
   const multiFileAllowed = Boolean(selectedLanguage?.multiFileSupported);
+  const switchSourceMode = (nextMode: FunctionSourceMode) => {
+    if (nextMode === sourceMode) return;
+    if (nextMode === 'MULTI_FILE' && !multiFileAllowed) return;
+    if (nextMode === 'MULTI_FILE') {
+      const entryPath = langMeta(selectedLanguage?.name).entry;
+      setFiles((current) => {
+        const hasEntry = current.some((file) => samePath(file.path, entryPath));
+        if (hasEntry) {
+          return current;
+        }
+        return [{ path: entryPath, content: sourceCode || starterSource(selectedLanguage?.name) }, ...current];
+      });
+      setActivePath(entryPath);
+    } else {
+      const entry = files.find((file) => samePath(file.path, multiFileValidation.entryPath));
+      if (entry && (sourceCode.trim() === '' || isStarterSource(sourceCode))) {
+        setSourceCode(entry.content);
+      }
+    }
+    setSourceMode(nextMode);
+  };
+
   useEffect(() => {
     if (sourceMode === 'MULTI_FILE' && selectedLanguage && !selectedLanguage.multiFileSupported) {
       switchSourceMode('SINGLE_FILE');
@@ -1829,28 +1851,6 @@ export function FunctionVersionWorkbench({
       setSplitPath(files.find((file) => file.path !== activeFile?.path)?.path || activeFile?.path || '');
     }
     setSplitEditorOpen((current) => !current);
-  };
-
-  const switchSourceMode = (nextMode: FunctionSourceMode) => {
-    if (nextMode === sourceMode) return;
-    if (nextMode === 'MULTI_FILE' && !multiFileAllowed) return;
-    if (nextMode === 'MULTI_FILE') {
-      const entryPath = langMeta(selectedLanguage?.name).entry;
-      setFiles((current) => {
-        const hasEntry = current.some((file) => samePath(file.path, entryPath));
-        if (hasEntry) {
-          return current;
-        }
-        return [{ path: entryPath, content: sourceCode || starterSource(selectedLanguage?.name) }, ...current];
-      });
-      setActivePath(entryPath);
-    } else {
-      const entry = files.find((file) => samePath(file.path, multiFileValidation.entryPath));
-      if (entry && (sourceCode.trim() === '' || isStarterSource(sourceCode))) {
-        setSourceCode(entry.content);
-      }
-    }
-    setSourceMode(nextMode);
   };
 
   const updateActiveCase = (patch: Partial<TestCase>) => {

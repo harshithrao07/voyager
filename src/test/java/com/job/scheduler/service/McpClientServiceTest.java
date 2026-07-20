@@ -18,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.net.http.HttpClient;
 import java.net.http.HttpHeaders;
 import java.net.http.HttpResponse;
+import java.net.URI;
 import java.util.Map;
 import java.util.Optional;
 
@@ -27,17 +28,17 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class McpClientServiceTest {
+    private static final String KEY = "xYZP4KD/T0APHH/9GMLiO9vt8D/GFCJXwLzh5ALiGV0=";
+
     @Mock
     private McpServerRepository mcpServerRepository;
 
-    @Mock
-    private SecretResolver secretResolver;
-
+    private final SecretCipher cipher = new SecretCipher(KEY);
     private McpClientService mcpClientService;
 
     @BeforeEach
     void setUp() {
-        mcpClientService = new McpClientService(mcpServerRepository, secretResolver);
+        mcpClientService = new McpClientService(mcpServerRepository, cipher);
     }
 
     @Test
@@ -61,10 +62,9 @@ class McpClientServiceTest {
 
     @Test
     void listToolsRejectsBearerTokenServerWhenNoTokenConfigured() {
-        when(mcpServerRepository.findByServerId("local-tools"))
-                .thenReturn(Optional.of(server(McpServerStatus.ENABLED, McpAuthType.BEARER_TOKEN)));
-        when(secretResolver.require("LOCAL_TOOLS_TOKEN"))
-                .thenThrow(new IllegalStateException("not configured"));
+        McpServer server = server(McpServerStatus.ENABLED, McpAuthType.BEARER_TOKEN);
+        server.setAuthTokenEncrypted(null); // authenticated type but no stored token
+        when(mcpServerRepository.findByServerId("local-tools")).thenReturn(Optional.of(server));
 
         assertThatThrownBy(() -> mcpClientService.listTools("local-tools").block())
                 .isInstanceOf(IllegalStateException.class)
@@ -112,6 +112,32 @@ class McpClientServiceTest {
         )).isFalse();
     }
 
+    @Test
+    void customHeaderAuthDecryptsAndSeedsEveryConfiguredHeader() {
+        McpServer server = server(McpServerStatus.ENABLED, McpAuthType.CUSTOM_HEADERS);
+        server.setSecretHeaders(Map.of(
+                "X-API-Key", cipher.encrypt("key-value"),
+                "X-Client-Secret", cipher.encrypt("client-value")
+        ));
+
+        var request = mcpClientService.authHeader(server)
+                .uri(URI.create("https://mcp.example.com/mcp"))
+                .build();
+
+        assertThat(request.headers().firstValue("X-API-Key")).contains("key-value");
+        assertThat(request.headers().firstValue("X-Client-Secret")).contains("client-value");
+    }
+
+    @Test
+    void customHeaderAuthRequiresAtLeastOneStoredHeader() {
+        McpServer server = server(McpServerStatus.ENABLED, McpAuthType.CUSTOM_HEADERS);
+        server.setSecretHeaders(Map.of());
+
+        assertThatThrownBy(() -> mcpClientService.authHeader(server))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("No custom authentication headers configured for MCP server: local-tools");
+    }
+
     private McpServer stdioServer(String command) {
         McpServer server = new McpServer();
         server.setServerId("local-cli");
@@ -134,7 +160,8 @@ class McpClientServiceTest {
         server.setEndpoint("/mcp");
         server.setTransport(McpTransport.HTTP);
         server.setAuthType(authType);
-        server.setAuthTokenRef(authType == McpAuthType.BEARER_TOKEN ? "LOCAL_TOOLS_TOKEN" : null);
+        server.setAuthTokenEncrypted(
+                authType == McpAuthType.BEARER_TOKEN ? cipher.encrypt("local-tools-token") : null);
         server.setTrustLevel(McpTrustLevel.READ_ONLY);
         server.setStatus(status);
         return server;

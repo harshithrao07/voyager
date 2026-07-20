@@ -1,0 +1,10 @@
+credentials-binding
+docker-workflow
+git
+github
+github-branch-source
+htmlpublisher
+junit
+pipeline-model-definition
+workflow-aggregator
+ws-cleanup

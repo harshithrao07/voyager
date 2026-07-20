@@ -18,5 +18,24 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // Workflow definitions and provider payloads are deliberately schema-less at the
+      // UI boundary. Keeping `any` available here avoids pretending those values have a
+      // narrower contract than the backend or an external provider actually guarantees.
+      '@typescript-eslint/no-explicit-any': 'off',
+      // Route hydration, editor resets, and server-backed selection changes intentionally
+      // synchronize local UI state from external state in effects.
+      'react-hooks/set-state-in-effect': 'off',
+      'react-refresh/only-export-components': ['error', {
+        allowConstantExport: true,
+        allowExportNames: [
+          'ALL_TIMEZONES',
+          'TIMEZONE_GROUPS',
+          'fileLanguage',
+          'languageToMonaco',
+          'timezoneLabel',
+        ],
+      }],
+    },
   },
 ])

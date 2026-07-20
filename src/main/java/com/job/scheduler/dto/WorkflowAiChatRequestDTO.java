@@ -10,6 +10,8 @@ public record WorkflowAiChatRequestDTO(
         @NotNull(message = "Conversation id cannot be null") UUID conversationId,
         @NotBlank(message = "Message cannot be empty") String message,
         UUID modelConfigId,
-        JsonNode definition
+        JsonNode definition,
+        /** Raw editor buffer, sent even when incomplete/invalid so the AI can see in-progress edits. */
+        String definitionText
 ) {
 }

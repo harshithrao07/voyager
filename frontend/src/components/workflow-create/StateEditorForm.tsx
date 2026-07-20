@@ -22,6 +22,10 @@ const hintClass = 'mt-1 font-body-sm text-[11px] text-on-surface-variant/70';
 const errorClass = 'mt-1 font-body-sm text-[11px] text-status-error';
 const sectionClass = 'border-b border-border-subtle px-6 py-5';
 
+function timestampOneHourFromNow() {
+  return new Date(Date.now() + 3600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
 function CollapsibleSection({
   icon,
   title,
@@ -436,6 +440,8 @@ export function StateEditorForm({
       description: 'System',
       argumentsTemplate: {
         url: '{% $states.input.url %}',
+        method: 'POST',
+        headers: {},
         body: '{% $states.input.body %}',
       },
     },
@@ -531,6 +537,16 @@ export function StateEditorForm({
     setField('Arguments', Object.keys(nextArguments).length > 0 ? nextArguments : undefined);
   };
 
+  const updateArgumentValue = (key: string, value: unknown | undefined) => {
+    const nextArguments = { ...argumentsObject };
+    if (value === undefined) {
+      delete nextArguments[key];
+    } else {
+      nextArguments[key] = value;
+    }
+    setField('Arguments', Object.keys(nextArguments).length > 0 ? nextArguments : undefined);
+  };
+
   const handleWaitModeChange = (mode: 'Seconds' | 'Timestamp') => {
     if (mode === waitMode) return;
     const next = { ...state };
@@ -539,7 +555,7 @@ export function StateEditorForm({
       next.Seconds = 60;
     } else {
       delete next.Seconds;
-      next.Timestamp = new Date(Date.now() + 3600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      next.Timestamp = timestampOneHourFromNow();
     }
     onChange(next);
   };
@@ -718,16 +734,41 @@ export function StateEditorForm({
                         />
                       </div>
                       <div>
-                        <label className={labelClass}>body</label>
-                        <textarea
-                          value={argumentText('body')}
-                          onChange={(event) => updateArgument('body', event.target.value)}
-                          placeholder="{% $states.input.body %}"
-                          rows={3}
+                        <label className={labelClass}>method</label>
+                        <input
+                          value={argumentText('method')}
+                          onChange={(event) => updateArgument('method', event.target.value)}
+                          placeholder="POST"
+                          list="voyager-webhook-methods"
                           spellCheck={false}
-                          className={`${monoFieldClass} h-auto min-h-[72px] resize-y py-2 leading-relaxed`}
+                          className={monoFieldClass}
                         />
+                        <datalist id="voyager-webhook-methods">
+                          {['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((method) => (
+                            <option key={method} value={method} />
+                          ))}
+                        </datalist>
+                        <p className={hintClass}>Defaults to POST when omitted.</p>
                       </div>
+                      <JsonField
+                        label="headers"
+                        value={argumentsObject.headers}
+                        onCommit={(value) => updateArgumentValue('headers', value)}
+                        requireObject
+                        placeholder={'{\n  "Authorization": "{% $states.input.authorization %}",\n  "X-Correlation-ID": "{% $states.input.orderId %}"\n}'}
+                        rows={4}
+                        hint="Request headers as a JSON object. Static values are stored in the workflow definition."
+                        monoFieldClass={monoFieldClass}
+                      />
+                      <JsonField
+                        label="body"
+                        value={argumentsObject.body}
+                        onCommit={(value) => updateArgumentValue('body', value)}
+                        placeholder="{% $states.input.body %}"
+                        rows={4}
+                        hint="Any JSON value or a JSONata expression. GET, HEAD, and OPTIONS send no body when omitted."
+                        monoFieldClass={monoFieldClass}
+                      />
                     </>
                   ) : (
                     <>

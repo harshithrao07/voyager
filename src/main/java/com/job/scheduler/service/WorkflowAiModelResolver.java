@@ -12,7 +12,7 @@ import java.time.Duration;
 @Component
 @RequiredArgsConstructor
 public class WorkflowAiModelResolver {
-    private final SecretResolver secretResolver;
+    private final SecretCipher secretCipher;
 
     public ChatLanguageModel resolve(AiModelConfig config) {
         if (config.getProviderType() != AiModelProviderType.OPENAI_COMPATIBLE_LOCAL
@@ -21,15 +21,15 @@ public class WorkflowAiModelResolver {
                     "Unsupported AI model provider: " + config.getProviderType()
             );
         }
-        String credential = config.getCredentialRef() == null
-                || config.getCredentialRef().isBlank()
-                ? "local"
-                : secretResolver.require(config.getCredentialRef());
+        String decrypted = secretCipher.decrypt(config.getCredentialEncrypted());
+        String credential = decrypted == null || decrypted.isBlank() ? "local" : decrypted;
         return OpenAiChatModel.builder()
                 .baseUrl(config.getBaseUrl())
                 .apiKey(credential)
                 .modelName(config.getModelName())
-                .timeout(Duration.ofSeconds(90))
+                // Reasoning-capable local models emit a <think> block before the JSON; a long
+                // proposal (function sourceCode + MCP requirements) can otherwise be cut off.
+                .timeout(Duration.ofSeconds(150))
                 .maxRetries(0)
                 .logRequests(false)
                 .logResponses(false)

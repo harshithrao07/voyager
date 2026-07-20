@@ -1,3 +1,5 @@
+import type { WorkflowAiResourcePlan } from '../../api';
+
 export type DefinitionMode = 'manual' | 'ai';
 
 export type AiModel = {
@@ -8,7 +10,6 @@ export type AiModel = {
   provider: 'local' | 'api';
   enabled?: boolean;
   defaultModel?: boolean;
-  credentialRef?: string | null;
   hasCredential?: boolean;
 };
 
@@ -27,6 +28,7 @@ export type ChatMessage = {
   thinkingContent?: string | null;
   finishReason?: string | null;
   regeneratedFromMessageId?: string | null;
+  resourcePlan?: WorkflowAiResourcePlan | null;
   streamingStatus?: 'processing' | 'streaming';
   streamingPhase?: 'thinking' | 'answer';
 };

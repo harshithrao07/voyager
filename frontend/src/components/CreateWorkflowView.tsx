@@ -1,28 +1,34 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Braces, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   continueWorkflowAiConversation,
+  createWorkflowAiDraft,
   createAiModel,
   createWorkflow,
   createWorkflowRevision,
   deleteAiModel,
-  discoverAiModels,
   getWorkflowAiConversation,
+  getWorkflowAiDraft,
   listFunctions,
   listAllAiModels,
   listAiModels,
   listMcpServers,
   listMcpKnownTools,
+  provisionWorkflowAiResources,
   regenerateWorkflowAiMessage,
+  saveWorkflowAiConversation,
+  saveWorkflowAiDraft,
   saveWorkflowAiWorkspace,
+  saveWorkflowAiDraftWorkspace,
   setAiModelEnabled,
   startWorkflowAiConversation,
-  testAiModel,
   updateWorkflowCanvasLayout,
   type FunctionDefinitionDTO,
   type McpToolDTO,
   type WorkflowAiMessageDTO,
+  type WorkflowAiProposedFunction,
+  type WorkflowAiResourcePlan,
   type WorkflowAiResponse,
   type WorkflowAiWorkspaceRequest,
   type WorkflowDefinitionResponseDTO,
@@ -33,6 +39,7 @@ import { ManualWorkflowEditor } from './workflow-create/ManualWorkflowEditor';
 import { ModelSettingsModal } from './workflow-create/ModelSettingsModal';
 import { cloudProviderPreset } from './workflow-create/modelProviders';
 import { SidebarAiChat } from './workflow-create/SidebarAiChat';
+import { ResourcePlanCard } from './workflow-create/ResourcePlanCard';
 import { WorkflowAiEmptyState } from './workflow-create/WorkflowAiEmptyState';
 import type { TaskResourceOption } from './workflow-create/StateEditorForm';
 import { filterCanvasPositionsForDefinition } from './workflow-create/nestedMachine';
@@ -72,6 +79,7 @@ type Props = {
   onNavigate?: (path: string, options?: { replace?: boolean }) => void;
   onConversationUpdated?: () => void;
   routeChatId?: string;
+  routeDraftId?: string;
   revisionEdit?: WorkflowRevisionEditContext;
 };
 
@@ -171,6 +179,7 @@ function chatMessageFromDto(message: WorkflowAiMessageDTO): ChatMessage {
     thinkingContent: message.thinkingContent,
     finishReason: message.finishReason,
     regeneratedFromMessageId: message.regeneratedFromMessageId,
+    resourcePlan: message.resourcePlan,
   };
 }
 
@@ -194,7 +203,6 @@ function aiModelFromDto(model: {
   modelName: string;
   enabled?: boolean;
   defaultModel?: boolean;
-  credentialRef?: string | null;
   hasCredential?: boolean;
 }): AiModel {
   return {
@@ -205,7 +213,6 @@ function aiModelFromDto(model: {
     provider: model.providerType === 'OPENAI_COMPATIBLE_API' ? 'api' : 'local',
     enabled: model.enabled,
     defaultModel: model.defaultModel,
-    credentialRef: model.credentialRef,
     hasCredential: model.hasCredential,
   };
 }
@@ -229,10 +236,12 @@ export function CreateWorkflowView({
   onNavigate,
   onConversationUpdated,
   routeChatId,
+  routeDraftId,
   revisionEdit,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [linkedWorkflowId, setLinkedWorkflowId] = useState<string | null>(null);
   const [mode, setMode] = useState<DefinitionMode>(revisionEdit ? 'manual' : 'ai');
   const [name, setName] = useState(revisionEdit?.workflow.name || '');
   const [maxAttempts, setMaxAttempts] = useState(revisionEdit?.workflow.maxAttempts ?? 3);
@@ -254,23 +263,17 @@ export function CreateWorkflowView({
   const [addModelOpen, setAddModelOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<ModelSettingsTab>('add');
   const [localCredentialRef, setLocalCredentialRef] = useState('');
-  const [showLocalCredentialRef, setShowLocalCredentialRef] = useState(false);
-  const [localActionsOpen, setLocalActionsOpen] = useState(false);
+  const [localModelName, setLocalModelName] = useState('');
   const [apiProvider, setApiProvider] = useState('DeepSeek');
   const [apiModelName, setApiModelName] = useState('');
   const [apiEndpoint, setApiEndpoint] = useState('https://api.deepseek.com');
   const [apiCredentialRef, setApiCredentialRef] = useState('');
-  const [apiActionsOpen, setApiActionsOpen] = useState(false);
   const [apiActionMessage, setApiActionMessage] = useState<string | null>(null);
   const [apiActionSuccess, setApiActionSuccess] = useState<boolean | null>(null);
-  const [apiDiscoveredModelNames, setApiDiscoveredModelNames] = useState<string[]>([]);
   const [modelActionMessage, setModelActionMessage] = useState<string | null>(null);
   const [modelActionSuccess, setModelActionSuccess] = useState<boolean | null>(null);
-  const [addingModel, setAddingModel] = useState(false);
-  const [testingModel, setTestingModel] = useState(false);
+  const [addingModel, setAddingModel] = useState<'local' | 'api' | null>(null);
   const [discoverEndpoint, setDiscoverEndpoint] = useState('');
-  const [discoveringModels, setDiscoveringModels] = useState(false);
-  const [discoveredModelNames, setDiscoveredModelNames] = useState<string[]>([]);
   const [expandedEndpoint, setExpandedEndpoint] = useState<string | null>(null);
   const [managingModels, setManagingModels] = useState(false);
   const [definitionText, setDefinitionText] = useState(() => formatJson(
@@ -281,15 +284,16 @@ export function CreateWorkflowView({
   );
   const [validationIssues, setValidationIssues] = useState<string[]>([]);
   const [conversationLoading, setConversationLoading] = useState(false);
+  const [draftCreating, setDraftCreating] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [activeResourcePlanMessageId, setActiveResourcePlanMessageId] = useState<string | null>(null);
+  const [activeResourcePlan, setActiveResourcePlan] = useState<WorkflowAiResourcePlan | null>(null);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [revisionSaveCompleted, setRevisionSaveCompleted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedThinkingMessageIds, setExpandedThinkingMessageIds] = useState<Set<string>>(() => new Set());
   const modelPickerRef = useRef<HTMLDivElement | null>(null);
-  const localActionsRef = useRef<HTMLDivElement | null>(null);
-  const apiActionsRef = useRef<HTMLDivElement | null>(null);
   const instructionTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const regeneratingRef = useRef(false);
   const streamingTimerRefs = useRef<number[]>([]);
@@ -299,10 +303,12 @@ export function CreateWorkflowView({
   const pendingWorkspaceSaveRef = useRef<(() => void) | null>(null);
   const workspaceSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const workspaceSaveErrorShownRef = useRef(false);
+  const draftCreationRef = useRef(false);
 
   const hasSelectedModel = models.some((model) => model.id === modelId);
   const canGenerate = instruction.trim().length > 0
     && !conversationLoading
+    && !draftCreating
     && !generating
     && !saving
     && hasSelectedModel;
@@ -329,14 +335,17 @@ export function CreateWorkflowView({
     })),
   ]), [customFunctions, mcpTools]);
 
-  const enqueueWorkspaceSave = (
+  const enqueueWorkspaceSave = useCallback((
     targetConversationId: string,
     request: WorkflowAiWorkspaceRequest,
     signature: string,
+    manualDraft: boolean,
   ) => {
     workspaceSaveQueueRef.current = workspaceSaveQueueRef.current
       .catch(() => undefined)
-      .then(() => saveWorkflowAiWorkspace(targetConversationId, request))
+      .then(() => manualDraft
+        ? saveWorkflowAiDraftWorkspace(targetConversationId, request)
+        : saveWorkflowAiWorkspace(targetConversationId, request))
       .then(() => {
         if (lastLoadedRouteChatIdRef.current === targetConversationId) {
           lastSavedWorkspaceRef.current = signature;
@@ -351,6 +360,44 @@ export function CreateWorkflowView({
           toast.error('Could not save this conversation workspace.');
         }
       });
+  }, [onConversationUpdated]);
+
+  const currentWorkspaceRequest = useCallback((
+    nextDefinitionText = definitionText,
+  ): WorkflowAiWorkspaceRequest => ({
+    definitionText: nextDefinitionText,
+    canvasLayout: canvasNodePositions,
+    settings: {
+      name,
+      maxAttempts,
+      cronExpression,
+      timezone,
+      idempotencyKey,
+    },
+  }), [canvasNodePositions, cronExpression, definitionText, idempotencyKey, maxAttempts, name, timezone]);
+
+  const ensureManualDraft = async (nextDefinitionText = definitionText) => {
+    if (revisionEdit || conversationId || routeChatId || routeDraftId || draftCreationRef.current) {
+      return;
+    }
+    draftCreationRef.current = true;
+    setDraftCreating(true);
+    const request = currentWorkspaceRequest(nextDefinitionText);
+    try {
+      const draft = await createWorkflowAiDraft(request);
+      lastLoadedRouteChatIdRef.current = draft.id;
+      lastSavedWorkspaceRef.current = JSON.stringify(request);
+      setConversationId(draft.id);
+      onConversationUpdated?.();
+      onNavigate?.(`/draft/${encodeURIComponent(draft.id)}`, { replace: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not create a persistent draft.';
+      setError(message);
+      toast.error(message);
+    } finally {
+      draftCreationRef.current = false;
+      setDraftCreating(false);
+    }
   };
 
   const flushPendingWorkspaceSave = () => {
@@ -398,8 +445,6 @@ export function CreateWorkflowView({
       if (e.key === 'Escape') {
         setModelPickerOpen(false);
         setAddModelOpen(false);
-        setLocalActionsOpen(false);
-        setApiActionsOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -489,9 +534,11 @@ export function CreateWorkflowView({
     && definitionStatus.valid
     && builderValidationIssues.length === 0
     && validateCron(cronExpression) === null
+    && (!(routeChatId || routeDraftId) || Boolean(conversationId))
     && (!revisionEdit || hasUnsavedRevisionChanges)
     && !saving
-    && !generating;
+    && !generating
+    && !draftCreating;
 
   useEffect(() => {
     onUnsavedChangesChange?.(hasUnsavedRevisionChanges);
@@ -513,6 +560,16 @@ export function CreateWorkflowView({
     // Backend/AI issues describe the previous definition. The local validator
     // immediately recomputes the current definition as the user edits it.
     setValidationIssues([]);
+
+    try {
+      const nextDefinition = JSON.parse(value) as { States?: unknown };
+      const states = nextDefinition.States;
+      if (states && typeof states === 'object' && !Array.isArray(states) && Object.keys(states).length > 0) {
+        void ensureManualDraft(value);
+      }
+    } catch {
+      // Incomplete code-editor input remains local until it contains its first parseable state.
+    }
   };
 
   const applyModelLists = (enabledDtos: Parameters<typeof aiModelFromDto>[0][], allDtos: Parameters<typeof aiModelFromDto>[0][]) => {
@@ -535,12 +592,7 @@ export function CreateWorkflowView({
 
   const refreshModelLists = async () => {
     const enabledDtos = await listAiModels();
-    let allDtos = enabledDtos;
-    try {
-      allDtos = await listAllAiModels();
-    } catch {
-      allDtos = enabledDtos;
-    }
+    const allDtos = await listAllAiModels().catch(() => enabledDtos);
     applyModelLists(enabledDtos, allDtos);
   };
 
@@ -572,29 +624,55 @@ export function CreateWorkflowView({
   }, [modelId]);
 
   useEffect(() => {
-    if (!routeChatId || revisionEdit || lastLoadedRouteChatIdRef.current === routeChatId) {
+    const routeWorkspaceId = routeDraftId || routeChatId;
+    if (!routeWorkspaceId || revisionEdit
+        || lastLoadedRouteChatIdRef.current === routeWorkspaceId) {
       return undefined;
     }
 
     let cancelled = false;
     flushPendingWorkspaceSave();
-    lastLoadedRouteChatIdRef.current = routeChatId;
+    lastLoadedRouteChatIdRef.current = routeWorkspaceId;
     lastSavedWorkspaceRef.current = null;
     setConversationLoading(true);
     setMessages([]);
     setConversationId(null);
+    setLinkedWorkflowId(null);
     setValidationIssues([]);
+    setActiveResourcePlanMessageId(null);
+    setActiveResourcePlan(null);
     setExpandedThinkingMessageIds(new Set());
     setCanvasNodePositions({});
     setError(null);
 
-    getWorkflowAiConversation(routeChatId)
+    const loadWorkspace = routeDraftId
+      ? getWorkflowAiDraft(routeWorkspaceId)
+      : getWorkflowAiConversation(routeWorkspaceId);
+    loadWorkspace
       .then((conversation) => {
         if (cancelled) return;
-        const restoredMessages = visibleChatMessages(conversation.messages);
+        const visibleMessages = visibleChatMessages(conversation.messages);
+        const fallbackPlanOwner = visibleMessages.find((message) => Boolean(message.resourcePlan));
+        const planOwnerMessageId = conversation.resourcePlanMessageId
+          ?? fallbackPlanOwner?.id
+          ?? null;
+        // Keep the owner's original attachment immutable. The conversation-level resourcePlan is
+        // the unresolved subset and is passed separately to the card as progress state. Hide only
+        // legacy duplicate attachments while a proposal is active.
+        const restoredMessages = visibleMessages.map((message) => {
+          if (conversation.stage !== 'RESOURCES_PROPOSED' || !conversation.resourcePlan) {
+            return message;
+          }
+          if (message.id === planOwnerMessageId) {
+            return message;
+          }
+          return message.resourcePlan ? { ...message, resourcePlan: null } : message;
+        });
         const restoredDefinition = conversation.aslDefinition
           || conversation.draftWorkflowPayload?.definition
           || starterDefinition;
+        const restoredDefinitionText = conversation.workspaceDefinitionText
+          ?? formatJson(restoredDefinition);
         const restoredCanvasLayout = conversation.canvasLayout || {};
         const restoredName = conversation.workspaceSettings?.name
           ?? conversation.draftWorkflowPayload?.name
@@ -613,7 +691,7 @@ export function CreateWorkflowView({
           ?? conversation.draftWorkflowPayload?.idempotencyKey
           ?? newIdempotencyKey();
         const restoredWorkspace: WorkflowAiWorkspaceRequest = {
-          definition: restoredDefinition,
+          definitionText: restoredDefinitionText,
           canvasLayout: restoredCanvasLayout,
           settings: {
             name: restoredName,
@@ -625,6 +703,7 @@ export function CreateWorkflowView({
         };
         setMessages(restoredMessages);
         setConversationId(conversation.id);
+        setLinkedWorkflowId(conversation.workflowId || null);
         setMode('manual');
         if (conversation.modelConfigId) {
           setModelId(conversation.modelConfigId);
@@ -635,8 +714,20 @@ export function CreateWorkflowView({
         setCronExpression(restoredCronExpression);
         setTimezone(restoredTimezone);
         setIdempotencyKey(restoredIdempotencyKey);
-        setDefinitionText(formatJson(restoredDefinition));
+        setDefinitionText(restoredDefinitionText);
         setCanvasNodePositions(restoredCanvasLayout);
+        // Restore the pending resource-approval card if the chat was left mid-review, so a refresh
+        // does not silently drop the proposed functions/MCP requirements.
+        setActiveResourcePlanMessageId(
+          conversation.stage === 'RESOURCES_PROPOSED' && conversation.resourcePlan
+            ? planOwnerMessageId
+            : null,
+        );
+        setActiveResourcePlan(
+          conversation.stage === 'RESOURCES_PROPOSED' && conversation.resourcePlan
+            ? conversation.resourcePlan
+            : null,
+        );
         // Hydration is read-only. Treat the values returned (including legacy fallbacks) as the
         // saved baseline so merely opening an old chat does not autosave it and refresh updatedAt.
         lastSavedWorkspaceRef.current = JSON.stringify(restoredWorkspace);
@@ -662,7 +753,7 @@ export function CreateWorkflowView({
     return () => {
       cancelled = true;
     };
-  }, [routeChatId, revisionEdit]);
+  }, [routeChatId, routeDraftId, revisionEdit]);
 
   useEffect(() => {
     if (workspaceSaveTimerRef.current !== null) {
@@ -673,34 +764,16 @@ export function CreateWorkflowView({
 
     if (!conversationId || conversationLoading || revisionEdit) return;
 
-    let definition: any;
-    try {
-      definition = parseDefinition(definitionText);
-    } catch {
-      // Keep the last valid saved workspace while the code editor contains incomplete JSON.
-      return;
-    }
-    if (localValidationIssues.length > 0) {
-      // A rejected AI candidate or incomplete manual edit may stay visible in the editor, but it
-      // must never replace the last valid authoritative ASL stored for this conversation.
-      return;
-    }
-
-    const request: WorkflowAiWorkspaceRequest = {
-      definition,
-      canvasLayout: canvasNodePositions,
-      settings: {
-        name,
-        maxAttempts,
-        cronExpression,
-        timezone,
-        idempotencyKey,
-      },
-    };
+    const request = currentWorkspaceRequest();
     const signature = JSON.stringify(request);
     if (signature === lastSavedWorkspaceRef.current) return;
 
-    const executeSave = () => enqueueWorkspaceSave(conversationId, request, signature);
+    const executeSave = () => enqueueWorkspaceSave(
+      conversationId,
+      request,
+      signature,
+      Boolean(routeDraftId),
+    );
     pendingWorkspaceSaveRef.current = executeSave;
     workspaceSaveTimerRef.current = window.setTimeout(() => {
       workspaceSaveTimerRef.current = null;
@@ -712,12 +785,14 @@ export function CreateWorkflowView({
     conversationId,
     conversationLoading,
     cronExpression,
+    currentWorkspaceRequest,
     definitionText,
+    enqueueWorkspaceSave,
     idempotencyKey,
     maxAttempts,
     name,
-    localValidationIssues,
     revisionEdit,
+    routeDraftId,
     timezone,
   ]);
 
@@ -839,6 +914,9 @@ export function CreateWorkflowView({
   ) => {
     lastLoadedRouteChatIdRef.current = response.conversationId;
     setConversationId(response.conversationId);
+    if (response.workflowId) {
+      setLinkedWorkflowId(response.workflowId);
+    }
     setValidationIssues(response.validationIssues || []);
     onConversationUpdated?.();
 
@@ -859,8 +937,14 @@ export function CreateWorkflowView({
       setName(response.conversationName || 'AI generated workflow');
     }
 
-    const assistantMessage = response.assistantMessage
-      ? chatMessageFromDto(response.assistantMessage)
+    const responsePlanOwnerId = response.resourcePlanMessageId
+      ?? (response.stage === 'RESOURCES_PROPOSED' ? response.assistantMessage?.id : null)
+      ?? null;
+    const assistantMessage: ChatMessage = response.assistantMessage
+      ? {
+          ...chatMessageFromDto(response.assistantMessage),
+          resourcePlan: response.assistantMessage.resourcePlan ?? null,
+        }
       : {
           id: newChatMessageId(),
           role: 'assistant' as const,
@@ -868,7 +952,16 @@ export function CreateWorkflowView({
           createdAt: Date.now(),
           modelConfigId: modelId || null,
           modelDisplayName: selectedModel?.label || null,
+          resourcePlan: responsePlanOwnerId ? response.resourcePlan ?? null : null,
         };
+
+    // The message attachment is immutable history. Active resourcePlan is only the unresolved
+    // subset and drives per-item pending/completed state without replacing that attachment.
+    const activePlanOwnerId = response.stage === 'RESOURCES_PROPOSED' && response.resourcePlan
+      ? responsePlanOwnerId ?? assistantMessage.id
+      : null;
+    setActiveResourcePlanMessageId(activePlanOwnerId);
+    setActiveResourcePlan(activePlanOwnerId ? response.resourcePlan ?? null : null);
 
     if (assistantMessage.thinkingContent) {
       setExpandedThinkingMessageIds((current) => {
@@ -902,6 +995,23 @@ export function CreateWorkflowView({
     } catch {
       return null;
     }
+  };
+
+  // When the editor JSON can't be sent as a parsed definition (mid-typing, unparseable, or an empty
+  // starter machine), forward the raw buffer so the assistant can still see the in-progress edit.
+  const inProgressEditorText = (editorDefinition: unknown) => {
+    if (editorDefinition) return null;
+    const trimmed = definitionText.trim();
+    if (!trimmed) return null;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object' && Object.keys(parsed.States || {}).length === 0) {
+        return null;
+      }
+    } catch {
+      // Unparseable buffer is exactly the in-progress case we want the assistant to see.
+    }
+    return definitionText;
   };
 
   const handleGenerate = async (
@@ -956,6 +1066,9 @@ export function CreateWorkflowView({
     setValidationIssues([]);
 
     const editorDefinition = options.includeDefinition ? currentEditorDefinition() : null;
+    const editorDefinitionText = options.includeDefinition
+      ? inProgressEditorText(editorDefinition)
+      : null;
 
     try {
       const response = conversationId
@@ -964,12 +1077,14 @@ export function CreateWorkflowView({
             message: currentInstruction,
             modelConfigId: modelId || null,
             definition: editorDefinition,
+            definitionText: editorDefinitionText,
           })
         : await startWorkflowAiConversation({
             instruction: currentInstruction,
             modelConfigId: modelId || null,
             userDateTime: new Date().toISOString(),
             definition: editorDefinition,
+            definitionText: editorDefinitionText,
           });
       applyWorkflowAiResponse(response, {
         replaceMessageId: processingMessageId,
@@ -1033,6 +1148,55 @@ export function CreateWorkflowView({
     }
   };
 
+  const handleProvisionResources = async (functions: WorkflowAiProposedFunction[]) => {
+    if (!conversationId || generating || saving) return;
+
+    const selectedModelForSend = models.find((model) => model.id === modelId) || null;
+    const processingMessageId = newChatMessageId();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: processingMessageId,
+        role: 'assistant',
+        content: '',
+        createdAt: Date.now(),
+        modelConfigId: modelId || null,
+        modelDisplayName: selectedModelForSend?.label || null,
+        streamingStatus: 'processing',
+      },
+    ]);
+    setGenerating(true);
+    setError(null);
+    try {
+      const response = await provisionWorkflowAiResources({
+        conversationId,
+        functions,
+        modelConfigId: modelId || null,
+      });
+      applyWorkflowAiResponse(response, { replaceMessageId: processingMessageId, animate: true });
+    } catch (err: any) {
+      setError(err.message || 'Failed to create resources.');
+      setMessages((prev) => prev.map((message) => (
+        message.id === processingMessageId
+          ? {
+              ...message,
+              content: `**Error**: ${err.message || 'Failed to create resources.'}`,
+              streamingStatus: undefined,
+              streamingPhase: undefined,
+            }
+          : message
+      )));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleContinueAfterMcp = () => {
+    // Resume the existing resource proposal without manufacturing a new user chat turn. The
+    // backend re-reads the live catalog and tells the model exactly which requirements now match.
+    void handleProvisionResources([]);
+  };
+
   const handleSave = async (activateRevision = false) => {
     if (!definitionStatus.valid) {
       setError(definitionStatus.message);
@@ -1084,6 +1248,35 @@ export function CreateWorkflowView({
         return;
       }
 
+      if (conversationId) {
+        // Persist the latest editor/settings snapshot before finalizing. The dedicated endpoint
+        // permanently links this workspace to the created workflow, so reopening /c/{id} or
+        // /draft/{id} can save a new revision instead of replaying the idempotent create request.
+        flushPendingWorkspaceSave();
+        await workspaceSaveQueueRef.current.catch(() => undefined);
+        const updatingExistingWorkflow = Boolean(linkedWorkflowId);
+        const saveRequest = {
+          workflow: {
+            name: name.trim(),
+            cronExpression: cronExpression.trim() || null,
+            timezone: timezone.trim() || 'UTC',
+            maxAttempts,
+            idempotencyKey: idempotencyKey.trim(),
+            definition,
+          },
+          canvasLayout: positions,
+        };
+        const saved = routeDraftId
+          ? await saveWorkflowAiDraft(conversationId, saveRequest)
+          : await saveWorkflowAiConversation(conversationId, saveRequest);
+        setLinkedWorkflowId(saved.workflow.id);
+        toast.success(updatingExistingWorkflow
+          ? `Revision ${saved.revision.revision} saved${saved.revision.active ? ' and activated' : ''}.`
+          : 'Workflow saved. Future saves from this workspace will create revisions.');
+        onWorkflowCreated(saved.workflow);
+        return;
+      }
+
       const workflow = await createWorkflow({
         name: name.trim(),
         cronExpression: cronExpression.trim() || null,
@@ -1119,7 +1312,7 @@ export function CreateWorkflowView({
 
   const localCredential = () => localCredentialRef.trim() || null;
 
-  const mergeDiscoveredModels = (nextModels: AiModel[]) => {
+  const mergeModels = (nextModels: AiModel[]) => {
     const enabledNextModels = nextModels.filter((model) => model.enabled !== false);
     setModels((current) => [
       ...enabledNextModels,
@@ -1137,117 +1330,41 @@ export function CreateWorkflowView({
     }
   };
 
-  const testLocalEndpoint = async () => {
+  const addLocalModel = async () => {
     const endpoint = discoverEndpoint.trim();
-    if (!endpoint) {
-      setModelActionMessage('Enter an endpoint before testing.');
+    const modelName = localModelName.trim();
+    if (!endpoint || !modelName) {
+      setModelActionMessage('Enter both an endpoint and exact model name.');
       setModelActionSuccess(false);
       return;
     }
 
-    setTestingModel(true);
-    setLocalActionsOpen(false);
+    setAddingModel('local');
     setModelActionMessage(null);
     setModelActionSuccess(null);
-    setDiscoveredModelNames([]);
-
     try {
-      const response = await testAiModel({
-        baseUrl: endpoint,
-        credentialRef: localCredential(),
-      });
-      setModelActionMessage(response.message);
-      setModelActionSuccess(response.success);
-    } catch (err: any) {
-      setModelActionMessage(err.message || 'Failed to test endpoint.');
-      setModelActionSuccess(false);
-    } finally {
-      setTestingModel(false);
-    }
-  };
-
-  const discoverModels = async (endpointOverride?: string) => {
-    const endpoint = (endpointOverride || discoverEndpoint).trim();
-    if (!endpoint) return;
-
-    setAddingModel(true);
-    setLocalActionsOpen(false);
-    setModelActionMessage(null);
-    setModelActionSuccess(null);
-    setDiscoveredModelNames([]);
-
-    try {
-      const discovered = await discoverAiModels({
-        baseUrl: endpoint,
-        credentialRef: localCredential(),
+      const created = await createAiModel({
+        displayName: modelName,
         providerType: 'OPENAI_COMPATIBLE_LOCAL',
+        baseUrl: endpoint,
+        modelName,
+        credential: localCredential(),
+        defaultModel: models.length === 0,
       });
-      const nextModels = discovered.map(toLocalModel);
-      mergeDiscoveredModels(nextModels);
-      setDiscoveredModelNames(nextModels.map((model) => model.label));
-      setModelActionMessage(`Added ${discovered.length} model${discovered.length === 1 ? '' : 's'}.`);
+      const model = toLocalModel(created);
+      mergeModels([model]);
+      selectModel(model.id);
+      setModelActionMessage(`Connected ${model.label}.`);
       setModelActionSuccess(true);
+      setLocalModelName('');
+      setLocalCredentialRef('');
+      setSettingsTab('added');
     } catch (err: any) {
-      setModelActionMessage(err.message || 'Failed to discover models.');
+      setModelActionMessage(err.message || 'Failed to add local model.');
       setModelActionSuccess(false);
-      setDiscoveredModelNames([]);
     } finally {
-      setAddingModel(false);
+      setAddingModel(null);
     }
-  };
-
-  const scanForServers = async () => {
-    const candidates = [
-      'http://host.docker.internal:11434/v1',
-      'http://host.docker.internal:8000/v1',
-      'http://host.docker.internal:8080/v1',
-      'http://host.docker.internal:1234/v1',
-    ];
-    const existingKeys = new Set(models.map((model) => `${model.endpoint}|${model.modelName || model.label}`));
-    const foundServerLabels: string[] = [];
-    const allModels: AiModel[] = [];
-    let totalModels = 0;
-    let alreadyAdded = 0;
-
-    setDiscoveringModels(true);
-    setLocalActionsOpen(false);
-    setModelActionMessage(null);
-    setModelActionSuccess(null);
-    setDiscoveredModelNames([]);
-
-    for (const endpoint of candidates) {
-      try {
-        const discovered = await discoverAiModels({
-          baseUrl: endpoint,
-          credentialRef: localCredential(),
-          providerType: 'OPENAI_COMPATIBLE_LOCAL',
-        });
-        if (discovered.length === 0) continue;
-        const nextModels = discovered.map(toLocalModel);
-        foundServerLabels.push(new URL(endpoint).host);
-        totalModels += nextModels.length;
-        alreadyAdded += nextModels.filter((model) => existingKeys.has(`${model.endpoint}|${model.modelName || model.label}`)).length;
-        allModels.push(...nextModels);
-      } catch {
-        // Keep scanning other Docker-reachable local endpoints.
-      }
-    }
-
-    if (allModels.length === 0) {
-      setModelActionMessage('No local model servers found.');
-      setModelActionSuccess(false);
-      setDiscoveringModels(false);
-      return;
-    }
-
-    mergeDiscoveredModels(allModels);
-    setDiscoveredModelNames(allModels.map((model) => model.label));
-    setDiscoverEndpoint(allModels[0].endpoint);
-    setModelActionMessage(
-      `Found ${foundServerLabels.length} server${foundServerLabels.length === 1 ? '' : 's'} (${foundServerLabels.join(', ')}) with ${totalModels} model${totalModels === 1 ? '' : 's'}${alreadyAdded > 0 ? ` - ${alreadyAdded} already added` : ''}.`,
-    );
-    setModelActionSuccess(true);
-    setDiscoveringModels(false);
   };
 
   const updateEndpointEnabled = async (endpoint: string, enabled: boolean) => {
@@ -1296,49 +1413,6 @@ export function CreateWorkflowView({
     }
   };
 
-  const refreshEndpointModels = async (endpoint: string) => {
-    setManagingModels(true);
-    try {
-      const discovered = await discoverAiModels({ baseUrl: endpoint });
-      mergeDiscoveredModels(discovered.map(toLocalModel));
-      await refreshModelLists();
-      toast.success('Endpoint refreshed');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to refresh endpoint models.');
-    } finally {
-      setManagingModels(false);
-    }
-  };
-
-  const probeAllEndpoints = async () => {
-    const endpoints = [...new Set(allModels.map((model) => model.endpoint))];
-    if (endpoints.length === 0) return;
-
-    setManagingModels(true);
-    try {
-      const results = await Promise.allSettled(
-        endpoints.map((endpoint) => discoverAiModels({ baseUrl: endpoint })),
-      );
-      const discoveredModels = results
-        .filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof discoverAiModels>>> => result.status === 'fulfilled')
-        .flatMap((result) => result.value.map(toLocalModel));
-      if (discoveredModels.length > 0) {
-        mergeDiscoveredModels(discoveredModels);
-      }
-      await refreshModelLists();
-      const failedCount = results.filter((result) => result.status === 'rejected').length;
-      if (failedCount > 0) {
-        toast.warning('Probe finished with unreachable endpoints');
-      } else {
-        toast.success('Probe complete');
-      }
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to probe endpoints.');
-    } finally {
-      setManagingModels(false);
-    }
-  };
-
   const copyEndpoint = async (endpoint: string) => {
     try {
       await navigator.clipboard.writeText(endpoint);
@@ -1357,111 +1431,34 @@ export function CreateWorkflowView({
     setApiModelName('');
     setApiActionMessage(null);
     setApiActionSuccess(null);
-    setApiDiscoveredModelNames([]);
-    setApiActionsOpen(false);
-  };
-
-  const resetApiProvider = () => {
-    const preset = cloudProviderPreset(apiProvider);
-    setApiEndpoint(preset.endpoint);
-    setApiModelName('');
-    setApiActionMessage('Provider defaults restored.');
-    setApiActionSuccess(true);
-    setApiDiscoveredModelNames([]);
-    setApiActionsOpen(false);
-  };
-
-  const testApiEndpoint = async () => {
-    const endpoint = apiEndpoint.trim();
-    if (!endpoint) {
-      setApiActionMessage('Enter a cloud endpoint before testing.');
-      setApiActionSuccess(false);
-      return;
-    }
-
-    setTestingModel(true);
-    setApiActionsOpen(false);
-    setApiActionMessage(null);
-    setApiActionSuccess(null);
-    setApiDiscoveredModelNames([]);
-    try {
-      const response = await testAiModel({
-        baseUrl: endpoint,
-        modelName: apiModelName.trim() || null,
-        credentialRef: apiCredential(),
-      });
-      setApiActionMessage(response.message);
-      setApiActionSuccess(response.success);
-    } catch (err: any) {
-      setApiActionMessage(err.message || 'Failed to test cloud endpoint.');
-      setApiActionSuccess(false);
-    } finally {
-      setTestingModel(false);
-    }
-  };
-
-  const scanApiModels = async () => {
-    const endpoint = apiEndpoint.trim();
-    if (!endpoint) {
-      setApiActionMessage('Enter a cloud endpoint before scanning.');
-      setApiActionSuccess(false);
-      return;
-    }
-
-    setDiscoveringModels(true);
-    setApiActionsOpen(false);
-    setApiActionMessage(null);
-    setApiActionSuccess(null);
-    setApiDiscoveredModelNames([]);
-    try {
-      const discovered = await discoverAiModels({
-        baseUrl: endpoint,
-        credentialRef: apiCredential(),
-        providerType: 'OPENAI_COMPATIBLE_API',
-      });
-      const nextModels = discovered.map(toLocalModel);
-      mergeDiscoveredModels(nextModels);
-      setApiDiscoveredModelNames(nextModels.map((model) => model.label));
-      setApiActionMessage(`Connected ${discovered.length} cloud model${discovered.length === 1 ? '' : 's'}.`);
-      setApiActionSuccess(true);
-      setApiCredentialRef('');
-      setSettingsTab('added');
-    } catch (err: any) {
-      setApiActionMessage(err.message || 'Failed to scan cloud models.');
-      setApiActionSuccess(false);
-    } finally {
-      setDiscoveringModels(false);
-    }
   };
 
   const addApiModel = async () => {
     const endpoint = apiEndpoint.trim();
     const modelName = apiModelName.trim();
     if (!endpoint || !modelName) {
-      setApiActionMessage('Enter both an endpoint and model name, or use Scan models.');
+      setApiActionMessage('Enter both an endpoint and exact model name.');
       setApiActionSuccess(false);
       return;
     }
 
-    setAddingModel(true);
+    setAddingModel('api');
     setApiActionMessage(null);
     setApiActionSuccess(null);
-    setApiDiscoveredModelNames([]);
     try {
       const created = await createAiModel({
         displayName: modelName,
         providerType: 'OPENAI_COMPATIBLE_API',
         baseUrl: endpoint,
         modelName,
-        credentialRef: apiCredential(),
+        credential: apiCredential(),
         defaultModel: models.length === 0,
       });
       const model = toLocalModel(created);
-      mergeDiscoveredModels([model]);
+      mergeModels([model]);
       selectModel(model.id);
       setApiActionMessage(`Connected ${model.label}.`);
       setApiActionSuccess(true);
-      setApiDiscoveredModelNames([model.label]);
       setApiModelName('');
       setApiCredentialRef('');
       setSettingsTab('added');
@@ -1469,7 +1466,7 @@ export function CreateWorkflowView({
       setApiActionMessage(err.message || 'Failed to add cloud model.');
       setApiActionSuccess(false);
     } finally {
-      setAddingModel(false);
+      setAddingModel(null);
     }
   };
 
@@ -1536,36 +1533,6 @@ export function CreateWorkflowView({
   }, [modelPickerOpen]);
 
   useEffect(() => {
-    if (!localActionsOpen) return;
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (localActionsRef.current?.contains(event.target as Node)) return;
-      setLocalActionsOpen(false);
-    };
-
-    document.addEventListener('pointerdown', handlePointerDown);
-
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-    };
-  }, [localActionsOpen]);
-
-  useEffect(() => {
-    if (!apiActionsOpen) return;
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (apiActionsRef.current?.contains(event.target as Node)) return;
-      setApiActionsOpen(false);
-    };
-
-    document.addEventListener('pointerdown', handlePointerDown);
-
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-    };
-  }, [apiActionsOpen]);
-
-  useEffect(() => {
     const textarea = instructionTextareaRef.current;
     if (!textarea) return;
 
@@ -1584,7 +1551,8 @@ export function CreateWorkflowView({
   const handleImportTemplate = (raw: string, fileName?: string) => {
     try {
       const parsed = parseDefinition(raw);
-      setDefinitionText(formatJson(parsed));
+      const formattedDefinition = formatJson(parsed);
+      handleDefinitionTextChange(formattedDefinition);
       setCanvasNodePositions({});
       setValidationIssues([]);
       setError(null);
@@ -1645,6 +1613,17 @@ export function CreateWorkflowView({
       onToggleThinking={toggleThinking}
       regeneratingMessageId={regeneratingMessageId}
       onRegenerateMessage={handleRegenerateMessage}
+      renderMessageAttachment={(message) => message.resourcePlan ? (
+        <ResourcePlanCard
+          plan={message.resourcePlan}
+          activePlan={message.id === activeResourcePlanMessageId ? activeResourcePlan : null}
+          busy={generating}
+          resolved={message.id !== activeResourcePlanMessageId}
+          onApprove={handleProvisionResources}
+          onContinue={handleContinueAfterMcp}
+          onOpenMcpServers={() => onNavigate?.('/mcp')}
+        />
+      ) : undefined}
       chatInputNode={composerNode({
         placeholder: 'Ask for a change to this workflow...',
         onSubmit: () => handleSidebarPrompt(),
@@ -1685,6 +1664,7 @@ export function CreateWorkflowView({
           canSave={canSave}
           onSave={() => void handleSave(Boolean(revisionEdit?.workflow.cronExpression))}
           onSaveWithoutActivation={revisionEdit ? () => void handleSave(false) : undefined}
+          saveCreatesRevision={Boolean(linkedWorkflowId)}
           revisionEdit={revisionEdit ? {
             baseRevision: revisionEdit.baseRevision.revision,
             recurring: Boolean(revisionEdit.workflow.cronExpression),
@@ -1723,28 +1703,17 @@ export function CreateWorkflowView({
           onSettingsTabChange={setSettingsTab}
           onClose={() => setAddModelOpen(false)}
           fieldClass={fieldClass}
-          localActionsRef={localActionsRef}
-          localActionsOpen={localActionsOpen}
-          setLocalActionsOpen={setLocalActionsOpen}
           discoverEndpoint={discoverEndpoint}
           onDiscoverEndpointChange={setDiscoverEndpoint}
-          onDiscoverModels={discoverModels}
-          onScanForServers={scanForServers}
-          onTestLocalEndpoint={testLocalEndpoint}
+          localModelName={localModelName}
+          onLocalModelNameChange={setLocalModelName}
+          onAddLocalModel={addLocalModel}
           addingModel={addingModel}
-          testingModel={testingModel}
-          discoveringModels={discoveringModels}
-          showLocalCredentialRef={showLocalCredentialRef}
-          setShowLocalCredentialRef={setShowLocalCredentialRef}
           localCredentialRef={localCredentialRef}
           onLocalCredentialRefChange={setLocalCredentialRef}
           localEndpointNeedsDockerHint={localEndpointNeedsDockerHint}
           modelActionMessage={modelActionMessage}
           modelActionSuccess={modelActionSuccess}
-          discoveredModelNames={discoveredModelNames}
-          apiActionsRef={apiActionsRef}
-          apiActionsOpen={apiActionsOpen}
-          setApiActionsOpen={setApiActionsOpen}
           apiProvider={apiProvider}
           onApiProviderChange={changeApiProvider}
           apiEndpoint={apiEndpoint}
@@ -1753,22 +1722,16 @@ export function CreateWorkflowView({
           onApiModelNameChange={setApiModelName}
           apiCredentialRef={apiCredentialRef}
           onApiCredentialRefChange={setApiCredentialRef}
-          onTestApiEndpoint={testApiEndpoint}
-          onScanApiModels={scanApiModels}
-          onResetApiProvider={resetApiProvider}
           onAddApiModel={addApiModel}
           apiActionMessage={apiActionMessage}
           apiActionSuccess={apiActionSuccess}
-          apiDiscoveredModelNames={apiDiscoveredModelNames}
           endpointGroups={endpointGroups}
           expandedEndpoint={expandedEndpoint}
           setExpandedEndpoint={setExpandedEndpoint}
           managingModels={managingModels}
-          onProbeAllEndpoints={probeAllEndpoints}
           onCopyEndpoint={copyEndpoint}
           onUpdateEndpointEnabled={updateEndpointEnabled}
           onDeleteEndpointModels={deleteEndpointModels}
-          onRefreshEndpointModels={refreshEndpointModels}
           onUpdateSingleModelEnabled={updateSingleModelEnabled}
         />
       )}
