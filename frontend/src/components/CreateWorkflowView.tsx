@@ -30,6 +30,7 @@ import {
   type WorkflowAiProposedFunction,
   type WorkflowAiResourcePlan,
   type WorkflowAiResponse,
+  type WorkflowAiStreamEvent,
   type WorkflowAiWorkspaceRequest,
   type WorkflowDefinitionResponseDTO,
   type WorkflowResponseDTO,
@@ -819,6 +820,69 @@ export function CreateWorkflowView({
     )));
   };
 
+  /**
+   * Feeds live turn frames into the pending assistant bubble.
+   *
+   * Returns the handler plus a `streamed()` probe: when real reasoning already arrived, the final
+   * response must not replay the typewriter animation or the user would read it twice.
+   */
+  const createStreamHandler = (targetMessageId: string) => {
+    let currentPass = 0;
+    let receivedThinking = false;
+
+    const handleEvent = (event: WorkflowAiStreamEvent) => {
+      if (event.type === 'ERROR') {
+        // The rejected socket promise renders the failure; a duplicate here would race it.
+        return;
+      }
+      // A later pass supersedes the previous one, so its reasoning replaces rather than appends.
+      const startsNewPass = event.pass > currentPass;
+      if (startsNewPass) {
+        currentPass = event.pass;
+        receivedThinking = false;
+      }
+
+      updateMessageById(targetMessageId, (message) => {
+        const base: ChatMessage = startsNewPass
+          ? { ...message, thinkingContent: null }
+          : message;
+        if (event.type === 'STAGE') {
+          return {
+            ...base,
+            streamingStatus: 'streaming',
+            streamingPhase: 'thinking',
+            streamingStage: event.stage ?? null,
+          };
+        }
+        if (event.type === 'THINKING_DELTA') {
+          return {
+            ...base,
+            streamingStatus: 'streaming',
+            streamingPhase: 'thinking',
+            thinkingContent: (base.thinkingContent || '') + (event.text || ''),
+          };
+        }
+        // ANSWER_PROGRESS: the envelope is JSON under construction, so report the phase only.
+        return {
+          ...base,
+          streamingStatus: 'streaming',
+          streamingPhase: 'answer',
+        };
+      });
+
+      if (event.type === 'THINKING_DELTA' && !receivedThinking) {
+        receivedThinking = true;
+        setExpandedThinkingMessageIds((current) => {
+          const next = new Set(current);
+          next.add(targetMessageId);
+          return next;
+        });
+      }
+    };
+
+    return { handleEvent, streamed: () => currentPass > 0 };
+  };
+
   const streamAssistantMessage = (
     assistantMessage: ChatMessage,
     replaceMessageId?: string,
@@ -882,6 +946,7 @@ export function CreateWorkflowView({
         ...assistantMessage,
         streamingStatus: undefined,
         streamingPhase: undefined,
+        streamingStage: undefined,
       }));
     };
 
@@ -1070,6 +1135,8 @@ export function CreateWorkflowView({
       ? inProgressEditorText(editorDefinition)
       : null;
 
+    const stream = createStreamHandler(processingMessageId);
+
     try {
       const response = conversationId
         ? await continueWorkflowAiConversation({
@@ -1078,17 +1145,19 @@ export function CreateWorkflowView({
             modelConfigId: modelId || null,
             definition: editorDefinition,
             definitionText: editorDefinitionText,
-          })
+          }, stream.handleEvent)
         : await startWorkflowAiConversation({
             instruction: currentInstruction,
             modelConfigId: modelId || null,
             userDateTime: new Date().toISOString(),
             definition: editorDefinition,
             definitionText: editorDefinitionText,
-          });
+          }, stream.handleEvent);
       applyWorkflowAiResponse(response, {
         replaceMessageId: processingMessageId,
-        animate: true,
+        // Replaying the typewriter over reasoning the user already watched arrive would show it
+        // twice; fall back to the animation only when nothing streamed (REST or an old backend).
+        animate: !stream.streamed(),
       });
       if (startingNewConversation) {
         onNavigate?.(`/c/${encodeURIComponent(response.conversationId)}`, { replace: true });
@@ -1102,6 +1171,7 @@ export function CreateWorkflowView({
               content: `**Error**: ${err.message || 'Failed to generate workflow.'}`,
               streamingStatus: undefined,
               streamingPhase: undefined,
+              streamingStage: undefined,
             }
           : message
       )));

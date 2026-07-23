@@ -7,8 +7,8 @@ import com.job.scheduler.workflow.asl.validation.AslValidationResult;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
-import dev.langchain4j.model.output.Response;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -24,7 +24,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class WorkflowGenerationService {
 
-    private final ObjectProvider<ChatLanguageModel> chatLanguageModelProvider;
+    private final ObjectProvider<ChatModel> chatModelProvider;
     private final WorkflowAiResourceCatalogService resourceCatalogService;
     private final AslDefinitionValidator validator;
     private final ObjectMapper objectMapper;
@@ -57,9 +57,9 @@ public class WorkflowGenerationService {
             """;
 
     public WorkflowGenerationResponseDTO generateWorkflow(String instruction) {
-        ChatLanguageModel chatLanguageModel = chatLanguageModelProvider.getIfAvailable();
-        if (chatLanguageModel == null) {
-            throw new IllegalStateException("AI ChatLanguageModel is not configured. Please configure an AI provider for LangChain4j.");
+        ChatModel chatModel = chatModelProvider.getIfAvailable();
+        if (chatModel == null) {
+            throw new IllegalStateException("AI ChatModel is not configured. Please configure an AI provider for LangChain4j.");
         }
 
         String systemPrompt = String.format(
@@ -76,8 +76,8 @@ public class WorkflowGenerationService {
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             log.info("Generating workflow attempt {}/{}", attempt, MAX_ATTEMPTS);
-            Response<AiMessage> response = chatLanguageModel.generate(List.of(sysMsg, userMsg));
-            rawOutput = response.content().text().trim();
+            ChatResponse response = chatModel.chat(List.of(sysMsg, userMsg));
+            rawOutput = response.aiMessage().text().trim();
             
             // Remove markdown formatting if present
             if (rawOutput.startsWith("```json")) {

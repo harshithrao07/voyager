@@ -35,8 +35,10 @@ import com.job.scheduler.workflow.asl.validation.AslValidationIssue;
 import com.job.scheduler.workflow.asl.validation.AslValidationResult;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
-import dev.langchain4j.model.output.Response;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ResponseFormat;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -73,6 +75,9 @@ class WorkflowAiConversationServiceTest {
     private AiModelConfigService aiModelConfigService;
     @Mock
     private WorkflowAiModelResolver modelResolver;
+    // Defaults to isStreaming() == false, so these turns take the blocking non-streaming path.
+    @Mock
+    private WorkflowAiStreamBroker streamBroker;
     @Mock
     private WorkflowAiConversationRepository conversationRepository;
     @Mock
@@ -94,7 +99,7 @@ class WorkflowAiConversationServiceTest {
     @Mock
     private FunctionRuntimePolicy functionRuntimePolicy;
     @Mock
-    private ChatLanguageModel chatLanguageModel;
+    private ChatModel chatModel;
 
     private WorkflowAiConversationService service;
     private AiModelConfig modelConfig;
@@ -104,6 +109,7 @@ class WorkflowAiConversationServiceTest {
         service = new WorkflowAiConversationService(
                 aiModelConfigService,
                 modelResolver,
+                streamBroker,
                 conversationRepository,
                 messageRepository,
                 aslDefinitionValidator,
@@ -145,10 +151,10 @@ class WorkflowAiConversationServiceTest {
                 """);
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("""
                         {"stage":"ASL_READY","message":"ASL is ready.","aslDefinition":{"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}}
                         """)
@@ -171,7 +177,7 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.validationIssues()).isEmpty();
         assertThat(firstUserMessage().getContent()).isEqualTo("send a daily digest");
         ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel).generate(promptCaptor.capture());
+        verify(chatModel).chat(promptCaptor.capture());
         assertThat(promptCaptor.getValue().toString())
                 .contains("User date/time context: 2026-06-28T09:00:00+05:30");
     }
@@ -180,7 +186,7 @@ class WorkflowAiConversationServiceTest {
     void startConversationIncludesLiveFunctionAndMcpCatalog() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
         when(resourceCatalogService.buildCatalog()).thenReturn("""
@@ -189,7 +195,7 @@ class WorkflowAiConversationServiceTest {
                 MCP TOOLS:
                 - voyager://mcp/crm/get-customer [trust: READ_ONLY]
                 """);
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("""
                         {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"Which customer ID should I use?"}
                         """)
@@ -203,7 +209,7 @@ class WorkflowAiConversationServiceTest {
         );
 
         ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel).generate(promptCaptor.capture());
+        verify(chatModel).chat(promptCaptor.capture());
         assertThat(promptCaptor.getValue().toString())
                 .contains("Available Voyager Task resources (current registry)")
                 .contains("voyager://function/normalize-order@v1")
@@ -222,10 +228,10 @@ class WorkflowAiConversationServiceTest {
     void blankAssistantMessageUsesArtifactFallbackAndStillPromotesValidAsl() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("""
                         {"stage":"ASL_READY","message":"","aslDefinition":{"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}}
                         """)
@@ -241,7 +247,7 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
         assertThat(response.message()).isEqualTo("Generated workflow definition.");
         assertThat(response.aslDefinition().path("StartAt").stringValue()).isEqualTo("Done");
-        verify(chatLanguageModel).generate(anyList());
+        verify(chatModel).chat(anyList());
     }
 
     @Test
@@ -469,9 +475,9 @@ class WorkflowAiConversationServiceTest {
         draft.setModelConfig(null);
         when(conversationRepository.findByIdForUpdate(draftId)).thenReturn(Optional.of(draft));
         when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(AiMessage.from("""
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
                 {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"Which source should I use?"}
                 """)));
 
@@ -615,7 +621,7 @@ class WorkflowAiConversationServiceTest {
                 """);
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
         when(aslDefinitionValidator.validate(adaptiveCard)).thenReturn(
@@ -626,11 +632,11 @@ class WorkflowAiConversationServiceTest {
                         "StartAt is required"
                 )))
         );
-        when(chatLanguageModel.generate(anyList())).thenReturn(
-                Response.from(AiMessage.from("""
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from("""
                         {"stage":"ASL_READY","message":"ready","aslDefinition":{"type":"AdaptiveCard","body":[]}}
                         """)),
-                Response.from(AiMessage.from("""
+                aiResponse(AiMessage.from("""
                         {"stage":"ASL_READY","message":"repaired","aslDefinition":{"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}}
                         """))
         );
@@ -645,7 +651,7 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
         assertThat(response.validationIssues()).isEmpty();
         assertThat(response.aslDefinition().path("StartAt").stringValue()).isEqualTo("Done");
-        verify(chatLanguageModel, times(2)).generate(anyList());
+        verify(chatModel, times(2)).chat(anyList());
     }
 
     @Test
@@ -662,7 +668,7 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(conversation))
                 .thenReturn(List.of());
         when(aslDefinitionValidator.validate(invalidDefinition)).thenReturn(
@@ -676,10 +682,10 @@ class WorkflowAiConversationServiceTest {
         String rejectedResponse = """
                 {"stage":"ASL_READY","message":"ready","aslDefinition":{"StartAt":"Broken","States":{"Broken":{"Type":"Pass","OutputPath":"$","End":true}}}}
                 """;
-        when(chatLanguageModel.generate(anyList())).thenReturn(
-                Response.from(AiMessage.from(rejectedResponse)),
-                Response.from(AiMessage.from(rejectedResponse)),
-                Response.from(AiMessage.from(rejectedResponse))
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from(rejectedResponse)),
+                aiResponse(AiMessage.from(rejectedResponse)),
+                aiResponse(AiMessage.from(rejectedResponse))
         );
 
         WorkflowAiResponseDTO response = service.continueConversation(
@@ -695,7 +701,7 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.aslDefinition().path("StartAt").stringValue()).isEqualTo("Done");
         assertThat(objectMapper.readTree(conversation.getDraftAsl()).path("StartAt").stringValue())
                 .isEqualTo("Done");
-        verify(chatLanguageModel, times(3)).generate(anyList());
+        verify(chatModel, times(3)).chat(anyList());
     }
 
     @Test
@@ -705,10 +711,10 @@ class WorkflowAiConversationServiceTest {
                 """);
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("""
                         {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"Which task should retry?"}
                         """)
@@ -725,7 +731,7 @@ class WorkflowAiConversationServiceTest {
         assertThat(userMessage.getContent()).isEqualTo("add a retry to the fetch step");
         assertThat(userMessage.getStructuredPayload()).contains("FetchOrder");
         ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel).generate(promptCaptor.capture());
+        verify(chatModel).chat(promptCaptor.capture());
         assertThat(promptCaptor.getValue().toString())
                 .contains("Current ASL in the user's editor")
                 .contains("FetchOrder");
@@ -738,10 +744,10 @@ class WorkflowAiConversationServiceTest {
                 """);
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("""
                         {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"What should it do?"}
                         """)
@@ -764,10 +770,10 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(conversation))
                 .thenReturn(List.of());
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("""
                         {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"Sure."}
                         """)
@@ -797,10 +803,10 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(conversation))
                 .thenReturn(List.of());
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("""
                         {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"Got it."}
                         """)
@@ -817,7 +823,7 @@ class WorkflowAiConversationServiceTest {
                 .isEqualTo("now alert me when it finishes");
         assertThat(conversation.getDraftAsl()).contains("Wait");
         ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel).generate(promptCaptor.capture());
+        verify(chatModel).chat(promptCaptor.capture());
         assertThat(promptCaptor.getValue().toString())
                 .contains("Latest ASL definition (authoritative)")
                 .contains("Wait");
@@ -834,10 +840,10 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(conversation))
                 .thenReturn(List.of());
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("""
                         {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"I see your edit."}
                         """)
@@ -854,7 +860,7 @@ class WorkflowAiConversationServiceTest {
         // The last valid ASL stays authoritative; the incomplete buffer is not promoted to draftAsl.
         assertThat(conversation.getDraftAsl()).doesNotContain("Wai\"");
         ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel).generate(promptCaptor.capture());
+        verify(chatModel).chat(promptCaptor.capture());
         assertThat(promptCaptor.getValue().toString())
                 .contains("Current editor buffer (work in progress")
                 .contains("not valid JSON yet")
@@ -874,7 +880,7 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(conversation))
                 .thenReturn(List.of());
         when(aslDefinitionValidator.validate(invalidEditorDefinition)).thenReturn(
@@ -885,7 +891,7 @@ class WorkflowAiConversationServiceTest {
                         "ResultPath is not supported in the JSONata dialect"
                 )))
         );
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("""
                         {"stage":"ASL_UNDER_REVIEW","message":"Remove ResultPath."}
                         """)
@@ -901,7 +907,7 @@ class WorkflowAiConversationServiceTest {
         assertThat(objectMapper.readTree(conversation.getDraftAsl()).path("StartAt").stringValue())
                 .isEqualTo("Done");
         ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel).generate(promptCaptor.capture());
+        verify(chatModel).chat(promptCaptor.capture());
         assertThat(promptCaptor.getValue().toString())
                 .contains("Candidate ASL in the user's editor (not authoritative)")
                 .contains("ResultPath")
@@ -932,17 +938,17 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(secondReply));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(conversation))
                 .thenReturn(List.of(userMessage, firstReply, secondReply));
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("{\"stage\":\"COLLECTING_WORKFLOW_DETAILS\",\"message\":\"third attempt\"}")
         ));
 
         service.regenerateMessage(secondReply.getId(), modelConfig.getId());
 
         ArgumentCaptor<List<ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel).generate(captor.capture());
+        verify(chatModel).chat(captor.capture());
         String prompt = captor.getValue().toString();
         assertThat(prompt).contains("ORIGINAL_USER_ASK");
         assertThat(prompt).doesNotContain("DISCARDED_ATTEMPT_ONE");
@@ -1011,10 +1017,10 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(conversation))
                 .thenReturn(List.of(originalUser, discardedReply, activeRetry, followUp));
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("{\"stage\":\"COLLECTING_WORKFLOW_DETAILS\",\"message\":\"continued\"}")
         ));
 
@@ -1026,7 +1032,7 @@ class WorkflowAiConversationServiceTest {
         );
 
         ArgumentCaptor<List<ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel).generate(captor.capture());
+        verify(chatModel).chat(captor.capture());
         String prompt = captor.getValue().toString();
         assertThat(prompt)
                 .contains("ORIGINAL_REQUIREMENT")
@@ -1071,14 +1077,14 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(conversation))
                 .thenReturn(List.of(oldUser, oldAssistant, currentUser));
-        when(chatLanguageModel.generate(anyList())).thenReturn(
-                Response.from(AiMessage.from(
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from(
                         "The user confirmed the old requirement and the assistant recorded the old decision."
                 )),
-                Response.from(AiMessage.from(
+                aiResponse(AiMessage.from(
                         "{\"stage\":\"COLLECTING_WORKFLOW_DETAILS\",\"message\":\"continued with context\"}"
                 ))
         );
@@ -1091,7 +1097,7 @@ class WorkflowAiConversationServiceTest {
         );
 
         ArgumentCaptor<List<ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel, times(2)).generate(captor.capture());
+        verify(chatModel, times(2)).chat(captor.capture());
         List<List<ChatMessage>> calls = captor.getAllValues();
         assertThat(calls.get(0).toString())
                 .contains("OLD_REQUIREMENT_")
@@ -1156,14 +1162,14 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(conversation))
                 .thenReturn(List.of(alpha, bravo, charlie, latest));
-        when(chatLanguageModel.generate(anyList())).thenReturn(
-                Response.from(AiMessage.from(
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from(
                         "It seems like the user accidentally typed many zero characters."
                 )),
-                Response.from(AiMessage.from("""
+                aiResponse(AiMessage.from("""
                         {"stage":"ASL_READY","message":"Context retained."}
                         """))
         );
@@ -1182,7 +1188,7 @@ class WorkflowAiConversationServiceTest {
                 .contains("CHARLIE-43")
                 .doesNotContain("accidentally typed many zero characters");
         ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel, times(2)).generate(promptCaptor.capture());
+        verify(chatModel, times(2)).chat(promptCaptor.capture());
         assertThat(promptCaptor.getAllValues().get(1).toString())
                 .contains("Exact source identifiers (verbatim)")
                 .contains("ALPHA-17")
@@ -1196,10 +1202,10 @@ class WorkflowAiConversationServiceTest {
     void emptyAssistantReplyFailsInsteadOfPersistingABlankMessage() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("")
         ));
 
@@ -1218,15 +1224,126 @@ class WorkflowAiConversationServiceTest {
     }
 
     @Test
+    void jsonModeIsRequestedWhenTheEndpointSupportsIt() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(modelResolver.supportsJsonMode(modelConfig)).thenReturn(true);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"which city?"}
+                """)));
+
+        service.startConversation("build a workflow", modelConfig.getId(), null, null);
+
+        ArgumentCaptor<ChatRequest> request = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModel).chat(request.capture());
+        // Constrained decoding is what makes malformed JSON impossible; without this the reply is
+        // only as well-formed as the model chose to be.
+        assertThat(request.getValue().responseFormat()).isEqualTo(ResponseFormat.JSON);
+    }
+
+    @Test
+    void anEndpointThatRejectsJsonModeFallsBackAndIsNotAskedAgain() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(modelResolver.supportsJsonMode(modelConfig)).thenReturn(true);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
+        when(chatModel.chat(any(ChatRequest.class)))
+                .thenThrow(new RuntimeException("{\"error\":{\"message\":\"response_format is not "
+                        + "supported by this model\"}}"));
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"which city?"}
+                """)));
+
+        service.startConversation("build a workflow", modelConfig.getId(), null, null);
+
+        // The turn still completes, and the endpoint is remembered so later turns skip the attempt.
+        verify(chatModel).chat(anyList());
+        verify(modelResolver).markJsonModeUnsupported(modelConfig);
+    }
+
+    @Test
+    void aQuotaRejectionIsNotMistakenForMissingJsonModeSupport() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(modelResolver.supportsJsonMode(modelConfig)).thenReturn(true);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
+        when(chatModel.chat(any(ChatRequest.class))).thenThrow(new RuntimeException(
+                "{\"errors\":[{\"message\":\"you have used up your daily free allocation of 10,000 "
+                        + "neurons\"}]}"
+        ));
+
+        assertThatThrownBy(() -> service.startConversation(
+                "build a workflow",
+                modelConfig.getId(),
+                null,
+                null
+        )).isInstanceOf(IllegalStateException.class);
+
+        // Retrying without JSON mode would fail identically, so it must not double the user's wait
+        // or permanently disable JSON mode for an endpoint that supports it fine.
+        verify(chatModel, never()).chat(anyList());
+        verify(modelResolver, never()).markJsonModeUnsupported(modelConfig);
+    }
+
+    @Test
+    void providerRejectionSurfacesTheProviderMessage() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        // Verbatim Cloudflare quota rejection. The library hands it over as a raw JSON body inside a
+        // generic RuntimeException, which used to reach the UI as "An unexpected error occurred".
+        when(chatModel.chat(anyList())).thenThrow(new RuntimeException(
+                "dev.ai4j.openai4j.OpenAiHttpException: {\"errors\":[{\"message\":\"AiError: you "
+                        + "have used up your daily free allocation of 10,000 neurons, please "
+                        + "upgrade to Cloudflare's Workers Paid plan if you would like to continue "
+                        + "usage.\",\"code\":4006}],\"success\":false}"
+        ));
+
+        assertThatThrownBy(() -> service.startConversation(
+                "build a workflow",
+                modelConfig.getId(),
+                null,
+                null
+        ))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("daily free allocation")
+                .hasMessageContaining("AI provider rejected");
+    }
+
+    @Test
+    void openAiShapedProviderRejectionIsAlsoUnwrapped() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenThrow(new RuntimeException(
+                "{\"error\":{\"message\":\"Incorrect API key provided\",\"code\":\"invalid_api_key\"}}"
+        ));
+
+        assertThatThrownBy(() -> service.startConversation(
+                "build a workflow",
+                modelConfig.getId(),
+                null,
+                null
+        ))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Incorrect API key provided");
+    }
+
+    @Test
     void malformedAssistantJsonIsNotStoredAsStructuredPayload() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
         // Small local models routinely emit not-quite-JSON; structured_payload is a json column,
         // so storing it raw used to fail the insert and lose the whole turn.
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("{\"message\":\"here\",\"Fn::Equals\":[{\"States.TaskFailed\"}]}")
         ));
 
@@ -1234,7 +1351,12 @@ class WorkflowAiConversationServiceTest {
 
         WorkflowAiMessage assistantMessage = firstMessageWithRole(WorkflowAiMessageRole.ASSISTANT);
         assertThat(assistantMessage.getStructuredPayload()).isNull();
-        assertThat(assistantMessage.getContent()).contains("Fn::Equals");
+        // The broken reply is a debugging artifact and belongs in the log, not pasted into the
+        // conversation where it reads as a crash. The user gets the failure and what to do next.
+        assertThat(assistantMessage.getContent())
+                .doesNotContain("Fn::Equals")
+                .contains("failed validation")
+                .contains("Retry");
     }
 
     @Test
@@ -1246,10 +1368,10 @@ class WorkflowAiConversationServiceTest {
                 """);
         when(conversationRepository.findByIdForUpdate(conversationId))
                 .thenReturn(Optional.of(conversation));
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(conversation))
                 .thenReturn(List.of());
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("""
                         {"stage":"ASL_UNDER_REVIEW","message":"Fix the StartAt target."}
                         """)
@@ -1535,10 +1657,10 @@ class WorkflowAiConversationServiceTest {
     void proposesResourcesWhenModelReturnsResourcePlan() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(AiMessage.from("""
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
                 {"stage":"RESOURCES_PROPOSED","message":"I need a helper function first.",
                  "resourcePlan":{"functions":[{"name":"normalize-address","description":"Cleans an address",
                  "languageId":71,"sourceCode":"import sys\\nprint(sys.stdin.read())",
@@ -1563,7 +1685,7 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.assistantMessage().resourcePlan()).isEqualTo(response.resourcePlan());
         assertThat(response.resourcePlanMessageId()).isEqualTo(response.assistantMessage().id());
         ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel, times(2)).generate(promptCaptor.capture());
+        verify(chatModel, times(2)).chat(promptCaptor.capture());
         assertThat(promptCaptor.getAllValues().get(0).toString())
                 .doesNotContain("FUNCTION CREATION CONTRACT")
                 .doesNotContain("SUPPORTED FUNCTION LANGUAGES")
@@ -1666,7 +1788,7 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of(owner));
         when(messageRepository.findById(owner.getId())).thenReturn(Optional.of(owner));
@@ -1676,7 +1798,7 @@ class WorkflowAiConversationServiceTest {
         );
         when(resourceCatalogService.findMcpRequirementMatches(any()))
                 .thenReturn(List.of(searchMatch), List.of());
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(AiMessage.from("""
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
                 {"stage":"RESOURCES_PROPOSED","message":"Attach Slack next.",
                  "resourcePlan":{"functions":[],"mcpRequirements":[{
                    "capability":"send a Slack message","suggestedToolName":"slack"
@@ -1699,7 +1821,7 @@ class WorkflowAiConversationServiceTest {
     void repairsResourcePlanWhenRequestedMcpCapabilityAlreadyExists() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
         var match = new WorkflowAiResourceCatalogService.McpRequirementMatch(
@@ -1708,14 +1830,14 @@ class WorkflowAiConversationServiceTest {
         );
         when(resourceCatalogService.findMcpRequirementMatches(any()))
                 .thenReturn(List.of(match), List.of());
-        when(chatLanguageModel.generate(anyList()))
+        when(chatModel.chat(anyList()))
                 .thenReturn(
-                        Response.from(AiMessage.from("""
+                        aiResponse(AiMessage.from("""
                                 {"stage":"RESOURCES_PROPOSED","message":"Attach search first.",
                                  "resourcePlan":{"functions":[],"mcpRequirements":[
                                  {"capability":"search the web","suggestedToolName":"tavily"}]}}
                                 """)),
-                        Response.from(AiMessage.from("""
+                        aiResponse(AiMessage.from("""
                                 {"stage":"ASL_READY","message":"Using the attached search tool.",
                                  "aslDefinition":{"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}}
                                 """))
@@ -1731,7 +1853,7 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
         assertThat(response.resourcePlan()).isNull();
         ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel, times(2)).generate(promptCaptor.capture());
+        verify(chatModel, times(2)).chat(promptCaptor.capture());
         assertThat(promptCaptor.getAllValues().get(0).toString())
                 .doesNotContain("FUNCTION CREATION CONTRACT");
         assertThat(promptCaptor.getAllValues().get(1).toString())
@@ -1742,20 +1864,20 @@ class WorkflowAiConversationServiceTest {
     void repairsFunctionPlaceholderThatWasIncorrectlyProposedAsMcp() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
         when(resourceCatalogService.findMcpRequirementMatches(any()))
                 .thenReturn(List.of());
-        when(chatLanguageModel.generate(anyList()))
+        when(chatModel.chat(anyList()))
                 .thenReturn(
-                        Response.from(AiMessage.from("""
+                        aiResponse(AiMessage.from("""
                                 {"stage":"RESOURCES_PROPOSED","message":"Need a title helper.",
                                  "resourcePlan":{"functions":[],"mcpRequirements":[{
                                  "capability":"shorten and title-case text",
                                  "suggestedToolName":"voyager://function/"}]}}
                                 """)),
-                        Response.from(AiMessage.from("""
+                        aiResponse(AiMessage.from("""
                                 {"stage":"RESOURCES_PROPOSED","message":"Review the title helper.",
                                  "resourcePlan":{"functions":[{"name":"format-title",
                                  "description":"Shortens and title-cases text","languageId":71,
@@ -1776,7 +1898,7 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.resourcePlan().functions().get(0).name())
                 .isEqualTo("format-title");
         ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel, times(3)).generate(promptCaptor.capture());
+        verify(chatModel, times(3)).chat(promptCaptor.capture());
         assertThat(promptCaptor.getAllValues().get(0).toString())
                 .doesNotContain("FUNCTION CREATION CONTRACT");
         assertThat(promptCaptor.getAllValues().get(1).toString())
@@ -1815,7 +1937,7 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of(owner));
         var match = new WorkflowAiResourceCatalogService.McpRequirementMatch(
@@ -1824,7 +1946,7 @@ class WorkflowAiConversationServiceTest {
         );
         when(resourceCatalogService.findMcpRequirementMatches(any()))
                 .thenReturn(List.of(match));
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(AiMessage.from("""
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
                 {"stage":"RESOURCES_PROPOSED","message":"Attach search.",
                  "resourcePlan":{"functions":[],"mcpRequirements":[{
                  "capability":"search the web","suggestedToolName":"tavily"}]}}
@@ -1843,7 +1965,7 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.assistantMessage().content())
                 .startsWith("I couldn't apply the generated change");
         assertThat(conversation.getResourcePlan()).isEqualTo(originalPlan);
-        verify(chatLanguageModel, times(3)).generate(anyList());
+        verify(chatModel, times(3)).chat(anyList());
     }
 
     @Test
@@ -1864,7 +1986,7 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
         when(resourceCatalogService.findMcpRequirementMatches(any())).thenReturn(List.of(
@@ -1873,7 +1995,7 @@ class WorkflowAiConversationServiceTest {
                         "voyager://mcp/tavily/tavily_search"
                 )
         ));
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(AiMessage.from("""
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
                 {"stage":"ASL_READY","message":"Ready.",
                  "aslDefinition":{"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}}
                 """)));
@@ -1881,7 +2003,7 @@ class WorkflowAiConversationServiceTest {
         service.provisionResources(conversationId, List.of(), modelConfig.getId());
 
         ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
-        verify(chatLanguageModel).generate(promptCaptor.capture());
+        verify(chatModel).chat(promptCaptor.capture());
         assertThat(promptCaptor.getValue().toString())
                 .contains("search the web -> voyager://mcp/tavily/tavily_search")
                 .contains("Do not propose those MCP capabilities again");
@@ -1901,7 +2023,7 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
 
@@ -1916,7 +2038,7 @@ class WorkflowAiConversationServiceTest {
                         true, false, "code", null, List.of(), null, null, 2.0, 10.0, 131072,
                         1024, 65536, false, "note", List.of(), FunctionVersionStatus.AVAILABLE,
                         Instant.now(), Instant.now()));
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(AiMessage.from("""
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
                 {"stage":"ASL_READY","message":"All set.",
                  "aslDefinition":{"StartAt":"Clean","States":{"Clean":{"Type":"Succeed"}}}}
                 """)));
@@ -1946,7 +2068,7 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(Optional.of(conversation));
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
 
@@ -1963,7 +2085,7 @@ class WorkflowAiConversationServiceTest {
                         Instant.now(), Instant.now()));
         // The function is created, but a Slack capability still has no attached MCP server, so the
         // model re-proposes only the unmet requirement and stays in the review stage.
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(AiMessage.from("""
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
                 {"stage":"RESOURCES_PROPOSED","message":"Attach a Slack MCP server, then continue.",
                  "resourcePlan":{"functions":[],"mcpRequirements":[{"capability":"send a Slack message",
                  "reason":"the final step posts to #alerts","trustLevelHint":"WRITE"}]}}
@@ -1988,11 +2110,11 @@ class WorkflowAiConversationServiceTest {
     void parsesResourcePlanDespiteJsonCommentsAndUnescapedNewlines() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
-        when(modelResolver.resolve(modelConfig)).thenReturn(chatLanguageModel);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
         // Near-JSON a small model routinely emits: a // comment and a real newline inside sourceCode.
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(AiMessage.from(
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from(
                 "{\"stage\":\"RESOURCES_PROPOSED\",\"message\":\"Proposing a function.\","
                         + "\"resourcePlan\":{\"functions\":[{\"name\":\"shorten_and_title_case\","
                         + "\"description\":\"Shorten\",\"languageId\":71, // Python\n"
@@ -2054,5 +2176,10 @@ class WorkflowAiConversationServiceTest {
                     }
                     return message;
                 });
+    }
+
+    /** langchain4j 1.x replaced Response<AiMessage> with ChatResponse, which has no from(). */
+    private static ChatResponse aiResponse(AiMessage message) {
+        return ChatResponse.builder().aiMessage(message).build();
     }
 }

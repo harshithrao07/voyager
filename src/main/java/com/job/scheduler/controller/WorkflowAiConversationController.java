@@ -14,9 +14,11 @@ import com.job.scheduler.dto.WorkflowAiSaveWorkflowResponseDTO;
 import com.job.scheduler.dto.WorkflowAiStartRequestDTO;
 import com.job.scheduler.dto.WorkflowAiWorkspaceRequestDTO;
 import com.job.scheduler.service.WorkflowAiConversationService;
+import com.job.scheduler.service.WorkflowAiStreamBroker;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.annotation.SendToUser;
@@ -38,6 +40,7 @@ import java.util.UUID;
 @RequestMapping("/app/v1/workflow-ai")
 public class WorkflowAiConversationController {
     private final WorkflowAiConversationService workflowAiConversationService;
+    private final WorkflowAiStreamBroker streamBroker;
 
     @GetMapping("/conversations")
     public ResponseEntity<List<WorkflowAiConversationSummaryDTO>> listConversations() {
@@ -223,50 +226,60 @@ public class WorkflowAiConversationController {
         ));
     }
 
+    // The socket mappings bind their STOMP session so the turn can push reasoning and stage frames
+    // to this subscriber while it runs. The REST twins above stay non-streaming.
     @MessageMapping("/workflow-ai/start")
     @SendToUser("/queue/workflow-ai")
     public WorkflowAiResponseDTO startConversationSocket(
-            @Valid @Payload WorkflowAiStartRequestDTO request
+            @Valid @Payload WorkflowAiStartRequestDTO request,
+            @Header("simpSessionId") String sessionId
     ) {
-        return workflowAiConversationService.startConversation(
-                request.instruction(),
-                request.modelConfigId(),
-                request.userDateTime(),
-                request.definition(),
-                request.definitionText()
-        );
+        return streamBroker.withSession(sessionId, () ->
+                workflowAiConversationService.startConversation(
+                        request.instruction(),
+                        request.modelConfigId(),
+                        request.userDateTime(),
+                        request.definition(),
+                        request.definitionText()
+                ));
     }
 
     @MessageMapping("/workflow-ai/message")
     @SendToUser("/queue/workflow-ai")
     public WorkflowAiResponseDTO continueConversationSocket(
-            @Valid @Payload WorkflowAiChatRequestDTO request
+            @Valid @Payload WorkflowAiChatRequestDTO request,
+            @Header("simpSessionId") String sessionId
     ) {
-        return workflowAiConversationService.continueConversation(
-                request.conversationId(),
-                request.message(),
-                request.modelConfigId(),
-                request.definition(),
-                request.definitionText()
-        );
+        return streamBroker.withSession(sessionId, () ->
+                workflowAiConversationService.continueConversation(
+                        request.conversationId(),
+                        request.message(),
+                        request.modelConfigId(),
+                        request.definition(),
+                        request.definitionText()
+                ));
     }
 
     @MessageMapping("/workflow-ai/review-asl")
     @SendToUser("/queue/workflow-ai")
     public WorkflowAiResponseDTO reviewAslSocket(
-            @Valid @Payload WorkflowAiReviewAslRequestDTO request
+            @Valid @Payload WorkflowAiReviewAslRequestDTO request,
+            @Header("simpSessionId") String sessionId
     ) {
-        return workflowAiConversationService.reviewAsl(
-                request.conversationId(),
-                request.definition()
-        );
+        return streamBroker.withSession(sessionId, () ->
+                workflowAiConversationService.reviewAsl(
+                        request.conversationId(),
+                        request.definition()
+                ));
     }
 
     @MessageMapping("/workflow-ai/accept")
     @SendToUser("/queue/workflow-ai")
     public WorkflowAiResponseDTO acceptPlanSocket(
-            @Valid @Payload WorkflowAiAcceptPlanRequestDTO request
+            @Valid @Payload WorkflowAiAcceptPlanRequestDTO request,
+            @Header("simpSessionId") String sessionId
     ) {
-        return workflowAiConversationService.acceptPlan(request.conversationId());
+        return streamBroker.withSession(sessionId, () ->
+                workflowAiConversationService.acceptPlan(request.conversationId()));
     }
 }

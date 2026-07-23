@@ -31,6 +31,8 @@ export type ChatMessage = {
   resourcePlan?: WorkflowAiResourcePlan | null;
   streamingStatus?: 'processing' | 'streaming';
   streamingPhase?: 'thinking' | 'answer';
+  /** Live label for the current model call of a turn, e.g. "Repairing the response (2 of 3)". */
+  streamingStage?: string | null;
 };
 
 export type DefinitionStatus = {

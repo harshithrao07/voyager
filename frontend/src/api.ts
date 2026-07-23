@@ -1236,26 +1236,66 @@ function parseStompFrames(data: string) {
       const separator = frame.indexOf('\n\n');
       const head = separator >= 0 ? frame.slice(0, separator) : frame;
       const body = separator >= 0 ? frame.slice(separator + 2) : '';
-      const [command] = head.split('\n');
-      return { command, body };
+      const [command, ...headerLines] = head.split('\n');
+      // The subscription header is what distinguishes a progress frame from the final reply, since
+      // both arrive on the same socket.
+      const subscription = headerLines
+        .find((line) => line.startsWith('subscription:'))
+        ?.slice('subscription:'.length)
+        .trim();
+      return { command, body, subscription };
     });
 }
 
-function sendWorkflowAiSocket(destination: string, payload: unknown): Promise<WorkflowAiResponse> {
+/**
+ * Incremental frame emitted while a turn is still running. Only reasoning arrives verbatim: the
+ * answer is a JSON envelope the backend parses and may discard, so it reports progress only.
+ */
+export interface WorkflowAiStreamEvent {
+  conversationId: string;
+  type: 'STAGE' | 'THINKING_DELTA' | 'ANSWER_PROGRESS' | 'ERROR';
+  stage?: string | null;
+  text?: string | null;
+  /** Which model call of the turn produced this; a higher pass supersedes earlier output. */
+  pass: number;
+  answerCharacters: number;
+}
+
+const STREAM_SUBSCRIPTION = '/user/queue/workflow-ai-stream';
+const RESPONSE_SUBSCRIPTION = '/user/queue/workflow-ai';
+/**
+ * Idle budget, not a total budget. A local reasoning model can legitimately work for minutes; what
+ * signals a dead connection is silence. Sits above the backend's own 150 s per-call timeout so a
+ * stalled model surfaces the server's message instead of a generic client-side abort.
+ */
+const SOCKET_IDLE_TIMEOUT_MS = 180000;
+
+function sendWorkflowAiSocket(
+  destination: string,
+  payload: unknown,
+  onEvent?: (event: WorkflowAiStreamEvent) => void,
+): Promise<WorkflowAiResponse> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(websocketUrl());
-    const timeout = window.setTimeout(() => {
-      socket.close();
-      reject(new Error('Workflow AI socket timed out'));
-    }, 120000);
+    let idleTimer = 0;
+
+    const armIdleTimer = () => {
+      window.clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(() => {
+        socket.close();
+        reject(new Error('Workflow AI socket timed out'));
+      }, SOCKET_IDLE_TIMEOUT_MS);
+    };
 
     const cleanup = () => {
-      window.clearTimeout(timeout);
+      window.clearTimeout(idleTimer);
       socket.onopen = null;
       socket.onmessage = null;
       socket.onerror = null;
       socket.onclose = null;
     };
+
+    armIdleTimer();
 
     socket.onerror = () => {
       cleanup();
@@ -1275,7 +1315,12 @@ function sendWorkflowAiSocket(destination: string, payload: unknown): Promise<Wo
         if (frame.command === 'CONNECTED') {
           socket.send(encodeStompFrame('SUBSCRIBE', {
             id: 'workflow-ai-response',
-            destination: '/user/queue/workflow-ai',
+            destination: RESPONSE_SUBSCRIPTION,
+          }));
+          // Subscribe to progress before sending, so no frame is missed on a fast first token.
+          socket.send(encodeStompFrame('SUBSCRIBE', {
+            id: 'workflow-ai-stream',
+            destination: STREAM_SUBSCRIPTION,
           }));
           socket.send(encodeStompFrame('SEND', {
             destination,
@@ -1283,6 +1328,16 @@ function sendWorkflowAiSocket(destination: string, payload: unknown): Promise<Wo
           }, JSON.stringify(payload)));
         }
         if (frame.command === 'MESSAGE') {
+          // Any traffic proves the turn is alive, including progress frames.
+          armIdleTimer();
+          if (frame.subscription === 'workflow-ai-stream') {
+            try {
+              onEvent?.(JSON.parse(frame.body) as WorkflowAiStreamEvent);
+            } catch {
+              // A malformed progress frame is cosmetic; the authoritative reply still decides.
+            }
+            continue;
+          }
           cleanup();
           socket.close();
           resolve(JSON.parse(frame.body) as WorkflowAiResponse);
@@ -1297,12 +1352,18 @@ function sendWorkflowAiSocket(destination: string, payload: unknown): Promise<Wo
   });
 }
 
-export function startWorkflowAiConversation(request: WorkflowAiStartRequest): Promise<WorkflowAiResponse> {
-  return sendWorkflowAiSocket('/app/workflow-ai/start', request);
+export function startWorkflowAiConversation(
+  request: WorkflowAiStartRequest,
+  onEvent?: (event: WorkflowAiStreamEvent) => void,
+): Promise<WorkflowAiResponse> {
+  return sendWorkflowAiSocket('/app/workflow-ai/start', request, onEvent);
 }
 
-export function continueWorkflowAiConversation(request: WorkflowAiChatRequest): Promise<WorkflowAiResponse> {
-  return sendWorkflowAiSocket('/app/workflow-ai/message', request);
+export function continueWorkflowAiConversation(
+  request: WorkflowAiChatRequest,
+  onEvent?: (event: WorkflowAiStreamEvent) => void,
+): Promise<WorkflowAiResponse> {
+  return sendWorkflowAiSocket('/app/workflow-ai/message', request, onEvent);
 }
 
 export async function provisionWorkflowAiResources(

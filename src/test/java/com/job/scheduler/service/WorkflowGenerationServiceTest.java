@@ -6,8 +6,10 @@ import com.job.scheduler.workflow.asl.validation.AslValidationIssue;
 import com.job.scheduler.workflow.asl.validation.AslValidationResult;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
-import dev.langchain4j.model.output.Response;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,9 +32,9 @@ import static org.mockito.Mockito.*;
 class WorkflowGenerationServiceTest {
 
     @Mock
-    private ObjectProvider<ChatLanguageModel> chatLanguageModelProvider;
+    private ObjectProvider<ChatModel> chatModelProvider;
     @Mock
-    private ChatLanguageModel chatLanguageModel;
+    private ChatModel chatModel;
     @Mock
     private WorkflowAiResourceCatalogService resourceCatalogService;
     @Mock
@@ -47,12 +49,12 @@ class WorkflowGenerationServiceTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        service = new WorkflowGenerationService(chatLanguageModelProvider, resourceCatalogService, validator, objectMapper);
+        service = new WorkflowGenerationService(chatModelProvider, resourceCatalogService, validator, objectMapper);
     }
 
     @Test
     void generatesValidWorkflowOnFirstAttempt() throws Exception {
-        when(chatLanguageModelProvider.getIfAvailable()).thenReturn(chatLanguageModel);
+        when(chatModelProvider.getIfAvailable()).thenReturn(chatModel);
         
         when(resourceCatalogService.buildMcpToolsDocumentation())
                 .thenReturn("- voyager://mcp/github/list_prs [trust: READ_ONLY] — Lists PRs");
@@ -62,7 +64,7 @@ class WorkflowGenerationServiceTest {
         String validJson = "{\"Type\": \"Task\", \"Resource\": \"voyager://system/webhook\", \"End\": true}";
         JsonNode parsed = objectMapper.readTree(validJson);
         
-        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(AiMessage.from("```json\n" + validJson + "\n```")));
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("```json\n" + validJson + "\n```")));
         when(validator.validate(parsed)).thenReturn(new AslValidationResult(List.of()));
 
         WorkflowGenerationResponseDTO response = service.generateWorkflow("do something");
@@ -70,20 +72,20 @@ class WorkflowGenerationServiceTest {
         assertThat(response.getDefinition()).isEqualTo(parsed);
         assertThat(response.getValidationIssues()).isEmpty();
         
-        verify(chatLanguageModel, times(1)).generate(messagesCaptor.capture());
+        verify(chatModel, times(1)).chat(messagesCaptor.capture());
         List<ChatMessage> messages = messagesCaptor.getValue();
         assertThat(messages).hasSize(2); // System, User
-        assertThat(messages.get(0).text()).contains("voyager://mcp/github/list_prs");
-        assertThat(messages.get(0).text()).contains("voyager://function/calculate-tax@v3");
-        assertThat(messages.get(0).text()).contains("headers(obj<string,string> optional)");
-        assertThat(messages.get(0).text()).contains("GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS");
-        assertThat(messages.get(0).text()).contains("Computes tax for an order");
-        assertThat(messages.get(1).text()).contains("do something");
+        assertThat(messageText(messages.get(0))).contains("voyager://mcp/github/list_prs");
+        assertThat(messageText(messages.get(0))).contains("voyager://function/calculate-tax@v3");
+        assertThat(messageText(messages.get(0))).contains("headers(obj<string,string> optional)");
+        assertThat(messageText(messages.get(0))).contains("GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS");
+        assertThat(messageText(messages.get(0))).contains("Computes tax for an order");
+        assertThat(messageText(messages.get(1))).contains("do something");
     }
 
     @Test
     void retriesOnValidationErrorAndSucceeds() throws Exception {
-        when(chatLanguageModelProvider.getIfAvailable()).thenReturn(chatLanguageModel);
+        when(chatModelProvider.getIfAvailable()).thenReturn(chatModel);
         when(resourceCatalogService.buildMcpToolsDocumentation()).thenReturn("None registered.");
         when(resourceCatalogService.buildFunctionsDocumentation()).thenReturn("None registered.");
 
@@ -92,9 +94,9 @@ class WorkflowGenerationServiceTest {
         String validJson = "{\"Type\": \"Task\", \"End\": true}";
         JsonNode parsedValid = objectMapper.readTree(validJson);
 
-        when(chatLanguageModel.generate(anyList()))
-                .thenReturn(Response.from(AiMessage.from(invalidJson)))
-                .thenReturn(Response.from(AiMessage.from(validJson)));
+        when(chatModel.chat(anyList()))
+                .thenReturn(aiResponse(AiMessage.from(invalidJson)))
+                .thenReturn(aiResponse(AiMessage.from(validJson)));
 
         AslValidationIssue issue = new AslValidationIssue(
                 "$.Type",
@@ -109,6 +111,18 @@ class WorkflowGenerationServiceTest {
         
         assertThat(response.getDefinition()).isEqualTo(parsedValid);
         assertThat(response.getValidationIssues()).isEmpty();
-        verify(chatLanguageModel, times(2)).generate(anyList());
+        verify(chatModel, times(2)).chat(anyList());
+    }
+
+    /** langchain4j 1.x replaced Response<AiMessage> with ChatResponse, which has no from(). */
+    private static ChatResponse aiResponse(AiMessage message) {
+        return ChatResponse.builder().aiMessage(message).build();
+    }
+
+    /** 1.x dropped ChatMessage.text(); the concrete message types expose their own accessors. */
+    private static String messageText(ChatMessage message) {
+        return message instanceof SystemMessage system
+                ? system.text()
+                : ((UserMessage) message).singleText();
     }
 }

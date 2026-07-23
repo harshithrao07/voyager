@@ -9,6 +9,8 @@ import com.job.scheduler.dto.WorkflowAiResponseDTO;
 import com.job.scheduler.dto.WorkflowAiAcceptPlanRequestDTO;
 import com.job.scheduler.exception.ApiExceptionHandler;
 import com.job.scheduler.service.WorkflowAiConversationService;
+import com.job.scheduler.service.WorkflowAiStreamBroker;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -40,14 +42,21 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class WorkflowAiConversationControllerTest {
     @Mock
     private WorkflowAiConversationService service;
+    @Mock
+    private SimpMessagingTemplate messagingTemplate;
 
     private WorkflowAiConversationController controller;
     private MockMvc mockMvc;
     private final UUID conversationId = UUID.randomUUID();
+    private static final String SESSION_ID = "stomp-session-1";
 
     @BeforeEach
     void setUp() {
-        controller = new WorkflowAiConversationController(service);
+        // A real broker so withSession actually runs the turn; only the outbound template is mocked.
+        controller = new WorkflowAiConversationController(
+                service,
+                new WorkflowAiStreamBroker(messagingTemplate)
+        );
         mockMvc = MockMvcBuilders
                 .standaloneSetup(controller)
                 .setControllerAdvice(new ApiExceptionHandler())
@@ -338,7 +347,7 @@ class WorkflowAiConversationControllerTest {
         when(service.startConversation("Build", modelConfigId, "2026-06-17T00:00:00Z", definition, null))
                 .thenReturn(response("Pipeline"));
 
-        WorkflowAiResponseDTO result = controller.startConversationSocket(request);
+        WorkflowAiResponseDTO result = controller.startConversationSocket(request, SESSION_ID);
 
         assertThat(result.conversationName()).isEqualTo("Pipeline");
     }
@@ -350,7 +359,7 @@ class WorkflowAiConversationControllerTest {
         when(service.continueConversation(conversationId, "next", null, null, null))
                 .thenReturn(response("Pipeline"));
 
-        assertThat(controller.continueConversationSocket(request).conversationName())
+        assertThat(controller.continueConversationSocket(request, SESSION_ID).conversationName())
                 .isEqualTo("Pipeline");
     }
 
@@ -361,7 +370,7 @@ class WorkflowAiConversationControllerTest {
                 new WorkflowAiReviewAslRequestDTO(conversationId, definition);
         when(service.reviewAsl(conversationId, definition)).thenReturn(response("Pipeline"));
 
-        assertThat(controller.reviewAslSocket(request).conversationName()).isEqualTo("Pipeline");
+        assertThat(controller.reviewAslSocket(request, SESSION_ID).conversationName()).isEqualTo("Pipeline");
     }
 
     @Test
@@ -369,7 +378,7 @@ class WorkflowAiConversationControllerTest {
         WorkflowAiAcceptPlanRequestDTO request = new WorkflowAiAcceptPlanRequestDTO(conversationId);
         when(service.acceptPlan(conversationId)).thenReturn(response("Pipeline"));
 
-        assertThat(controller.acceptPlanSocket(request).conversationName()).isEqualTo("Pipeline");
+        assertThat(controller.acceptPlanSocket(request, SESSION_ID).conversationName()).isEqualTo("Pipeline");
     }
 
     // --- helpers ---

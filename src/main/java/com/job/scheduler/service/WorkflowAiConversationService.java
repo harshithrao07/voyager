@@ -41,8 +41,12 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
-import dev.langchain4j.model.output.Response;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ResponseFormat;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.TokenUsage;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
@@ -65,6 +69,11 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -85,6 +94,15 @@ public class WorkflowAiConversationService {
             "I couldn't apply the generated change because it still failed validation after "
                     + "automatic repair attempts. The last valid workflow was preserved.";
     private static final int MAX_ASSISTANT_GENERATION_ATTEMPTS = 3;
+    private static final int THINKING_FLUSH_CHARACTERS = 24;
+    private static final int ANSWER_PROGRESS_CHARACTERS = 160;
+    /**
+     * How long a stream may go silent before the turn abandons it and runs blocking. Long enough for
+     * a slow local model's first token, short enough that a stream which never starts — or dies
+     * part-way — costs one noticeable pause rather than the whole request budget.
+     */
+    private static final long STREAM_IDLE_SECONDS = 25;
+    private static final long STREAM_IDLE_POLL_SECONDS = 5;
     private static final Pattern FUNCTION_NAME_PATTERN = Pattern.compile("^[a-z0-9][a-z0-9-]*$");
 
     // Small local models routinely emit near-JSON: // or # comments, single quotes, trailing commas,
@@ -208,6 +226,7 @@ public class WorkflowAiConversationService {
 
     private final AiModelConfigService aiModelConfigService;
     private final WorkflowAiModelResolver modelResolver;
+    private final WorkflowAiStreamBroker streamBroker;
     private final WorkflowAiConversationRepository conversationRepository;
     private final WorkflowAiMessageRepository messageRepository;
     private final AslDefinitionValidator aslDefinitionValidator;
@@ -916,18 +935,30 @@ public class WorkflowAiConversationService {
         // Retry/regeneration can enter here without the provision endpoint. Resolve the owner before
         // generating so every continuation keeps one durable resource-plan card.
         ensureResourcePlanMessageId(conversation);
-        ChatLanguageModel model = modelResolver.resolve(modelConfig);
+        ChatModel model = modelResolver.resolve(modelConfig);
         List<ChatMessage> messages = buildPrompt(
                 conversation,
                 task,
                 historyOverride,
                 model
         );
+        // One turn is several model calls. The pass counter labels each of them for the live UI so a
+        // repair or review pass visibly replaces the previous pass's reasoning instead of appending.
+        TurnStream turnStream = openTurnStream(conversation, modelConfig);
         Instant startedAt = Instant.now();
-        AssistantAttempt attempt = generateAssistantAttempt(model, messages);
+        AssistantAttempt attempt = generateAssistantAttempt(
+                model,
+                modelConfig,
+                turnStream,
+                "Designing the workflow",
+                messages
+        );
         if (attempt.hasFunctionProposalSignal()) {
             attempt = generateAssistantAttempt(
                     model,
+                    modelConfig,
+                    turnStream,
+                    "Reviewing the proposed function",
                     functionCreationReviewPrompt(messages, attempt.cleaned())
             );
         }
@@ -939,6 +970,10 @@ public class WorkflowAiConversationService {
             boolean repairIncludesFunctionContract = attempt.hasFunctionProposalSignal();
             attempt = generateAssistantAttempt(
                     model,
+                    modelConfig,
+                    turnStream,
+                    "Repairing the response (attempt " + (generationAttempt + 1)
+                            + " of " + MAX_ASSISTANT_GENERATION_ATTEMPTS + ")",
                     repairPrompt(
                             messages,
                             attempt.cleaned(),
@@ -949,6 +984,9 @@ public class WorkflowAiConversationService {
             if (!repairIncludesFunctionContract && attempt.hasFunctionProposalSignal()) {
                 attempt = generateAssistantAttempt(
                         model,
+                        modelConfig,
+                        turnStream,
+                        "Reviewing the proposed function",
                         functionCreationReviewPrompt(messages, attempt.cleaned())
                 );
             }
@@ -1060,19 +1098,35 @@ public class WorkflowAiConversationService {
         if (validationIssues.isEmpty()) {
             return parsed.message() == null ? cleanedResponse : parsed.message();
         }
+        // The raw reply is a debugging artifact, not a chat message. Pasting a kilobyte of broken
+        // JSON into the conversation reads as a crash and buries the one thing the user can act on;
+        // the full reply is logged instead.
         StringBuilder message = new StringBuilder(FAILED_VALIDATION_MESSAGE);
         if (!parsed.structured()) {
-            message.append("\nRaw model reply: ")
-                    .append(boundedExcerpt(cleanedResponse, 1000));
+            message.append("\n\nThe model's reply wasn't valid JSON in the expected shape. "
+                    + "Selecting **Retry** often fixes it; a consistently failing model usually "
+                    + "means this one is too small for structured output.");
         }
         return message.toString();
     }
 
     private AssistantAttempt generateAssistantAttempt(
-            ChatLanguageModel model,
+            ChatModel model,
+            AiModelConfig modelConfig,
+            TurnStream turnStream,
+            String stageLabel,
             List<ChatMessage> messages
     ) {
-        Response<AiMessage> modelResponse = model.generate(messages);
+        ChatResponse modelResponse;
+        try {
+            modelResponse = turnStream == null
+                    ? blockingChat(model, modelConfig, messages)
+                    : turnStream.generate(model, stageLabel, messages);
+        } catch (IllegalStateException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw new IllegalStateException(modelCallFailureMessage(exception), exception);
+        }
         String raw = requireModelReply(modelResponse);
         ThinkingExtraction thinkingExtraction = extractThinking(raw);
         String cleaned = stripMarkdown(thinkingExtraction.answer());
@@ -1082,6 +1136,344 @@ public class WorkflowAiConversationService {
                 thinkingExtraction,
                 parseAssistantResponse(cleaned)
         );
+    }
+
+    /**
+     * Runs one blocking model call in JSON mode where the endpoint supports it.
+     *
+     * <p>Asking for JSON in the prompt and repairing the reply afterwards costs up to three extra
+     * model calls, and small models still fail — every observed failure was a syntax error the model
+     * could not avoid by trying harder (an unescaped quote inside a string, a missing colon). JSON
+     * mode moves the constraint into decoding, where malformed output is impossible.
+     *
+     * <p>A server that does not implement it rejects the request outright, so the first rejection
+     * per endpoint falls back to a plain call and every later turn skips the attempt.
+     */
+    private ChatResponse blockingChat(
+            ChatModel model,
+            AiModelConfig modelConfig,
+            List<ChatMessage> messages
+    ) {
+        if (modelConfig == null || !modelResolver.supportsJsonMode(modelConfig)) {
+            return model.chat(messages);
+        }
+        try {
+            return model.chat(ChatRequest.builder()
+                    .messages(messages)
+                    .responseFormat(ResponseFormat.JSON)
+                    .build());
+        } catch (RuntimeException exception) {
+            if (isUnrecoverableProviderError(exception)) {
+                throw exception;
+            }
+            log.info(
+                    "JSON mode disabled for AI endpoint {} ({}); asking for free-form JSON instead",
+                    modelConfig.getBaseUrl(),
+                    exception.getMessage()
+            );
+            modelResolver.markJsonModeUnsupported(modelConfig);
+            return model.chat(messages);
+        }
+    }
+
+    /**
+     * True when retrying without JSON mode cannot help — an exhausted quota or a rejected key fails
+     * identically either way, and retrying would double the user's wait before the same error.
+     */
+    private boolean isUnrecoverableProviderError(Throwable failure) {
+        String detail = null;
+        for (Throwable current = failure; current != null && detail == null;
+             current = current.getCause() == current ? null : current.getCause()) {
+            detail = providerErrorDetail(current.getMessage());
+        }
+        if (detail == null) {
+            return false;
+        }
+        String lowered = detail.toLowerCase(Locale.ROOT);
+        return lowered.contains("quota")
+                || lowered.contains("allocation")
+                || lowered.contains("api key")
+                || lowered.contains("unauthorized")
+                || lowered.contains("rate limit");
+    }
+
+    /**
+     * Turns a provider failure into something the user can act on.
+     *
+     * <p>Model endpoints report real, fixable problems — an exhausted quota, a rejected key, a model
+     * name that no longer exists — but the client library surfaces them as a raw JSON error body
+     * inside a generic runtime exception, which reached the UI as "An unexpected error occurred".
+     * That told the user nothing and made every provider issue look like a bug in Voyager.
+     */
+    private String modelCallFailureMessage(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            String detail = providerErrorDetail(current.getMessage());
+            if (detail != null) {
+                return "The AI provider rejected the request: " + detail;
+            }
+            if (current.getCause() == current) {
+                break;
+            }
+        }
+        String message = failure.getMessage();
+        return message == null || message.isBlank()
+                ? "The AI request failed before the model replied. Retry or choose another model."
+                : "The AI request failed: " + message;
+    }
+
+    /** Extracts the human-readable message from an OpenAI- or Cloudflare-shaped error body. */
+    private String providerErrorDetail(String rawMessage) {
+        if (rawMessage == null) {
+            return null;
+        }
+        int start = rawMessage.indexOf('{');
+        if (start < 0) {
+            return null;
+        }
+        try {
+            JsonNode body = LENIENT_MODEL_MAPPER.readTree(rawMessage.substring(start));
+            JsonNode errors = body.path("errors");
+            if (errors.isArray() && !errors.isEmpty()) {
+                String detail = errors.get(0).path("message").asString(null);
+                if (detail != null && !detail.isBlank()) {
+                    return boundedExcerpt(detail, 400);
+                }
+            }
+            String openAiDetail = body.path("error").path("message").asString(null);
+            if (openAiDetail != null && !openAiDetail.isBlank()) {
+                return boundedExcerpt(openAiDetail, 400);
+            }
+        } catch (Exception exception) {
+            log.debug("Provider error body was not JSON", exception);
+        }
+        return null;
+    }
+
+    /**
+     * Returns a live stream for this turn, or {@code null} when nobody is subscribed (the REST entry
+     * points) so the turn falls back to a single blocking call.
+     */
+    private TurnStream openTurnStream(
+            WorkflowAiConversation conversation,
+            AiModelConfig modelConfig
+    ) {
+        String sessionId = streamBroker.currentSession();
+        if (sessionId == null || !modelResolver.supportsStreaming(modelConfig)) {
+            return null;
+        }
+        try {
+            return new TurnStream(
+                    modelResolver.resolveStreaming(modelConfig),
+                    modelConfig,
+                    conversation.getId(),
+                    sessionId
+            );
+        } catch (Exception exception) {
+            // Streaming is a presentation nicety. If the endpoint cannot be built for it, still run
+            // the turn the blocking way rather than failing the user's request.
+            log.debug("Falling back to a non-streaming workflow AI turn", exception);
+            return null;
+        }
+    }
+
+    /**
+     * Runs each model call of one turn token-by-token, forwarding reasoning to the browser as it
+     * arrives and collapsing the stream back into the same {@link Response} the blocking API returns.
+     */
+    private final class TurnStream {
+        private final StreamingChatModel model;
+        private final UUID conversationId;
+        /**
+         * Captured on the turn's own thread. Token callbacks arrive on the HTTP client's thread,
+         * where the broker's thread-bound session is not visible, so it must be passed explicitly.
+         */
+        private final String sessionId;
+        private final AiModelConfig modelConfig;
+        private int pass;
+
+        private TurnStream(
+                StreamingChatModel model,
+                AiModelConfig modelConfig,
+                UUID conversationId,
+                String sessionId
+        ) {
+            this.model = model;
+            this.modelConfig = modelConfig;
+            this.conversationId = conversationId;
+            this.sessionId = sessionId;
+        }
+
+        private ChatResponse generate(
+                ChatModel blockingModel,
+                String stageLabel,
+                List<ChatMessage> messages
+        ) {
+            pass++;
+            int currentPass = pass;
+            streamBroker.emitStage(sessionId, conversationId, stageLabel, currentPass);
+
+            // Re-check per pass, not just when the turn opened. A turn runs up to five model calls,
+            // and once one of them proves the endpoint cannot stream, every later pass must skip
+            // straight to blocking instead of stalling out the idle budget again.
+            if (!modelResolver.supportsStreaming(modelConfig)) {
+                return blockingChat(blockingModel, modelConfig, messages);
+            }
+
+            CompletableFuture<ChatResponse> completion = new CompletableFuture<>();
+            // A streamed JSON-mode rejection surfaces through onError, which routes to the same
+            // blocking fallback, so the request is built the same way as the blocking path.
+            WorkflowAiThinkingStream splitter = new WorkflowAiThinkingStream();
+            StringBuilder thinkingBuffer = new StringBuilder();
+            AtomicLong lastActivityAt = new AtomicLong(System.nanoTime());
+            int[] answerCharacters = {0};
+            int[] reportedAnswerCharacters = {0};
+
+            model.chat(streamingRequest(messages), new StreamingChatResponseHandler() {
+                @Override
+                public void onPartialResponse(String token) {
+                    lastActivityAt.set(System.nanoTime());
+                    try {
+                        consume(splitter.accept(token), false);
+                    } catch (Exception exception) {
+                        log.debug("Could not forward a workflow AI token", exception);
+                    }
+                }
+
+                @Override
+                public void onCompleteResponse(ChatResponse response) {
+                    try {
+                        consume(splitter.flush(), true);
+                    } catch (Exception exception) {
+                        log.debug("Could not flush workflow AI stream", exception);
+                    }
+                    completion.complete(response);
+                }
+
+                @Override
+                public void onError(Throwable error) {
+                    completion.completeExceptionally(error);
+                }
+
+                private void consume(
+                        List<WorkflowAiThinkingStream.Segment> segments,
+                        boolean finalFlush
+                ) {
+                    for (WorkflowAiThinkingStream.Segment segment : segments) {
+                        if (segment.phase() == WorkflowAiThinkingStream.Phase.THINKING) {
+                            thinkingBuffer.append(segment.text());
+                        } else {
+                            answerCharacters[0] += segment.text().length();
+                        }
+                    }
+                    // One STOMP frame per token would be thousands of frames per turn. Coalescing
+                    // keeps the reveal smooth while staying an order of magnitude cheaper.
+                    if (thinkingBuffer.length() >= THINKING_FLUSH_CHARACTERS || finalFlush) {
+                        if (!thinkingBuffer.isEmpty()) {
+                            streamBroker.emitThinking(
+                                    sessionId,
+                                    conversationId,
+                                    thinkingBuffer.toString(),
+                                    currentPass
+                            );
+                            thinkingBuffer.setLength(0);
+                        }
+                    }
+                    if (answerCharacters[0] - reportedAnswerCharacters[0]
+                            >= ANSWER_PROGRESS_CHARACTERS
+                            || (finalFlush && answerCharacters[0] > reportedAnswerCharacters[0])) {
+                        reportedAnswerCharacters[0] = answerCharacters[0];
+                        streamBroker.emitAnswerProgress(
+                                sessionId,
+                                conversationId,
+                                answerCharacters[0],
+                                currentPass
+                        );
+                    }
+                }
+            });
+
+            return awaitCompletion(completion, lastActivityAt, blockingModel, messages);
+        }
+
+        private ChatRequest streamingRequest(List<ChatMessage> messages) {
+            ChatRequest.Builder request = ChatRequest.builder().messages(messages);
+            if (modelResolver.supportsJsonMode(modelConfig)) {
+                request.responseFormat(ResponseFormat.JSON);
+            }
+            return request.build();
+        }
+
+        /**
+         * Waits on an idle budget rather than a total one.
+         *
+         * <p>The handler's callbacks cannot be trusted to fire. langchain4j 0.31 throws inside its
+         * own SSE failure path and kills the HTTP thread without ever calling {@code onError}, which
+         * happens both when an endpoint cannot stream at all and when a stream dies part-way through.
+         * Either way the future never completes, so silence — not elapsed time — is what identifies a
+         * dead stream. A model that is merely slow keeps producing tokens and keeps its full budget.
+         */
+        private ChatResponse awaitCompletion(
+                CompletableFuture<ChatResponse> completion,
+                AtomicLong lastActivityAt,
+                ChatModel blockingModel,
+                List<ChatMessage> messages
+        ) {
+            long overallDeadline = System.nanoTime()
+                    + WorkflowAiModelResolver.REQUEST_TIMEOUT.toNanos();
+            while (true) {
+                try {
+                    // Poll well below the idle budget: waiting a full budget per slice would let a
+                    // dead stream burn up to twice STREAM_IDLE_SECONDS before being noticed.
+                    return completion.get(STREAM_IDLE_POLL_SECONDS, TimeUnit.SECONDS);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("The AI request was interrupted.", exception);
+                } catch (ExecutionException exception) {
+                    Throwable cause =
+                            exception.getCause() == null ? exception : exception.getCause();
+                    return fallback(blockingModel, messages, cause.toString());
+                } catch (TimeoutException exception) {
+                    long idleSeconds = TimeUnit.NANOSECONDS.toSeconds(
+                            System.nanoTime() - lastActivityAt.get()
+                    );
+                    if (idleSeconds >= STREAM_IDLE_SECONDS) {
+                        return fallback(
+                                blockingModel,
+                                messages,
+                                "the stream went silent for " + idleSeconds + "s"
+                        );
+                    }
+                    if (System.nanoTime() >= overallDeadline) {
+                        throw new IllegalStateException(
+                                "The AI model did not finish within "
+                                        + WorkflowAiModelResolver.REQUEST_TIMEOUT.toSeconds()
+                                        + " seconds. Retry or choose a faster model.",
+                                exception
+                        );
+                    }
+                }
+            }
+        }
+
+        /**
+         * Completes this pass without streaming and stops trying to stream this endpoint.
+         *
+         * <p>Live reasoning is a presentation nicety; the answer is the product. An endpoint that
+         * cannot serve SSE must still produce workflows.
+         */
+        private ChatResponse fallback(
+                ChatModel blockingModel,
+                List<ChatMessage> messages,
+                String reason
+        ) {
+            log.info(
+                    "Streaming disabled for AI endpoint {} ({}); using a blocking request",
+                    modelConfig.getBaseUrl(),
+                    reason
+            );
+            modelResolver.markStreamingUnsupported(modelConfig);
+            return blockingChat(blockingModel, modelConfig, messages);
+        }
     }
 
     private List<ChatMessage> repairPrompt(
@@ -1246,10 +1638,10 @@ public class WorkflowAiConversationService {
         return List.copyOf(issues);
     }
 
-    private String requireModelReply(Response<AiMessage> modelResponse) {
-        String reply = modelResponse == null || modelResponse.content() == null
+    private String requireModelReply(ChatResponse modelResponse) {
+        String reply = modelResponse == null || modelResponse.aiMessage() == null
                 ? null
-                : modelResponse.content().text();
+                : modelResponse.aiMessage().text();
         if (reply == null || reply.isBlank()) {
             TokenUsage tokenUsage = modelResponse == null ? null : modelResponse.tokenUsage();
             log.warn(
@@ -1268,7 +1660,7 @@ public class WorkflowAiConversationService {
             WorkflowAiConversation conversation,
             String task,
             List<WorkflowAiMessage> historyOverride,
-            ChatLanguageModel model
+            ChatModel model
     ) {
         List<WorkflowAiMessage> rawHistory = historyOverride == null
                 ? messageRepository.findByConversationOrderByCreatedAtAsc(conversation)
@@ -1372,7 +1764,7 @@ public class WorkflowAiConversationService {
     private ContextWindow compactContextIfNeeded(
             WorkflowAiConversation conversation,
             List<WorkflowAiMessage> history,
-            ChatLanguageModel model,
+            ChatModel model,
             int fixedContextTokens,
             boolean persistSummary
     ) {
@@ -1480,7 +1872,7 @@ public class WorkflowAiConversationService {
     }
 
     private String summarizeHistory(
-            ChatLanguageModel model,
+            ChatModel model,
             String existingSummary,
             List<WorkflowAiMessage> messages,
             int contextLimit
@@ -1503,14 +1895,14 @@ public class WorkflowAiConversationService {
                 .append(summarySourceAnchors(messages, sourceBudget));
 
         try {
-            Response<AiMessage> summaryResponse = model.generate(List.of(
+            ChatResponse summaryResponse = model.chat(List.of(
                     SystemMessage.systemMessage(SUMMARY_SYSTEM_PROMPT),
                     UserMessage.userMessage(source.toString())
             ));
             String generatedSummary = summaryResponse == null
-                    || summaryResponse.content() == null
+                    || summaryResponse.aiMessage() == null
                     ? null
-                    : summaryResponse.content().text();
+                    : summaryResponse.aiMessage().text();
             if (generatedSummary == null || generatedSummary.isBlank()) {
                 throw new IllegalStateException("Summary model returned an empty reply");
             }
@@ -1722,7 +2114,13 @@ public class WorkflowAiConversationService {
                     null
             );
         } catch (Exception exception) {
-            log.warn("Could not parse workflow AI response as structured JSON", exception);
+            // Log the reply itself, not just the parser error: diagnosing a model that emits
+            // near-JSON is impossible without seeing what it actually sent.
+            log.warn(
+                    "Could not parse workflow AI response as structured JSON. Reply was: {}",
+                    boundedExcerpt(value, 2000),
+                    exception
+            );
             return new ParsedAssistantResponse(
                     null,
                     value,
@@ -2371,7 +2769,7 @@ public class WorkflowAiConversationService {
     }
 
     private record AssistantAttempt(
-            Response<AiMessage> modelResponse,
+            ChatResponse modelResponse,
             String cleaned,
             ThinkingExtraction thinkingExtraction,
             ParsedAssistantResponse parsed

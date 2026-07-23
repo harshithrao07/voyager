@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Boxes, Check, CheckCircle2, Code2, Loader2, Plug, ShieldAlert } from 'lucide-react';
 import type {
   WorkflowAiMcpRequirement,
@@ -25,10 +25,6 @@ function normalizeFunctionName(name: string) {
   return normalizedResourceText(name);
 }
 
-function mcpRequirementKey(requirement: WorkflowAiMcpRequirement) {
-  return normalizedResourceText(requirement.capability)
-    || normalizedResourceText(requirement.suggestedToolName);
-}
 
 /**
  * Rendered in the AI chat when the assistant needs resources that don't exist yet. Proposed
@@ -44,21 +40,44 @@ export function ResourcePlanCard({
   onContinue,
   onOpenMcpServers,
 }: Props) {
-  const functions = useMemo(() => plan.functions ?? [], [plan.functions]);
-  const mcpRequirements = plan.mcpRequirements ?? [];
+  // A live card renders what is still outstanding, not what was first proposed. Later turns add
+  // requirements, and a card frozen at the first proposal leaves those unreachable — there would be
+  // no button to create a function the assistant is actively asking for. Superseded cards stay
+  // frozen, so history is still immutable where that matters.
+  const live = !resolved && activePlan !== null;
+
+  // Function names are registry-safe and stable across turns, so the two lists reconcile by name.
+  // Union them: outstanding ones stay actionable, already-created ones remain visible as progress.
+  const functions = useMemo(() => {
+    const proposed = plan.functions ?? [];
+    if (!live) {
+      return proposed;
+    }
+    const outstanding = activePlan?.functions ?? [];
+    const outstandingNames = new Set(outstanding.map((fn) => normalizeFunctionName(fn.name)));
+    return [
+      ...outstanding,
+      ...proposed.filter((fn) => !outstandingNames.has(normalizeFunctionName(fn.name))),
+    ];
+  }, [plan.functions, activePlan?.functions, live]);
+
+  // MCP capabilities cannot be reconciled the same way: they are free text the model rewords every
+  // turn ("weather lookup by city" becomes "weather lookup by city name"), so matching on it marked
+  // still-pending requirements as completed. While anything is outstanding, show exactly that; when
+  // nothing is, the original request is by definition satisfied.
+  const outstandingMcp = activePlan?.mcpRequirements ?? [];
+  const mcpRequirements = live && outstandingMcp.length > 0
+    ? outstandingMcp
+    : plan.mcpRequirements ?? [];
+
   const pendingFunctionNames = useMemo(() => new Set(
     (activePlan?.functions ?? []).map((fn) => normalizeFunctionName(fn.name)),
   ), [activePlan?.functions]);
-  const pendingMcpCapabilities = useMemo(() => new Set(
-    (activePlan?.mcpRequirements ?? []).map(mcpRequirementKey),
-  ), [activePlan?.mcpRequirements]);
 
   const functionIsPending = (fn: WorkflowAiProposedFunction) => (
     !resolved && (activePlan === null || pendingFunctionNames.has(normalizeFunctionName(fn.name)))
   );
-  const mcpIsPending = (requirement: WorkflowAiMcpRequirement) => (
-    !resolved && (activePlan === null || pendingMcpCapabilities.has(mcpRequirementKey(requirement)))
-  );
+  const mcpIsPending = () => !resolved && (activePlan === null || outstandingMcp.length > 0);
 
   // Local, editable copies so the user's corrections are what actually gets created.
   const [drafts, setDrafts] = useState<WorkflowAiProposedFunction[]>(() =>
@@ -67,6 +86,15 @@ export function ResourcePlanCard({
   const [selected, setSelected] = useState<Set<number>>(
     () => new Set(functions.map((_, index) => index)),
   );
+
+  // Resync when the proposal gains or loses a function. Keyed on the names rather than the array so
+  // an unrelated re-render cannot wipe out source edits the user is in the middle of making.
+  const functionSignature = functions.map((fn) => normalizeFunctionName(fn.name)).join('|');
+  useEffect(() => {
+    setDrafts(functions.map((fn) => ({ ...fn })));
+    setSelected(new Set(functions.map((_, index) => index)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [functionSignature]);
 
   const toggle = (index: number) => {
     setSelected((current) => {
@@ -81,16 +109,33 @@ export function ResourcePlanCard({
     setDrafts((current) => current.map((fn, i) => (i === index ? { ...fn, sourceCode } : fn)));
   };
 
+  // Approving functions and confirming an attached MCP server are separate turns that share one
+  // in-flight flag from the parent. Remember which button started it so only that one spins; the
+  // other still disables, because a second turn must not be sent concurrently.
+  const [pendingAction, setPendingAction] = useState<'approve' | 'continue' | null>(null);
+
+  useEffect(() => {
+    if (!busy) {
+      setPendingAction(null);
+    }
+  }, [busy]);
+
   const approve = () => {
     const chosen = drafts.filter((fn, index) => selected.has(index) && functionIsPending(fn));
     if (chosen.length === 0) return;
+    setPendingAction('approve');
     onApprove(chosen);
+  };
+
+  const continueAfterMcp = () => {
+    setPendingAction('continue');
+    onContinue();
   };
 
   const selectedCount = drafts.filter(
     (fn, index) => selected.has(index) && functionIsPending(fn),
   ).length;
-  const pendingMcpCount = mcpRequirements.filter(mcpIsPending).length;
+  const pendingMcpCount = mcpRequirements.filter(() => mcpIsPending()).length;
 
   return (
     <div className="rounded-DEFAULT border border-secondary/30 bg-secondary-container/[0.06] p-3">
@@ -181,7 +226,7 @@ export function ResourcePlanCard({
             <Plug size={11} /> MCP servers to attach
           </div>
           {mcpRequirements.map((requirement: WorkflowAiMcpRequirement, index) => {
-            const pending = mcpIsPending(requirement);
+            const pending = mcpIsPending();
             return (
             <div key={index} className="rounded-[4px] border border-border-subtle bg-surface-container-low px-2.5 py-2">
               <div className="flex items-center gap-2">
@@ -219,11 +264,13 @@ export function ResourcePlanCard({
             </button>
             <button
               type="button"
-              onClick={onContinue}
+              onClick={continueAfterMcp}
               disabled={busy}
               className="flex h-7 items-center gap-1.5 rounded-DEFAULT border border-secondary/40 bg-secondary-container/20 px-2.5 font-mono-sm text-[11px] text-secondary transition-colors hover:bg-secondary-container/35 disabled:opacity-50"
             >
-              {busy ? <Loader2 className="animate-spin" size={12} /> : <Check size={12} />}
+              {busy && pendingAction === 'continue'
+                ? <Loader2 className="animate-spin" size={12} />
+                : <Check size={12} />}
               I've attached it — continue
             </button>
           </div>}
@@ -237,7 +284,9 @@ export function ResourcePlanCard({
           disabled={busy || selectedCount === 0}
           className="mt-3 flex h-8 w-full items-center justify-center gap-1.5 rounded-DEFAULT bg-primary px-3 font-body-sm text-[12px] font-medium text-on-primary transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {busy ? <Loader2 className="animate-spin" size={14} /> : <Check size={14} />}
+          {busy && pendingAction === 'approve'
+            ? <Loader2 className="animate-spin" size={14} />
+            : <Check size={14} />}
           {selectedCount === 0
             ? 'Select a function to create'
             : `Approve & create ${selectedCount} function${selectedCount === 1 ? '' : 's'}`}

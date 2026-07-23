@@ -197,7 +197,8 @@ function SidebarChatMessage({
 
         {awaitingAnswer ? (
           <span className="font-mono-sm text-[12px] text-on-surface-variant">
-            {message.streamingPhase === 'thinking' ? 'Reasoning...' : 'Thinking...'}
+            {message.streamingStage
+              || (message.streamingPhase === 'thinking' ? 'Reasoning...' : 'Thinking...')}
           </span>
         ) : message.content ? (
           <div className="font-mono-sm text-[12px] leading-5 text-on-surface">

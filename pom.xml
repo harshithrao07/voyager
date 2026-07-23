@@ -153,15 +153,16 @@
 			<artifactId>JSONata4Java</artifactId>
 			<version>2.6.3</version>
 		</dependency>
+		<!--
+		  The Spring Boot starters are only published as 1.x betas, and their sole use here was
+		  autoconfiguring one ChatModel bean from langchain4j.open-ai.chat-model.* properties.
+		  OpenAiChatModelConfig builds that bean from the same properties, so the stable core
+		  artifact is enough and the app stays off a beta dependency.
+		-->
 		<dependency>
 			<groupId>dev.langchain4j</groupId>
-			<artifactId>langchain4j-spring-boot-starter</artifactId>
-			<version>0.31.0</version>
-		</dependency>
-		<dependency>
-			<groupId>dev.langchain4j</groupId>
-			<artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
-			<version>0.31.0</version>
+			<artifactId>langchain4j-open-ai</artifactId>
+			<version>1.18.0</version>
 		</dependency>
 		<dependency>
 			<groupId>me.paulschwarz</groupId>

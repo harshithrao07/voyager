@@ -9,6 +9,8 @@ with its messages, generated JSON, canvas positions, and settings restored.
 
 - [Configure a model](#configure-a-model)
 - [Start and resume conversations](#start-and-resume-conversations)
+- [Live turn progress](#live-turn-progress)
+- [JSON mode](#json-mode)
 - [What the assistant can use](#what-the-assistant-can-use)
 - [Conversation context and summarization](#conversation-context-and-summarization)
 - [Retrying a response](#retrying-a-response)
@@ -94,6 +96,81 @@ available so it can be reopened later to create further workflow revisions.
 Each persisted user message and completed assistant response displays its own date and time. The
 temporary **Thinking...** row has no timestamp. If the model returns reasoning, it appears inside the
 assistant response as an expandable **Reasoning** section and does not become a separate message.
+
+## Live turn progress
+
+Turns sent over the WebSocket stream while they run, so a slow local model shows output within
+seconds instead of after the whole turn completes.
+
+One turn is not one model call. Voyager runs an initial generation, an optional function-creation
+review pass, and up to two repair passes, so the progress frames carry a **pass** number and a stage
+label — *Designing the workflow*, *Reviewing the proposed function*, *Repairing the response (2 of
+3)*. When a later pass starts, it replaces the previous pass's reasoning in the pending bubble rather
+than appending to it, because that earlier attempt was discarded.
+
+Two things stream, and one deliberately does not:
+
+| Frame | Carries |
+|---|---|
+| `STAGE` | The label for the model call that just started. |
+| `THINKING_DELTA` | Verbatim text from inside the model's `<think>` block, appended to the **Reasoning** section as it arrives. |
+| `ANSWER_PROGRESS` | A character count only. |
+
+The assistant's answer is a strict JSON envelope that Voyager parses, validates, and sometimes
+rejects and regenerates. Streaming those characters into the chat bubble would show raw JSON and
+could display a response that a later repair pass discards, so only reasoning is forwarded verbatim.
+The final prose, ASL, resource plan, and token metadata still arrive together on the completed
+response, which remains the authoritative record written to PostgreSQL.
+
+Progress frames are best effort. If the browser is not subscribed — every REST entry point — the turn
+runs as a single blocking call and returns exactly the same response. A dropped subscriber never
+fails a turn.
+
+Not every OpenAI-compatible server serves a usable SSE stream. Voyager watches an **idle** budget
+rather than a total one: if a stream produces nothing for 25 seconds, whether because it never
+started or because it died part-way, the turn abandons it and completes the same pass with a blocking
+request. The endpoint is then remembered as non-streaming for the rest of the process lifetime, so
+later turns skip the attempt entirely and pay the pause only once. The log line reads:
+
+```text
+Streaming disabled for AI endpoint <baseUrl> (<reason>); using a blocking request
+```
+
+This matters because a failed stream does not always report itself — a provider can drop the
+connection in a way the client library never surfaces as an error, so silence, not an exception, is
+what identifies a dead stream. Cloudflare's OpenAI-compatible endpoint is one that hits this path.
+Live reasoning is a presentation nicety; the workflow is the product, and it is never lost to a
+streaming failure.
+
+The client's socket timeout is an **idle** budget rather than a total one: any frame, including a
+progress frame, proves the turn is alive and resets it. It sits above the backend's own 150-second
+per-call model timeout so a genuinely stalled model surfaces the server's message instead of a
+generic client-side abort.
+
+## JSON mode
+
+Voyager asks the model for its reply in **JSON mode** wherever the endpoint supports it, so the
+provider constrains decoding and a syntactically invalid reply becomes impossible. Without it the
+format is only a request in the prompt, and smaller models routinely break it in ways they cannot
+avoid by trying harder — an unescaped quote inside a string, a missing colon — which then costs up to
+three repair passes and often fails anyway.
+
+This is JSON mode, not a strict JSON schema, and that is deliberate: `aslDefinition` is an arbitrary
+nested state machine, while strict schemas require every property to be declared up front with
+`additionalProperties: false`. Guaranteeing well-formed JSON is achievable; describing every legal
+ASL document as a closed schema is not. Voyager already validates the semantics itself, so the
+constraint only needs to cover syntax.
+
+Support is not universal, and a server that lacks it rejects the request outright rather than
+degrading. The first rejection per endpoint falls back to a plain request and is remembered, so later
+turns skip the attempt:
+
+```text
+JSON mode disabled for AI endpoint <baseUrl> (<reason>); asking for free-form JSON instead
+```
+
+Quota exhaustion, a rejected key, and rate limits are excluded from that fallback — retrying them
+without JSON mode fails identically and would only double the wait before the same error.
 
 ## What the assistant can use
 
@@ -256,6 +333,15 @@ The UI sends long-running turns through STOMP over `/ws` using destinations
 `/app/workflow-ai/start`, `/app/workflow-ai/message`, `/app/workflow-ai/review-asl`, and
 `/app/workflow-ai/accept`. The production Nginx proxy allows 300 seconds for API and WebSocket
 responses so slower local models are not cut off at 60 seconds.
+
+Each socket turn uses two user subscriptions on the same connection:
+
+| Subscription | Carries |
+|---|---|
+| `/user/queue/workflow-ai` | The one authoritative `WorkflowAiResponseDTO` that ends the turn. |
+| `/user/queue/workflow-ai-stream` | `WorkflowAiStreamEventDTO` progress frames while it runs — see [Live turn progress](#live-turn-progress). |
+
+Subscribe to both before sending, so a fast first token is not missed.
 
 AI model registry base path: `/app/v1/ai`
 
