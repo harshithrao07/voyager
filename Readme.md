@@ -164,11 +164,11 @@ Latest JaCoCo run across the full Testcontainers-backed suite:
 
 | Metric | Covered | Total | Coverage |
 |---|---:|---:|---:|
-| Instructions | 27,723 | 33,139 | 84% |
-| Branches | 2,362 | 3,497 | 68% |
-| Lines | 6,117 | 7,355 | 83% |
-| Methods | 1,001 | 1,138 | 88% |
-| Classes | 246 | 253 | 97% |
+| Instructions | 28,380 | 34,407 | 82% |
+| Branches | 2,429 | 3,629 | 67% |
+| Lines | 6,252 | 7,619 | 82% |
+| Methods | 1,031 | 1,190 | 87% |
+| Classes | 252 | 262 | 96% |
 
 Per-package instruction coverage:
 
@@ -180,7 +180,7 @@ Per-package instruction coverage:
 | `monitoring` | 100% |
 | `producers` | 100% |
 | `utility` | 100% |
-| `dto` | 95% |
+| `dto` | 94% |
 | `com.job.scheduler.workflow.asl.validation` | 94% |
 | `handlers` | 93% |
 | `com.job.scheduler.workflow.task` | 91% |
@@ -190,8 +190,8 @@ Per-package instruction coverage:
 | `com.job.scheduler.workflow.asl.runtime` | 88% |
 | `exception` | 87% |
 | `com.job.scheduler.entity.converter` | 86% |
-| `service` (job lifecycle, worker, locks) | 77% |
-| `config` | 72% |
+| `service` (job lifecycle, worker, locks) | 75% |
+| `config` | 69% |
 | `com.job.scheduler` (root) | 38% |
 
 Open `target/site/jacoco/index.html` after `mvn test` for the drill-down view.
