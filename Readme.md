@@ -164,11 +164,11 @@ Latest JaCoCo run across the full Testcontainers-backed suite:
 
 | Metric | Covered | Total | Coverage |
 |---|---:|---:|---:|
-| Instructions | 31,763 | 40,159 | 79% |
-| Branches | 2,796 | 4,417 | 63% |
-| Lines | 6,988 | 8,895 | 79% |
-| Methods | 1,159 | 1,387 | 84% |
-| Classes | 277 | 293 | 95% |
+| Instructions | 33,793 | 41,158 | 82% |
+| Branches | 2,934 | 4,525 | 65% |
+| Lines | 7,429 | 9,108 | 82% |
+| Methods | 1,224 | 1,414 | 87% |
+| Classes | 283 | 296 | 96% |
 
 Per-package instruction coverage:
 
@@ -190,7 +190,7 @@ Per-package instruction coverage:
 | `com.job.scheduler.workflow.asl.runtime` | 88% |
 | `controller` | 87% |
 | `com.job.scheduler.entity.converter` | 86% |
-| `service` (job lifecycle, worker, locks) | 71% |
+| `service` (job lifecycle, worker, locks) | 76% |
 | `config` | 66% |
 | `com.job.scheduler` (root) | 38% |
 
