@@ -116,6 +116,24 @@ export interface AiModelEvaluationMetric {
   failures: string[];
 }
 
+export type AiModelJudgeVerdict = 'STRONG' | 'MIXED' | 'WEAK' | 'UNSCORED';
+
+/** Advisory LLM-as-judge aggregate; present only when the run was started with a judge model. */
+export interface AiModelEvaluationJudgeSummary {
+  modelConfigId: string;
+  modelName: string;
+  displayName: string;
+  passScore: number;
+  judgedCases: number;
+  scoredCases: number;
+  erroredCases: number;
+  meanScore: number;
+  passRate: number;
+  verdict: AiModelJudgeVerdict;
+  failures: string[];
+  errors: string[];
+}
+
 export interface AiModelEvaluationResult {
   suiteId: string;
   suiteDescription: string;
@@ -138,6 +156,7 @@ export interface AiModelEvaluationResult {
     functions: number;
     safety: number;
   };
+  judge?: AiModelEvaluationJudgeSummary | null;
   summary: {
     passedCases: number;
     totalCases: number;
@@ -1025,11 +1044,12 @@ export function listLatestAiModelEvaluations(): Promise<AiModelEvaluationDTO[]> 
 export function startAiModelEvaluation(
   modelId: string,
   mode: AiModelEvaluationMode,
+  judgeModelConfigId?: string | null,
 ): Promise<AiModelEvaluationDTO> {
   return sendJson<AiModelEvaluationDTO>(
     `/app/v1/ai/models/${encodeURIComponent(modelId)}/evaluations`,
     'POST',
-    { mode },
+    { mode, judgeModelConfigId: judgeModelConfigId ?? null },
   );
 }
 

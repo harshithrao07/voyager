@@ -102,12 +102,16 @@ Suggested arc: evals → constrained decoding → distillation / tool-calling.
   enforcement where supported. Capability negotiation is cached per registered model and degrades
   only on an explicit provider rejection: strict schema → schema → JSON object → prompt-only. The
   dynamic ASL payload remains subject to Voyager's deterministic semantic validators.
-- [~] **Evals + LLM-as-judge** ⭐ — deterministic `workflow-ai-v1` benchmark, registered-model
-  runner, ranked comparison, and prompt-freshness tracking delivered; LLM judge remains pending.
+- [x] **Evals + LLM-as-judge** ⭐ — deterministic `workflow-ai-v1` benchmark, registered-model
+  runner, ranked comparison, prompt-freshness tracking, and the LLM judge delivered.
   The benchmark covers prompts → expected outcome
   (proposes function? proposes MCP? ASL validates? runs?) and persists a comparable Chat / ASL /
   MCP / Functions / Safety capability tape for each model. The ASL validators are a ready-made
-  automatic grader, so prompt/model changes can be *measured* instead of eyeballed.
+  automatic grader, so prompt/model changes can be *measured* instead of eyeballed. Any registered
+  model can additionally be attached as an advisory judge (`AiModelEvaluationJudgeService`): it
+  scores each case 1–5 against the suite's per-case `judge.expectation` rubric and adds a `judge`
+  block (mean score, pass rate, STRONG/MIXED/WEAK verdict, rationales) to the persisted result
+  without moving deterministic gates or the recommendation.
 - [ ] **Distillation / fine-tuning a small ASL model** — generate synthetic training data with a
   large model, then SFT/LoRA a small local model on Voyager's ASL + JSONata + function format.
   Structural fix for weak local models (e.g. qwen3:8b) failing at code-in-JSON.

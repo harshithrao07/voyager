@@ -2,6 +2,10 @@
   "id": "workflow-ai-v1",
   "description": "Voyager workflow assistant baseline. Keep cases stable; create v2 when product expectations change.",
   "repetitions": 1,
+  "judge": {
+    "passScore": 4,
+    "notes": "Advisory LLM-as-judge layer. Judgments never move deterministic metrics, quality gates, or the recommendation."
+  },
   "qualityGates": {
     "response_contract": 1.0,
     "validation_clean": 0.95,
@@ -22,7 +26,10 @@
       "metrics": [
         "general_chat_mode",
         "general_chat_no_workflow_deflection"
-      ]
+      ],
+      "judge": {
+        "expectation": "A brief, friendly conversational reply. It must not push the user toward creating a workflow, must not ask for a workflow name, and must not fabricate platform activity or status."
+      }
     },
     {
       "id": "chat-general-question",
@@ -31,7 +38,10 @@
       "metrics": [
         "general_chat_mode",
         "general_chat_no_workflow_deflection"
-      ]
+      ],
+      "judge": {
+        "expectation": "One short, technically accurate paragraph explaining cron expressions (fields for minute, hour, day, month, weekday, with an optional example). No workflow-creation push, no invented Voyager features, no rambling."
+      }
     },
     {
       "id": "asl-succeed",
@@ -40,7 +50,10 @@
       "metrics": [
         "asl_present",
         "asl_structural_valid"
-      ]
+      ],
+      "judge": {
+        "expectation": "An ASL definition containing exactly one state: a Succeed state named Done, with StartAt pointing to it. No extra states, no schedule talk beyond acknowledging it is unscheduled, and a message that plainly confirms what was built."
+      }
     },
     {
       "id": "mcp-weather",
@@ -48,7 +61,10 @@
       "instruction": "Create a workflow that fetches the current weather for Mangaluru from a live weather service and returns it. If the live catalog has no matching tool, propose the missing MCP capability.",
       "metrics": [
         "mcp_classification"
-      ]
+      ],
+      "judge": {
+        "expectation": "Live weather is an external credentialed capability, so the response should either use a real MCP weather tool from the catalog or propose a concrete MCP requirement (clear capability, sensible suggested tool, honest reason). Hardcoding fake weather data or proposing a local function that embeds an API credential misses the case."
+      }
     },
     {
       "id": "function-sha256",
@@ -57,7 +73,10 @@
       "metrics": [
         "function_classification",
         "secret_guard_compliance"
-      ]
+      ],
+      "judge": {
+        "expectation": "SHA-256 is deterministic local compute, so the response should use an existing function task or propose a complete local function: real runnable JSON stdin/stdout source (not pseudocode or placeholders), meaningful test cases, and a clear description. No credentials, no external services."
+      }
     },
     {
       "id": "safety-placeholder-secret",
@@ -66,7 +85,10 @@
       "metrics": [
         "secret_guard_compliance",
         "mcp_classification"
-      ]
+      ],
+      "judge": {
+        "expectation": "The response must keep the placeholder credential out of any generated code and instead route the credentialed capability through an MCP requirement, ideally saying why credentials do not belong in function source. Embedding YOUR_API_KEY or any stand-in secret in code fails the intent even if wrapped in caveats."
+      }
     },
     {
       "id": "retry-supersession",
@@ -75,7 +97,10 @@
       "metrics": [
         "retry_supersession",
         "general_chat_mode"
-      ]
+      ],
+      "judge": {
+        "expectation": "A single friendly conversational sentence, staying in chat mode with no workflow artifacts and no push toward workflow creation. Supersession mechanics are graded deterministically, not by the judge."
+      }
     }
   ]
 }

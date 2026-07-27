@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
-import { Activity, BarChart3, Bot, Check, ChevronDown, Copy, Gauge, Globe2, KeyRound, Link, Loader2, Monitor, Play, Plus, Power, RefreshCw, ShieldCheck, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { Activity, BarChart3, Bot, Check, ChevronDown, Copy, Gauge, Globe2, KeyRound, Link, Loader2, Monitor, Play, Plus, Power, RefreshCw, Scale, ShieldCheck, Sparkles, Square, Trash2, X } from 'lucide-react';
 import {
   cancelAiModelEvaluation,
   listLatestAiModelEvaluations,
   startAiModelEvaluation,
   type AiModelEvaluationDTO,
+  type AiModelEvaluationJudgeSummary,
   type AiModelEvaluationMode,
 } from '../../api';
 import { cloudProviderPreset, cloudProviderPresets } from './modelProviders';
@@ -96,10 +97,21 @@ export function ModelSettingsModal({
   const [benchmarkAction, setBenchmarkAction] = useState<string | null>(null);
   const [batchMode, setBatchMode] = useState<AiModelEvaluationMode | null>(null);
   const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
+  const [judgeModelId, setJudgeModelId] = useState<string>('');
   const enabledModels = useMemo(
     () => endpointGroups.flatMap((group) => group.models).filter((model) => model.enabled !== false),
     [endpointGroups],
   );
+  const judgeModel = useMemo(
+    () => enabledModels.find((model) => model.id === judgeModelId) ?? null,
+    [enabledModels, judgeModelId],
+  );
+
+  useEffect(() => {
+    if (judgeModelId && !enabledModels.some((model) => model.id === judgeModelId)) {
+      setJudgeModelId('');
+    }
+  }, [enabledModels, judgeModelId]);
 
   const refreshEvaluations = useCallback(async () => {
     const latest = await listLatestAiModelEvaluations();
@@ -130,17 +142,20 @@ export function ModelSettingsModal({
   }, [hasRunningEvaluation, refreshEvaluations, settingsTab]);
 
   const runEvaluation = async (model: AiModel, mode: AiModelEvaluationMode) => {
-    if (model.provider === 'api') {
+    if (model.provider === 'api' || judgeModel?.provider === 'api') {
       const turns = mode === 'RELIABILITY' ? 21 : 7;
+      const judgeNote = judgeModel
+        ? ` Each case adds one LLM-judge call to ${judgeModel.label}.`
+        : '';
       const confirmed = window.confirm(
-        `Run ${turns} benchmark cases against ${model.label}? Your model provider may charge for every generation and repair call.`,
+        `Run ${turns} benchmark cases against ${model.label}?${judgeNote} Your model provider may charge for every generation and repair call.`,
       );
       if (!confirmed) return;
     }
     setBenchmarkAction(model.id);
     setBenchmarkError(null);
     try {
-      const evaluation = await startAiModelEvaluation(model.id, mode);
+      const evaluation = await startAiModelEvaluation(model.id, mode, judgeModel?.id ?? null);
       setEvaluations((current) => ({ ...current, [model.id]: evaluation }));
     } catch (error) {
       setBenchmarkError(error instanceof Error ? error.message : 'Could not start the benchmark.');
@@ -172,9 +187,12 @@ export function ModelSettingsModal({
     }
     const cloudModels = candidates.filter((model) => model.provider === 'api');
     const casesPerModel = mode === 'RELIABILITY' ? 21 : 7;
-    if (cloudModels.length > 0) {
+    if (cloudModels.length > 0 || judgeModel?.provider === 'api') {
+      const judgeNote = judgeModel
+        ? ` Each case also adds one LLM-judge call to ${judgeModel.label}.`
+        : '';
       const confirmed = window.confirm(
-        `Run ${casesPerModel * candidates.length} benchmark cases across ${candidates.length} models, including ${cloudModels.length} cloud ${cloudModels.length === 1 ? 'model' : 'models'}? Cloud providers may charge for every generation and repair call.`,
+        `Run ${casesPerModel * candidates.length} benchmark cases across ${candidates.length} models, including ${cloudModels.length} cloud ${cloudModels.length === 1 ? 'model' : 'models'}?${judgeNote} Cloud providers may charge for every generation and repair call.`,
       );
       if (!confirmed) return;
     }
@@ -185,7 +203,7 @@ export function ModelSettingsModal({
     try {
       for (const model of candidates) {
         try {
-          const evaluation = await startAiModelEvaluation(model.id, mode);
+          const evaluation = await startAiModelEvaluation(model.id, mode, judgeModel?.id ?? null);
           setEvaluations((current) => ({ ...current, [model.id]: evaluation }));
         } catch (error) {
           failures.push(`${model.label}: ${error instanceof Error ? error.message : 'could not start'}`);
@@ -291,6 +309,9 @@ export function ModelSettingsModal({
                 benchmarkAction={benchmarkAction}
                 benchmarkError={benchmarkError}
                 batchMode={batchMode}
+                judgeModelId={judgeModelId}
+                onJudgeModelIdChange={setJudgeModelId}
+                judgeCandidates={enabledModels}
                 onRunEvaluation={runEvaluation}
                 onRunAllEvaluations={runAllEvaluations}
                 onCancelEvaluation={cancelEvaluation}
@@ -531,6 +552,9 @@ function AddedModelsSection({
   benchmarkAction,
   benchmarkError,
   batchMode,
+  judgeModelId,
+  onJudgeModelIdChange,
+  judgeCandidates,
   onRunEvaluation,
   onRunAllEvaluations,
   onCancelEvaluation,
@@ -548,6 +572,9 @@ function AddedModelsSection({
   benchmarkAction: string | null;
   benchmarkError: string | null;
   batchMode: AiModelEvaluationMode | null;
+  judgeModelId: string;
+  onJudgeModelIdChange: (modelId: string) => void;
+  judgeCandidates: AiModel[];
   onRunEvaluation: (model: AiModel, mode: AiModelEvaluationMode) => void;
   onRunAllEvaluations: (mode: AiModelEvaluationMode) => void;
   onCancelEvaluation: (model: AiModel, evaluation: AiModelEvaluationDTO) => void;
@@ -569,6 +596,33 @@ function AddedModelsSection({
             <p className="mt-1 text-body-sm text-on-surface-variant">Run the same capability tape against every enabled model before choosing one for workflow generation.</p>
           </div>
         </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-DEFAULT border border-border-subtle/60 bg-surface-container-lowest px-3 py-2">
+        <label
+          htmlFor="benchmark-judge-model"
+          className="flex shrink-0 items-center gap-1.5 font-mono-sm text-[10px] font-semibold uppercase text-on-surface-variant"
+        >
+          <Scale size={13} className="text-primary" />
+          LLM judge
+        </label>
+        <select
+          id="benchmark-judge-model"
+          value={judgeModelId}
+          onChange={(event) => onJudgeModelIdChange(event.target.value)}
+          className="h-8 min-w-[220px] rounded-DEFAULT border border-primary/30 bg-surface-container px-2 font-mono-sm text-[11px] text-on-surface outline-none focus:border-primary/60"
+        >
+          <option value="">None — deterministic metrics only</option>
+          {judgeCandidates.map((candidate) => (
+            <option key={candidate.id} value={candidate.id}>
+              {candidate.label}{candidate.provider === 'api' ? ' (cloud)' : ''}
+            </option>
+          ))}
+        </select>
+        <span className="min-w-[200px] flex-1 text-[10px] leading-4 text-on-surface-variant">
+          Scores each case 1–5 against the suite rubric with a rationale. Advisory only — it never
+          moves quality gates or the recommendation. Prefer a stronger model than the one under test.
+        </span>
       </div>
 
       {benchmarkError && (
@@ -720,6 +774,10 @@ function AddedModelsSection({
 
                           {evaluation?.result && (
                             <CapabilityTape evaluation={evaluation} />
+                          )}
+
+                          {evaluation?.result?.judge && (
+                            <JudgeSummaryPanel judge={evaluation.result.judge} />
                           )}
 
                           {evaluation?.status === 'FAILED' && evaluation.errorMessage && (
@@ -1112,6 +1170,43 @@ function CapabilityTape({ evaluation }: { evaluation: AiModelEvaluationDTO }) {
         <span>{result.summary.passedCases}/{result.summary.totalCases} cases · p95 {formatLatency(result.summary.latencyP95Ms)} · {formatStructuredOutputMode(result.structuredOutputMode)}</span>
         <span>{result.suiteId} · {evaluation.mode === 'RELIABILITY' ? '3 passes' : '1 pass'} · {formatTestedAt(testedAt)}</span>
       </div>
+    </div>
+  );
+}
+
+function JudgeSummaryPanel({ judge }: { judge: AiModelEvaluationJudgeSummary }) {
+  const tone = judge.verdict === 'STRONG'
+    ? 'text-status-success'
+    : judge.verdict === 'MIXED'
+      ? 'text-status-warning'
+      : judge.verdict === 'WEAK'
+        ? 'text-status-error'
+        : 'text-on-surface-variant';
+  const issues = [
+    ...judge.failures,
+    ...judge.errors.map((error) => `judge error — ${error}`),
+  ];
+  return (
+    <div className="mt-2 rounded-DEFAULT border border-border-subtle/60 bg-surface-container-lowest px-2.5 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 font-mono-sm text-[10px]">
+        <span className={`flex items-center gap-1.5 font-semibold uppercase ${tone}`}>
+          <Scale size={11} />
+          Judge {judge.verdict.toLowerCase()}
+        </span>
+        <span className="text-on-surface-variant">
+          {judge.scoredCases === 0
+            ? `no scored cases (${judge.erroredCases} judge ${judge.erroredCases === 1 ? 'error' : 'errors'})`
+            : `${Math.round(judge.passRate * 100)}% pass · mean ${judge.meanScore.toFixed(1)}/5 · by ${judge.displayName}`}
+        </span>
+      </div>
+      {issues.length > 0 && (
+        <ul className="mt-1.5 space-y-1 border-t border-border-subtle/40 pt-1.5 text-[10px] leading-4 text-on-surface-variant">
+          {issues.slice(0, 4).map((issue) => (
+            <li key={issue} className="truncate" title={issue}>{issue}</li>
+          ))}
+          {issues.length > 4 && <li>+{issues.length - 4} more</li>}
+        </ul>
+      )}
     </div>
   );
 }

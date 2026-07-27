@@ -100,7 +100,7 @@ public class AiModelController {
             @Valid @RequestBody AiModelEvaluationStartRequestDTO request
     ) {
         return ResponseEntity.accepted().body(
-                aiModelEvaluationService.start(modelId, request.mode())
+                aiModelEvaluationService.start(modelId, request.mode(), request.judgeModelConfigId())
         );
     }
 

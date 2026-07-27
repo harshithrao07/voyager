@@ -212,7 +212,7 @@ class AiModelControllerTest {
     void startEvaluationReturnsAcceptedRun() throws Exception {
         UUID modelId = UUID.randomUUID();
         AiModelEvaluationDTO evaluation = evaluation(AiModelEvaluationStatus.RUNNING);
-        when(aiModelEvaluationService.start(modelId, AiModelEvaluationMode.RELIABILITY))
+        when(aiModelEvaluationService.start(modelId, AiModelEvaluationMode.RELIABILITY, null))
                 .thenReturn(evaluation);
 
         mockMvc.perform(post("/app/v1/ai/models/{modelId}/evaluations", modelId)
@@ -221,7 +221,25 @@ class AiModelControllerTest {
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.status").value("RUNNING"));
 
-        verify(aiModelEvaluationService).start(modelId, AiModelEvaluationMode.RELIABILITY);
+        verify(aiModelEvaluationService).start(modelId, AiModelEvaluationMode.RELIABILITY, null);
+    }
+
+    @Test
+    void startEvaluationPassesTheJudgeModelThrough() throws Exception {
+        UUID modelId = UUID.randomUUID();
+        UUID judgeModelId = UUID.randomUUID();
+        AiModelEvaluationDTO evaluation = evaluation(AiModelEvaluationStatus.RUNNING);
+        when(aiModelEvaluationService.start(modelId, AiModelEvaluationMode.QUICK, judgeModelId))
+                .thenReturn(evaluation);
+
+        mockMvc.perform(post("/app/v1/ai/models/{modelId}/evaluations", modelId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mode\":\"QUICK\",\"judgeModelConfigId\":\""
+                                + judgeModelId + "\"}"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        verify(aiModelEvaluationService).start(modelId, AiModelEvaluationMode.QUICK, judgeModelId);
     }
 
     @Test

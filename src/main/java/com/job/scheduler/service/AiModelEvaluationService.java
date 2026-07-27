@@ -9,6 +9,7 @@ import com.job.scheduler.enums.AiModelEvaluationMode;
 import com.job.scheduler.enums.AiModelEvaluationStatus;
 import com.job.scheduler.enums.WorkflowAiConversationStage;
 import com.job.scheduler.repository.AiModelConfigRepository;
+import dev.langchain4j.model.chat.ChatModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ClassPathResource;
@@ -58,6 +59,7 @@ public class AiModelEvaluationService {
     private final AiModelConfigRepository modelRepository;
     private final AiModelConfigService modelConfigService;
     private final WorkflowAiConversationService conversationService;
+    private final AiModelEvaluationJudgeService judgeService;
     private final ObjectMapper objectMapper;
     private final Executor executor;
     private final JsonNode suite;
@@ -66,12 +68,14 @@ public class AiModelEvaluationService {
             AiModelConfigRepository modelRepository,
             AiModelConfigService modelConfigService,
             WorkflowAiConversationService conversationService,
+            AiModelEvaluationJudgeService judgeService,
             ObjectMapper objectMapper,
             @Qualifier("aiModelEvaluationExecutor") Executor executor
     ) {
         this.modelRepository = modelRepository;
         this.modelConfigService = modelConfigService;
         this.conversationService = conversationService;
+        this.judgeService = judgeService;
         this.objectMapper = objectMapper;
         this.executor = executor;
         this.suite = loadSuite(objectMapper);
@@ -79,7 +83,8 @@ public class AiModelEvaluationService {
 
     public synchronized AiModelEvaluationDTO start(
             UUID modelConfigId,
-            AiModelEvaluationMode mode
+            AiModelEvaluationMode mode,
+            UUID judgeModelConfigId
     ) {
         if (mode == null) {
             throw new IllegalArgumentException("Evaluation mode is required");
@@ -88,6 +93,18 @@ public class AiModelEvaluationService {
         AiModelConfig model = requireModel(modelConfigId);
         if (model.getEvaluationStatus() == AiModelEvaluationStatus.RUNNING) {
             throw new IllegalStateException("This model already has an evaluation running");
+        }
+        // Resolve the judge before mutating any run state so a bad judge id fails the request
+        // instead of leaving the model stuck in a RUNNING evaluation.
+        JudgeContext judgeContext = null;
+        if (judgeModelConfigId != null) {
+            AiModelConfig judgeConfig = modelConfigService.resolveModel(judgeModelConfigId);
+            judgeContext = new JudgeContext(
+                    judgeConfig,
+                    judgeService.resolve(judgeConfig),
+                    suite.path("judge").path("passScore")
+                            .asInt(AiModelEvaluationJudgeService.DEFAULT_PASS_SCORE)
+            );
         }
 
         UUID runId = UUID.randomUUID();
@@ -107,7 +124,8 @@ public class AiModelEvaluationService {
         modelRepository.saveAndFlush(model);
 
         try {
-            executor.execute(() -> runEvaluation(modelConfigId, runId, mode));
+            JudgeContext judge = judgeContext;
+            executor.execute(() -> runEvaluation(modelConfigId, runId, mode, judge));
         } catch (RuntimeException exception) {
             failRun(modelConfigId, runId, exception);
         }
@@ -140,7 +158,8 @@ public class AiModelEvaluationService {
     private void runEvaluation(
             UUID modelConfigId,
             UUID runId,
-            AiModelEvaluationMode mode
+            AiModelEvaluationMode mode,
+            JudgeContext judgeContext
     ) {
         List<Observation> observations = new ArrayList<>();
         try {
@@ -153,11 +172,12 @@ public class AiModelEvaluationService {
                                 AiModelEvaluationStatus.CANCELLED,
                                 observations,
                                 mode,
-                                null
+                                null,
+                                judgeContext
                         );
                         return;
                     }
-                    observations.add(runCase(testCase, modelConfigId, repetition));
+                    observations.add(runCase(testCase, modelConfigId, repetition, judgeContext));
                     updateProgress(modelConfigId, runId, observations.size());
                 }
             }
@@ -167,7 +187,8 @@ public class AiModelEvaluationService {
                     AiModelEvaluationStatus.COMPLETED,
                     observations,
                     mode,
-                    null
+                    null,
+                    judgeContext
             );
         } catch (RuntimeException exception) {
             log.warn("AI model evaluation {} failed", runId, exception);
@@ -177,7 +198,8 @@ public class AiModelEvaluationService {
                     AiModelEvaluationStatus.FAILED,
                     observations,
                     mode,
-                    rootMessage(exception)
+                    rootMessage(exception),
+                    judgeContext
             );
         }
     }
@@ -185,7 +207,8 @@ public class AiModelEvaluationService {
     private Observation runCase(
             JsonNode testCase,
             UUID modelConfigId,
-            int repetition
+            int repetition,
+            JudgeContext judgeContext
     ) {
         Instant startedAt = Instant.now();
         UUID conversationId = null;
@@ -229,15 +252,28 @@ public class AiModelEvaluationService {
                 );
             }
             ensureRequestedMetrics(metrics, requestedMetrics);
+            // Latency is the evaluated model's time only; the judge call happens after the clock
+            // stops so choosing a slow judge cannot skew the candidate's latency percentiles.
+            long latencyMs = Duration.between(startedAt, Instant.now()).toMillis();
+            AiModelEvaluationJudgeService.Judgment judgment = judgeContext == null
+                    ? null
+                    : judgeService.judge(
+                            judgeContext.model(),
+                            judgeContext.config(),
+                            testCase,
+                            response,
+                            judgeContext.passScore()
+                    );
             return new Observation(
                     testCase.path("id").asText(),
                     testCase.path("category").asText(),
                     repetition,
                     startedAt,
-                    Duration.between(startedAt, Instant.now()).toMillis(),
+                    latencyMs,
                     requested(metrics, requestedMetrics),
                     responseSummary(response),
-                    null
+                    null,
+                    judgment
             );
         } catch (RuntimeException exception) {
             requestedMetrics.forEach(metric -> metrics.put(
@@ -252,7 +288,8 @@ public class AiModelEvaluationService {
                     Duration.between(startedAt, Instant.now()).toMillis(),
                     requested(metrics, requestedMetrics),
                     null,
-                    rootMessage(exception)
+                    rootMessage(exception),
+                    null
             );
         } finally {
             if (conversationId != null) {
@@ -529,7 +566,8 @@ public class AiModelEvaluationService {
             AiModelEvaluationStatus status,
             List<Observation> observations,
             AiModelEvaluationMode mode,
-            String error
+            String error,
+            JudgeContext judgeContext
     ) {
         AiModelConfig model = requireCurrentRun(modelConfigId, runId);
         model.setEvaluationStatus(status);
@@ -538,7 +576,7 @@ public class AiModelEvaluationService {
         model.setEvaluationCancelRequested(false);
         model.setEvaluationError(error);
         if (!observations.isEmpty()) {
-            model.setEvaluationResult(serializeResult(observations, model, mode));
+            model.setEvaluationResult(serializeResult(observations, model, mode, judgeContext));
         }
         modelRepository.saveAndFlush(model);
     }
@@ -546,7 +584,8 @@ public class AiModelEvaluationService {
     private String serializeResult(
             List<Observation> observations,
             AiModelConfig model,
-            AiModelEvaluationMode mode
+            AiModelEvaluationMode mode,
+            JudgeContext judgeContext
     ) {
         Map<String, MetricAggregate> metrics = aggregate(observations);
         ObjectNode result = objectMapper.createObjectNode();
@@ -606,6 +645,10 @@ public class AiModelEvaluationService {
                 "retry_supersession"
         ));
 
+        if (judgeContext != null) {
+            result.set("judge", judgeSummary(observations, judgeContext));
+        }
+
         long passedCases = observations.stream().filter(Observation::passed).count();
         List<Long> latencies = observations.stream()
                 .map(Observation::latencyMs)
@@ -630,6 +673,67 @@ public class AiModelEvaluationService {
         } catch (Exception exception) {
             throw new IllegalStateException("Could not serialize model evaluation", exception);
         }
+    }
+
+    /**
+     * Aggregates the advisory LLM-judge layer. Judgments never feed metrics, quality gates, or the
+     * recommendation: a weak judge verdict flags quality for a human, it does not fail the run.
+     */
+    private ObjectNode judgeSummary(List<Observation> observations, JudgeContext judgeContext) {
+        ObjectNode judgeNode = objectMapper.createObjectNode();
+        judgeNode.put("modelConfigId", judgeContext.config().getId().toString());
+        judgeNode.put("modelName", judgeContext.config().getModelName());
+        judgeNode.put("displayName", judgeContext.config().getDisplayName());
+        judgeNode.put("passScore", judgeContext.passScore());
+
+        List<Observation> judged = observations.stream()
+                .filter(observation -> observation.judgment() != null)
+                .toList();
+        List<AiModelEvaluationJudgeService.Judgment> scored = judged.stream()
+                .map(Observation::judgment)
+                .filter(AiModelEvaluationJudgeService.Judgment::scoredSuccessfully)
+                .toList();
+        long passed = scored.stream()
+                .filter(judgment -> Boolean.TRUE.equals(judgment.passed()))
+                .count();
+        double meanScore = scored.isEmpty()
+                ? 0
+                : scored.stream()
+                        .mapToInt(AiModelEvaluationJudgeService.Judgment::score)
+                        .average()
+                        .orElse(0);
+
+        judgeNode.put("judgedCases", judged.size());
+        judgeNode.put("scoredCases", scored.size());
+        judgeNode.put("erroredCases", judged.size() - scored.size());
+        judgeNode.put("meanScore", Math.round(meanScore * 100d) / 100d);
+        judgeNode.put("passRate", ratio(passed, scored.size()));
+        judgeNode.put("verdict", judgeVerdict(scored.size(), ratio(passed, scored.size())));
+
+        ArrayNode failures = judgeNode.putArray("failures");
+        ArrayNode errors = judgeNode.putArray("errors");
+        judged.forEach(observation -> {
+            AiModelEvaluationJudgeService.Judgment judgment = observation.judgment();
+            if (!judgment.scoredSuccessfully()) {
+                errors.add(observation.caseId() + ": " + judgment.error());
+            } else if (!Boolean.TRUE.equals(judgment.passed())) {
+                failures.add(
+                        observation.caseId() + ": " + judgment.rationale()
+                                + " (score " + judgment.score() + ")"
+                );
+            }
+        });
+        return judgeNode;
+    }
+
+    private String judgeVerdict(int scoredCases, double passRate) {
+        if (scoredCases == 0) {
+            return "UNSCORED";
+        }
+        if (passRate >= 0.8) {
+            return "STRONG";
+        }
+        return passRate >= 0.5 ? "MIXED" : "WEAK";
     }
 
     private String recommendation(
@@ -843,6 +947,9 @@ public class AiModelEvaluationService {
         }
     }
 
+    private record JudgeContext(AiModelConfig config, ChatModel model, int passScore) {
+    }
+
     private record Observation(
             String caseId,
             String category,
@@ -851,7 +958,8 @@ public class AiModelEvaluationService {
             long latencyMs,
             Map<String, MetricResult> metrics,
             ObjectNode response,
-            String error
+            String error,
+            AiModelEvaluationJudgeService.Judgment judgment
     ) {
         private boolean passed() {
             return metrics.values().stream().allMatch(MetricResult::passed);
@@ -878,6 +986,19 @@ public class AiModelEvaluationService {
             }
             if (error != null) {
                 node.put("error", error);
+            }
+            if (judgment != null) {
+                ObjectNode judgeNode = node.putObject("judge");
+                if (judgment.scoredSuccessfully()) {
+                    judgeNode.put("score", judgment.score());
+                    judgeNode.put("passed", judgment.passed());
+                    if (judgment.rationale() != null && !judgment.rationale().isBlank()) {
+                        judgeNode.put("rationale", judgment.rationale());
+                    }
+                } else {
+                    judgeNode.put("error", judgment.error());
+                }
+                judgeNode.put("latencyMs", judgment.latencyMs());
             }
             return node;
         }
