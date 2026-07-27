@@ -8,7 +8,11 @@ import com.job.scheduler.dto.WorkflowAiConversationDetailDTO;
 import com.job.scheduler.dto.WorkflowAiMcpRequirementDTO;
 import com.job.scheduler.dto.WorkflowAiProposedFunctionDTO;
 import com.job.scheduler.dto.WorkflowAiResponseDTO;
+import com.job.scheduler.dto.ElevatedMcpToolDTO;
 import com.job.scheduler.dto.WorkflowAiSaveWorkflowRequestDTO;
+import com.job.scheduler.dto.WorkflowAiTrustReviewDTO;
+import com.job.scheduler.enums.McpTrustLevel;
+import com.job.scheduler.exception.WorkflowAiTrustConfirmationRequiredException;
 import com.job.scheduler.dto.WorkflowDefinitionResponseDTO;
 import com.job.scheduler.dto.WorkflowResponseDTO;
 import com.job.scheduler.dto.WorkflowAiWorkspaceRequestDTO;
@@ -17,6 +21,7 @@ import com.job.scheduler.entity.AiModelConfig;
 import com.job.scheduler.entity.WorkflowAiConversation;
 import com.job.scheduler.entity.WorkflowAiMessage;
 import com.job.scheduler.enums.AiModelProviderType;
+import com.job.scheduler.enums.AiStructuredOutputMode;
 import com.job.scheduler.enums.FunctionSourceMode;
 import com.job.scheduler.enums.FunctionStatus;
 import com.job.scheduler.enums.FunctionVersionStatus;
@@ -37,7 +42,6 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
-import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -61,6 +65,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -78,6 +83,8 @@ class WorkflowAiConversationServiceTest {
     // Defaults to isStreaming() == false, so these turns take the blocking non-streaming path.
     @Mock
     private WorkflowAiStreamBroker streamBroker;
+    @Mock
+    private WorkflowAiTurnRegistry turnRegistry;
     @Mock
     private WorkflowAiConversationRepository conversationRepository;
     @Mock
@@ -99,6 +106,10 @@ class WorkflowAiConversationServiceTest {
     @Mock
     private FunctionRuntimePolicy functionRuntimePolicy;
     @Mock
+    private WorkflowAiProposedFunctionSafetyValidator proposedFunctionSafetyValidator;
+    @Mock
+    private WorkflowAiTrustReviewService trustReviewService;
+    @Mock
     private ChatModel chatModel;
 
     private WorkflowAiConversationService service;
@@ -110,6 +121,7 @@ class WorkflowAiConversationServiceTest {
                 aiModelConfigService,
                 modelResolver,
                 streamBroker,
+                turnRegistry,
                 conversationRepository,
                 messageRepository,
                 aslDefinitionValidator,
@@ -120,6 +132,8 @@ class WorkflowAiConversationServiceTest {
                 resourceCatalogService,
                 functionRegistryService,
                 functionRuntimePolicy,
+                proposedFunctionSafetyValidator,
+                trustReviewService,
                 objectMapper
         );
         modelConfig = new AiModelConfig();
@@ -141,7 +155,41 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn("FUNCTIONS:\nNone registered.\nMCP TOOLS:\nNone registered.");
         lenient().when(resourceCatalogService.buildFunctionCreationContext())
                 .thenReturn("SUPPORTED FUNCTION LANGUAGES (languageId — name):\n- 71 — Python");
+        lenient().when(proposedFunctionSafetyValidator.validate(any()))
+                .thenReturn(List.of());
+        lenient().when(trustReviewService.review(any()))
+                .thenReturn(WorkflowAiTrustReviewDTO.none());
         stubGeneratedIds();
+    }
+
+    @Test
+    void treatsOrdinaryConversationAsGeneralChatWithoutStartingAWorkflow() {
+        WorkflowAiConversation conversation = new WorkflowAiConversation();
+        conversation.setStage(WorkflowAiConversationStage.COLLECTING_WORKFLOW_DETAILS);
+
+        for (String message : List.of(
+                "hi buddy",
+                "how are you",
+                "im good",
+                "tell me how are you"
+        )) {
+            Boolean generalTurn = ReflectionTestUtils.invokeMethod(
+                    service,
+                    "isGeneralChatTurn",
+                    conversation,
+                    message
+            );
+
+            assertThat(generalTurn).as(message).isTrue();
+        }
+
+        Boolean buildTurn = ReflectionTestUtils.invokeMethod(
+                service,
+                "isGeneralChatTurn",
+                conversation,
+                "create a workflow that sends a daily digest"
+        );
+        assertThat(buildTurn).isFalse();
     }
 
     @Test
@@ -222,6 +270,53 @@ class WorkflowAiConversationServiceTest {
                 .contains("$states.result.structuredContent.<field>")
                 .contains("Do not add a terminal Pass solely to end the workflow")
                 .doesNotContain("ItemsPath, ItemSelector");
+    }
+
+    @Test
+    void ordersCatalogAsAStablePrefixAndTurnContextLastForKvCaching() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(resourceCatalogService.buildCatalog()).thenReturn("""
+                FUNCTIONS:
+                - voyager://function/normalize-order@v1
+                """);
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(
+                AiMessage.from("""
+                        {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"ok"}
+                        """)
+        ));
+
+        service.startConversation(
+                "build a workflow that normalizes an order",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
+        verify(chatModel).chat(promptCaptor.capture());
+        List<String> texts = promptCaptor.getValue().stream().map(Object::toString).toList();
+
+        int systemPromptIndex = indexOfContaining(texts, "You are Voyager's workflow builder");
+        int catalogIndex = indexOfContaining(texts, "Available Voyager Task resources");
+        int turnContextIndex = indexOfContaining(texts, "Current stage:");
+
+        // The system prompt and catalog form the stable prefix a server can cache across turns; the
+        // volatile turn context (stage/task/latest ASL) must be the very last message so it never
+        // invalidates that cached prefix.
+        assertThat(systemPromptIndex).isEqualTo(0);
+        assertThat(catalogIndex).isGreaterThanOrEqualTo(0);
+        assertThat(catalogIndex).isLessThan(turnContextIndex);
+        assertThat(turnContextIndex).isEqualTo(texts.size() - 1);
+    }
+
+    private static int indexOfContaining(List<String> texts, String needle) {
+        for (int index = 0; index < texts.size(); index++) {
+            if (texts.get(index).contains(needle)) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     @Test
@@ -652,6 +747,198 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.validationIssues()).isEmpty();
         assertThat(response.aslDefinition().path("StartAt").stringValue()).isEqualTo("Done");
         verify(chatModel, times(2)).chat(anyList());
+    }
+
+    @Test
+    void repairsPlanReadyWithoutAWorkflowDefinition() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from("""
+                        {"stage":"PLAN_READY","message":"Workflow created successfully."}
+                """)),
+                aiResponse(AiMessage.from("""
+                        {"stage":"COLLECTING_WORKFLOW_DETAILS",
+                         "message":"Please provide a name for your workflow."}
+                        """)),
+                aiResponse(AiMessage.from("""
+                        {"stage":"ASL_READY","message":"The workflow is ready for review.",
+                         "aslDefinition":{"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}}
+                        """))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Create an unscheduled workflow with exactly one Succeed state named Done.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(response.aslDefinition().path("StartAt").stringValue()).isEqualTo("Done");
+        assertThat(response.validationIssues()).isEmpty();
+        ArgumentCaptor<List<ChatMessage>> prompts = ArgumentCaptor.forClass(List.class);
+        verify(chatModel, times(3)).chat(prompts.capture());
+        assertThat(prompts.getAllValues().get(1).toString())
+                .contains("PLAN_READY requires a valid ASL definition")
+                .contains("draftWorkflowPayload");
+        assertThat(prompts.getAllValues().get(2).toString())
+                .contains("Do not collect the workflow name before valid ASL exists");
+    }
+
+    @Test
+    void repairsResourcesProposedWithoutConcreteResources() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(resourceCatalogService.findMcpRequirementMatches(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from("""
+                        {"stage":"RESOURCES_PROPOSED",
+                         "message":"An additional weather service is needed."}
+                        """)),
+                aiResponse(AiMessage.from("""
+                        {"stage":"RESOURCES_PROPOSED","message":"Attach a weather MCP server.",
+                         "resourcePlan":{"functions":[],"mcpRequirements":[{
+                         "capability":"fetch current weather by city",
+                         "suggestedToolName":"get-current-weather",
+                         "reason":"the workflow needs live weather",
+                         "trustLevelHint":"READ"}]}}
+                        """))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Fetch current weather for Mangaluru from a live service.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage())
+                .isEqualTo(WorkflowAiConversationStage.RESOURCES_PROPOSED);
+        assertThat(response.resourcePlan().mcpRequirements())
+                .singleElement()
+                .satisfies(requirement -> assertThat(requirement.capability())
+                        .isEqualTo("fetch current weather by city"));
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel, times(2)).chat(anyList());
+    }
+
+    @Test
+    void repairsExternalServiceDeflectionWithoutAResourcePlan() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(resourceCatalogService.findMcpRequirementMatches(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from("""
+                        {"stage":"COLLECTING_WORKFLOW_DETAILS",
+                         "message":"Please attach and sync an OpenWeatherMap MCP service first."}
+                        """)),
+                aiResponse(AiMessage.from("""
+                        {"stage":"RESOURCES_PROPOSED","message":"Attach a weather MCP server.",
+                         "resourcePlan":{"functions":[],"mcpRequirements":[{
+                         "capability":"fetch current weather through OpenWeatherMap",
+                         "suggestedToolName":"get-current-weather",
+                         "reason":"the requested live service is not in the catalog",
+                         "trustLevelHint":"READ"}]}}
+                        """))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Create a workflow that calls OpenWeatherMap without embedding credentials.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage())
+                .isEqualTo(WorkflowAiConversationStage.RESOURCES_PROPOSED);
+        assertThat(response.resourcePlan().mcpRequirements()).hasSize(1);
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel, times(2)).chat(anyList());
+    }
+
+    @Test
+    void repairsPrematureScheduleCollectionIntoAFunctionProposal() {
+        String functionProposal = """
+                {"stage":"RESOURCES_PROPOSED","message":"Review the SHA-256 helper.",
+                 "resourcePlan":{"functions":[{
+                 "name":"sha256-hex","description":"Computes a SHA-256 hexadecimal digest",
+                 "languageId":71,
+                 "sourceCode":"import hashlib,json,sys\\nvalue=json.load(sys.stdin)\\njson.dump(hashlib.sha256(value.encode()).hexdigest(),sys.stdout)",
+                 "rationale":"hashing is deterministic local computation"}],"mcpRequirements":[]}}
+                """;
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from("""
+                        {"stage":"COLLECTING_SCHEDULE_DETAILS",
+                         "message":"How often should this workflow run?"}
+                        """)),
+                aiResponse(AiMessage.from(functionProposal)),
+                aiResponse(AiMessage.from(functionProposal))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Create an unscheduled workflow that computes a SHA-256 hex digest.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage())
+                .isEqualTo(WorkflowAiConversationStage.RESOURCES_PROPOSED);
+        assertThat(response.resourcePlan().functions())
+                .singleElement()
+                .satisfies(function -> assertThat(function.name()).isEqualTo("sha256-hex"));
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel, times(3)).chat(anyList());
+    }
+
+    @Test
+    void allowsScheduleCollectionAfterAslWhenSchedulingWasRequested() {
+        UUID conversationId = UUID.randomUUID();
+        WorkflowAiConversation conversation = conversation(conversationId);
+        conversation.setInitialInstruction("Run a digest every day.");
+        conversation.setDraftAsl(
+                "{\"StartAt\":\"Done\",\"States\":{\"Done\":{\"Type\":\"Succeed\"}}}"
+        );
+        when(conversationRepository.findByIdForUpdate(conversationId))
+                .thenReturn(Optional.of(conversation));
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(conversation))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"COLLECTING_SCHEDULE_DETAILS",
+                 "message":"What time should the daily workflow run?"}
+                """)));
+
+        WorkflowAiResponseDTO response = service.continueConversation(
+                conversationId,
+                "continue",
+                modelConfig.getId(),
+                null
+        );
+
+        assertThat(response.stage())
+                .isEqualTo(WorkflowAiConversationStage.COLLECTING_SCHEDULE_DETAILS);
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel).chat(anyList());
     }
 
     @Test
@@ -1170,7 +1457,8 @@ class WorkflowAiConversationServiceTest {
                         "It seems like the user accidentally typed many zero characters."
                 )),
                 aiResponse(AiMessage.from("""
-                        {"stage":"ASL_READY","message":"Context retained."}
+                        {"stage":"ASL_READY","message":"Context retained.",
+                         "aslDefinition":{"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}}
                         """))
         );
 
@@ -1224,10 +1512,11 @@ class WorkflowAiConversationServiceTest {
     }
 
     @Test
-    void jsonModeIsRequestedWhenTheEndpointSupportsIt() {
+    void strictJsonSchemaIsRequestedForAnUnprobedCompatibleEndpoint() {
         when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
         when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
-        when(modelResolver.supportsJsonMode(modelConfig)).thenReturn(true);
+        when(modelResolver.preferredStructuredOutputMode(modelConfig))
+                .thenReturn(AiStructuredOutputMode.STRICT_JSON_SCHEMA);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
         when(chatModel.chat(any(ChatRequest.class))).thenReturn(aiResponse(AiMessage.from("""
                 {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"which city?"}
@@ -1237,36 +1526,46 @@ class WorkflowAiConversationServiceTest {
 
         ArgumentCaptor<ChatRequest> request = ArgumentCaptor.forClass(ChatRequest.class);
         verify(chatModel).chat(request.capture());
-        // Constrained decoding is what makes malformed JSON impossible; without this the reply is
-        // only as well-formed as the model chose to be.
-        assertThat(request.getValue().responseFormat()).isEqualTo(ResponseFormat.JSON);
+        assertThat(request.getValue().responseFormat().jsonSchema()).isNotNull();
+        assertThat(request.getValue().responseFormat().jsonSchema().name())
+                .isEqualTo("voyager_workflow_ai_response");
+        verify(modelResolver).recordStructuredOutputMode(
+                modelConfig,
+                AiStructuredOutputMode.STRICT_JSON_SCHEMA
+        );
     }
 
     @Test
-    void anEndpointThatRejectsJsonModeFallsBackAndIsNotAskedAgain() {
+    void anEndpointThatRejectsEveryResponseFormatFallsBackToPromptOnly() {
         when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
         when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
-        when(modelResolver.supportsJsonMode(modelConfig)).thenReturn(true);
+        when(modelResolver.preferredStructuredOutputMode(modelConfig))
+                .thenReturn(AiStructuredOutputMode.STRICT_JSON_SCHEMA);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
         when(chatModel.chat(any(ChatRequest.class)))
-                .thenThrow(new RuntimeException("{\"error\":{\"message\":\"response_format is not "
-                        + "supported by this model\"}}"));
+                .thenThrow(new RuntimeException(
+                        "{\"error\":{\"message\":\"JSON Mode couldn't be met\"}}"
+                ));
         when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
                 {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"which city?"}
                 """)));
 
         service.startConversation("build a workflow", modelConfig.getId(), null, null);
 
-        // The turn still completes, and the endpoint is remembered so later turns skip the attempt.
+        // The turn still completes, and the weakest accepted mode is remembered per model.
         verify(chatModel).chat(anyList());
-        verify(modelResolver).markJsonModeUnsupported(modelConfig);
+        verify(modelResolver, atLeastOnce()).recordStructuredOutputMode(
+                modelConfig,
+                AiStructuredOutputMode.PROMPT_ONLY
+        );
     }
 
     @Test
     void aQuotaRejectionIsNotMistakenForMissingJsonModeSupport() {
         when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
         when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
-        when(modelResolver.supportsJsonMode(modelConfig)).thenReturn(true);
+        when(modelResolver.preferredStructuredOutputMode(modelConfig))
+                .thenReturn(AiStructuredOutputMode.STRICT_JSON_SCHEMA);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
         when(chatModel.chat(any(ChatRequest.class))).thenThrow(new RuntimeException(
                 "{\"errors\":[{\"message\":\"you have used up your daily free allocation of 10,000 "
@@ -1283,7 +1582,7 @@ class WorkflowAiConversationServiceTest {
         // Retrying without JSON mode would fail identically, so it must not double the user's wait
         // or permanently disable JSON mode for an endpoint that supports it fine.
         verify(chatModel, never()).chat(anyList());
-        verify(modelResolver, never()).markJsonModeUnsupported(modelConfig);
+        verify(modelResolver, never()).recordStructuredOutputMode(any(), any());
     }
 
     @Test
@@ -1471,7 +1770,8 @@ class WorkflowAiConversationServiceTest {
                                 "UTC",
                                 definition
                         ),
-                        canvasLayout
+                        canvasLayout,
+                        null
                 )
         );
 
@@ -1525,7 +1825,8 @@ class WorkflowAiConversationServiceTest {
                                 "UTC",
                                 definition
                         ),
-                        objectMapper.readTree("{}")
+                        objectMapper.readTree("{}"),
+                        null
                 )
         );
 
@@ -1573,7 +1874,8 @@ class WorkflowAiConversationServiceTest {
                                 "UTC",
                                 definition
                         ),
-                        objectMapper.createObjectNode()
+                        objectMapper.createObjectNode(),
+                        null
                 )
         );
 
@@ -1581,6 +1883,70 @@ class WorkflowAiConversationServiceTest {
         assertThat(draft.getWorkflowId()).isEqualTo(workflowId);
         verify(workflowService, never()).createWorkflow(any());
         verify(conversationRepository, never()).delete(draft);
+    }
+
+    @Test
+    void saveIsBlockedWhenElevatedMcpTrustNotConfirmed() throws Exception {
+        UUID conversationId = UUID.randomUUID();
+        JsonNode definition = objectMapper.readTree("""
+                {"StartAt":"Create","States":{"Create":{"Type":"Task",
+                "Resource":"voyager://mcp/crm/create-lead?trust=WRITE","End":true}}}
+                """);
+        WorkflowAiConversation conversation = conversation(conversationId);
+        when(conversationRepository.findByIdForUpdate(conversationId))
+                .thenReturn(Optional.of(conversation));
+        when(trustReviewService.review(any())).thenReturn(new WorkflowAiTrustReviewDTO(
+                true,
+                List.of(new ElevatedMcpToolDTO(
+                        "Create", "crm", "create-lead", McpTrustLevel.WRITE, "CRM", McpTrustLevel.WRITE))));
+
+        assertThatThrownBy(() -> service.saveConversationWorkflow(
+                conversationId,
+                new WorkflowAiSaveWorkflowRequestDTO(
+                        new CreateWorkflowRequestDTO(
+                                "Lead flow", null, 3, "workflow-ai-" + conversationId, "UTC", definition),
+                        objectMapper.createObjectNode(),
+                        null
+                )
+        )).isInstanceOf(WorkflowAiTrustConfirmationRequiredException.class);
+
+        // Nothing is created before confirmation.
+        verify(workflowService, never()).createWorkflow(any());
+        verify(workflowService, never()).createRevision(any(), any());
+    }
+
+    @Test
+    void saveProceedsWhenElevatedMcpTrustConfirmed() throws Exception {
+        UUID conversationId = UUID.randomUUID();
+        UUID workflowId = UUID.randomUUID();
+        JsonNode definition = objectMapper.readTree("""
+                {"StartAt":"Create","States":{"Create":{"Type":"Task",
+                "Resource":"voyager://mcp/crm/create-lead?trust=WRITE","End":true}}}
+                """);
+        WorkflowAiConversation conversation = conversation(conversationId);
+        when(conversationRepository.findByIdForUpdate(conversationId))
+                .thenReturn(Optional.of(conversation));
+        WorkflowResponseDTO workflow = workflow(workflowId, WorkflowStatus.ACTIVE, null, definition);
+        WorkflowDefinitionResponseDTO revision = revision(workflowId, 2, definition, true);
+        when(workflowService.createWorkflow(any(CreateWorkflowRequestDTO.class))).thenReturn(workflow);
+        when(workflowService.createRevision(eq(workflowId), any())).thenReturn(revision);
+        when(workflowService.updateCanvasLayout(eq(workflowId), eq(2L), any())).thenReturn(revision);
+        when(workflowService.getWorkflow(workflowId)).thenReturn(workflow);
+
+        var result = service.saveConversationWorkflow(
+                conversationId,
+                new WorkflowAiSaveWorkflowRequestDTO(
+                        new CreateWorkflowRequestDTO(
+                                "Daily digest", null, 3, "workflow-key", "UTC", definition),
+                        objectMapper.createObjectNode(),
+                        true
+                )
+        );
+
+        assertThat(result.workflow().id()).isEqualTo(workflowId);
+        verify(workflowService).createWorkflow(any());
+        // Confirmation bypasses the review entirely.
+        verify(trustReviewService, never()).review(any());
     }
 
     private WorkflowResponseDTO workflow(
@@ -1861,6 +2227,50 @@ class WorkflowAiConversationServiceTest {
     }
 
     @Test
+    void repairsMcpRequirementsThatHaveNoCapabilityBeforeSavingThem() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(resourceCatalogService.findMcpRequirementMatches(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList()))
+                .thenReturn(
+                        aiResponse(AiMessage.from("""
+                                {"stage":"RESOURCES_PROPOSED","message":"Attach weather tools.",
+                                 "resourcePlan":{"functions":[],"mcpRequirements":[{},{}]}}
+                                """)),
+                        aiResponse(AiMessage.from("""
+                                {"stage":"RESOURCES_PROPOSED","message":"Attach a weather MCP server.",
+                                 "resourcePlan":{"functions":[],"mcpRequirements":[{
+                                 "capability":"fetch current weather by city",
+                                 "suggestedToolName":"get-current-weather",
+                                 "reason":"the workflow needs live weather for Mangaluru",
+                                 "trustLevelHint":"READ"}]}}
+                                """))
+                );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "fetch current weather for Mangaluru",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.validationIssues()).isEmpty();
+        assertThat(response.resourcePlan().mcpRequirements())
+                .singleElement()
+                .satisfies(requirement -> {
+                    assertThat(requirement.capability())
+                            .isEqualTo("fetch current weather by city");
+                    assertThat(requirement.suggestedToolName())
+                            .isEqualTo("get-current-weather");
+                });
+        verify(chatModel, times(2)).chat(anyList());
+    }
+
+    @Test
     void repairsFunctionPlaceholderThatWasIncorrectlyProposedAsMcp() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
@@ -2057,6 +2467,40 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
         assertThat(response.aslDefinition()).isNotNull();
         assertThat(conversation.getResourcePlan()).isNull();
+    }
+
+    @Test
+    void provisioningRejectsUnsafeEditedFunctionBeforeCreatingRegistryRows() {
+        UUID conversationId = UUID.randomUUID();
+        WorkflowAiConversation conversation = conversation(conversationId);
+        conversation.setStage(WorkflowAiConversationStage.RESOURCES_PROPOSED);
+        when(conversationRepository.findByIdForUpdate(conversationId))
+                .thenReturn(Optional.of(conversation));
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        doThrow(new IllegalArgumentException(
+                "Function 'weather-helper' was rejected: sourceCode contains a placeholder credential."
+        )).when(proposedFunctionSafetyValidator).assertSafe(any());
+
+        WorkflowAiProposedFunctionDTO proposed = new WorkflowAiProposedFunctionDTO(
+                "weather-helper",
+                "Fetches weather",
+                71,
+                "api_key = \"YOUR_API_KEY\"",
+                List.of(),
+                "needed"
+        );
+
+        assertThatThrownBy(() -> service.provisionResources(
+                conversationId,
+                List.of(proposed),
+                modelConfig.getId()
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("placeholder credential");
+
+        verify(functionRegistryService, never()).createFunction(any());
+        verify(functionRegistryService, never()).createVersion(any(), any());
     }
 
     @Test

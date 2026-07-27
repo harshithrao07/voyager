@@ -12,11 +12,14 @@ import com.job.scheduler.dto.WorkflowExecutionDetailDTO;
 import com.job.scheduler.dto.WorkflowExecutionPageDTO;
 import com.job.scheduler.dto.WorkflowResponseDTO;
 import com.job.scheduler.dto.WorkflowPageDTO;
+import com.job.scheduler.dto.WorkflowTriageRequestDTO;
+import com.job.scheduler.dto.WorkflowTriageResponseDTO;
 import com.job.scheduler.dto.UpdateWorkflowMetadataRequestDTO;
 import com.job.scheduler.dto.UpdateWorkflowCanvasLayoutRequestDTO;
 import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.enums.WorkflowExecutionStatus;
 import com.job.scheduler.enums.WorkflowExecutionTrigger;
+import com.job.scheduler.service.WorkflowAiFailureTriageService;
 import com.job.scheduler.service.WorkflowExecutionInspectionService;
 import com.job.scheduler.service.WorkflowDraftTestService;
 import com.job.scheduler.service.WorkflowExecutionCancellationService;
@@ -49,6 +52,7 @@ public class WorkflowController {
     private final WorkflowExecutionCancellationService
             workflowExecutionCancellationService;
     private final WorkflowDraftTestService workflowDraftTestService;
+    private final WorkflowAiFailureTriageService workflowAiFailureTriageService;
 
     @PostMapping
     public ResponseEntity<WorkflowResponseDTO> createWorkflow(
@@ -170,6 +174,21 @@ public class WorkflowController {
                 workflowExecutionInspectionService.getExecution(
                         workflowId,
                         executionId
+                )
+        );
+    }
+
+    @PostMapping("/{workflowId}/executions/{executionId}/triage")
+    public ResponseEntity<WorkflowTriageResponseDTO> triageExecution(
+            @PathVariable UUID workflowId,
+            @PathVariable UUID executionId,
+            @RequestBody(required = false) WorkflowTriageRequestDTO request
+    ) {
+        return ResponseEntity.ok(
+                workflowAiFailureTriageService.triage(
+                        workflowId,
+                        executionId,
+                        request == null ? null : request.modelConfigId()
                 )
         );
     }

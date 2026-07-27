@@ -33,15 +33,24 @@ public class WorkflowAiStreamBroker {
     private static final ThreadLocal<String> BOUND_SESSION = new ThreadLocal<>();
 
     private final SimpMessagingTemplate messagingTemplate;
+    private final WorkflowAiTurnRegistry turnRegistry;
 
-    /** Runs {@code turn} with streaming directed at {@code sessionId}. */
+    /**
+     * Runs {@code turn} with streaming directed at {@code sessionId} and its thread registered so the
+     * turn can be cancelled if the session disconnects. A cancellation is swallowed here: the turn's
+     * transaction has already rolled back, and the client that cancelled is no longer listening for a
+     * reply.
+     */
     public <T> T withSession(String sessionId, Supplier<T> turn) {
         if (sessionId == null || sessionId.isBlank()) {
             return turn.get();
         }
         BOUND_SESSION.set(sessionId);
-        try {
+        try (WorkflowAiTurnRegistry.Registration ignored = turnRegistry.register(sessionId)) {
             return turn.get();
+        } catch (WorkflowAiCancelledException cancelled) {
+            log.info("Workflow AI turn cancelled for session {}", sessionId);
+            return null;
         } finally {
             BOUND_SESSION.remove();
         }

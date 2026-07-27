@@ -38,6 +38,7 @@ type Props = {
   onCloseRevisionPanel: () => void;
   onWorkflowGenerated: (definition: any) => void;
   onCanvasLayoutChange: (positions: CanvasNodePositions) => void;
+  onNavigate?: (path: string) => void;
 };
 
 export function WorkflowDetailPage({
@@ -59,6 +60,7 @@ export function WorkflowDetailPage({
   onCloseRevisionPanel,
   onWorkflowGenerated,
   onCanvasLayoutChange,
+  onNavigate,
 }: Props) {
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -76,6 +78,7 @@ export function WorkflowDetailPage({
             key={workflowDetail.id}
             workflow={workflowDetail}
             selectedRevisionNumber={selectedRevision ? Number(selectedRevision.id) : null}
+            onNavigate={onNavigate}
           />
         ) : activeTab === 'visualizer' ? (
           <AslGraphViewer

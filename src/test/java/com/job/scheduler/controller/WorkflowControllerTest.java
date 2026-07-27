@@ -14,6 +14,7 @@ import com.job.scheduler.enums.WorkflowExecutionTrigger;
 import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.exception.ApiExceptionHandler;
 import com.job.scheduler.service.WorkflowExecutionRunner;
+import com.job.scheduler.service.WorkflowAiFailureTriageService;
 import com.job.scheduler.service.WorkflowDraftTestService;
 import com.job.scheduler.service.WorkflowExecutionInspectionService;
 import com.job.scheduler.service.WorkflowExecutionCancellationService;
@@ -55,6 +56,8 @@ class WorkflowControllerTest {
             workflowExecutionCancellationService;
     @Mock
     private WorkflowDraftTestService workflowDraftTestService;
+    @Mock
+    private WorkflowAiFailureTriageService workflowAiFailureTriageService;
 
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
@@ -68,7 +71,8 @@ class WorkflowControllerTest {
                         workflowExecutionRunner,
                         workflowExecutionInspectionService,
                         workflowExecutionCancellationService,
-                        workflowDraftTestService
+                        workflowDraftTestService,
+                        workflowAiFailureTriageService
                 ))
                 .setControllerAdvice(new ApiExceptionHandler())
                 .build();

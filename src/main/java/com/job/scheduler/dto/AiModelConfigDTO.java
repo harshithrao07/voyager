@@ -1,6 +1,7 @@
 package com.job.scheduler.dto;
 
 import com.job.scheduler.enums.AiModelProviderType;
+import com.job.scheduler.enums.AiStructuredOutputMode;
 
 import java.util.UUID;
 
@@ -12,6 +13,7 @@ public record AiModelConfigDTO(
         String modelName,
         boolean enabled,
         boolean defaultModel,
-        boolean hasCredential
+        boolean hasCredential,
+        AiStructuredOutputMode structuredOutputMode
 ) {
 }

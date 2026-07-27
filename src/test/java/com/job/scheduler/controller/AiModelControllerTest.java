@@ -1,10 +1,15 @@
 package com.job.scheduler.controller;
 
 import com.job.scheduler.dto.AiModelConfigDTO;
+import com.job.scheduler.dto.AiModelEvaluationDTO;
 import com.job.scheduler.dto.AiModelTestResponseDTO;
+import com.job.scheduler.enums.AiModelEvaluationMode;
+import com.job.scheduler.enums.AiModelEvaluationStatus;
 import com.job.scheduler.enums.AiModelProviderType;
+import com.job.scheduler.enums.AiStructuredOutputMode;
 import com.job.scheduler.exception.ApiExceptionHandler;
 import com.job.scheduler.service.AiModelConfigService;
+import com.job.scheduler.service.AiModelEvaluationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -14,6 +19,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -32,13 +38,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AiModelControllerTest {
     @Mock
     private AiModelConfigService aiModelConfigService;
+    @Mock
+    private AiModelEvaluationService aiModelEvaluationService;
 
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders
-                .standaloneSetup(new AiModelController(aiModelConfigService))
+                .standaloneSetup(new AiModelController(
+                        aiModelConfigService,
+                        aiModelEvaluationService
+                ))
                 .setControllerAdvice(new ApiExceptionHandler())
                 .build();
     }
@@ -184,6 +195,74 @@ class AiModelControllerTest {
         verify(aiModelConfigService).deleteModel(modelId);
     }
 
+    @Test
+    void listLatestEvaluationsReturnsStoredResults() throws Exception {
+        AiModelEvaluationDTO evaluation = evaluation(AiModelEvaluationStatus.COMPLETED);
+        when(aiModelEvaluationService.listLatest()).thenReturn(List.of(evaluation));
+
+        mockMvc.perform(get("/app/v1/ai/models/evaluations/latest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].runId").value(evaluation.runId().toString()))
+                .andExpect(jsonPath("$[0].status").value("COMPLETED"))
+                .andExpect(jsonPath("$[0].mode").value("QUICK"))
+                .andExpect(jsonPath("$[0].stale").value(false));
+    }
+
+    @Test
+    void startEvaluationReturnsAcceptedRun() throws Exception {
+        UUID modelId = UUID.randomUUID();
+        AiModelEvaluationDTO evaluation = evaluation(AiModelEvaluationStatus.RUNNING);
+        when(aiModelEvaluationService.start(modelId, AiModelEvaluationMode.RELIABILITY))
+                .thenReturn(evaluation);
+
+        mockMvc.perform(post("/app/v1/ai/models/{modelId}/evaluations", modelId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mode\":\"RELIABILITY\"}"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        verify(aiModelEvaluationService).start(modelId, AiModelEvaluationMode.RELIABILITY);
+    }
+
+    @Test
+    void cancelEvaluationReturnsUpdatedRun() throws Exception {
+        UUID modelId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        AiModelEvaluationDTO evaluation = evaluation(AiModelEvaluationStatus.RUNNING);
+        when(aiModelEvaluationService.cancel(modelId, runId)).thenReturn(evaluation);
+
+        mockMvc.perform(post(
+                        "/app/v1/ai/models/{modelId}/evaluations/{runId}/cancel",
+                        modelId,
+                        runId
+                ))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        verify(aiModelEvaluationService).cancel(modelId, runId);
+    }
+
+    private AiModelEvaluationDTO evaluation(AiModelEvaluationStatus status) {
+        return new AiModelEvaluationDTO(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                "GPT Local",
+                status,
+                AiModelEvaluationMode.QUICK,
+                1,
+                status == AiModelEvaluationStatus.COMPLETED ? 7 : 0,
+                7,
+                false,
+                false,
+                null,
+                null,
+                Instant.parse("2026-07-26T00:00:00Z"),
+                status == AiModelEvaluationStatus.COMPLETED
+                        ? Instant.parse("2026-07-26T00:01:00Z")
+                        : null
+        );
+    }
+
     private AiModelConfigDTO model(String displayName, boolean enabled) {
         return new AiModelConfigDTO(
                 UUID.randomUUID(),
@@ -193,7 +272,8 @@ class AiModelControllerTest {
                 "llama3",
                 enabled,
                 false,
-                false
+                false,
+                AiStructuredOutputMode.UNKNOWN
         );
     }
 }

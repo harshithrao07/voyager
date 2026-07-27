@@ -30,7 +30,8 @@ import java.util.stream.Collectors;
 public class WorkflowAiResourceCatalogService {
     private static final Set<String> MATCH_STOP_WORDS = Set.of(
             "a", "an", "and", "for", "from", "in", "of", "on", "or", "the", "to", "with",
-            "capability", "result", "results", "tool"
+            "access", "api", "capability", "current", "data", "information", "result",
+            "results", "service", "tool"
     );
     private final FunctionDefinitionRepository functionRepository;
     private final McpToolRepository mcpToolRepository;
@@ -163,6 +164,9 @@ public class WorkflowAiResourceCatalogService {
                 .toList();
 
         return requirements.stream()
+                .filter(requirement -> requirement != null
+                        && requirement.capability() != null
+                        && !requirement.capability().isBlank())
                 .map(requirement -> bestMatch(requirement, enabledTools))
                 .filter(match -> match != null)
                 .toList();

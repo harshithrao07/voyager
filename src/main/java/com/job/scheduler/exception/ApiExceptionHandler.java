@@ -115,6 +115,33 @@ public class ApiExceptionHandler {
         return build(HttpStatus.BAD_GATEWAY, "MCP_CONNECTION_ERROR", exception.getMessage(), request);
     }
 
+    /**
+     * Saving a workflow that grants WRITE/DESTRUCTIVE trust to an MCP tool without confirmation.
+     * The elevated tools ride along in {@code fieldErrors} so the client can list them and retry
+     * with {@code confirmElevatedTrust=true}.
+     */
+    @ExceptionHandler(WorkflowAiTrustConfirmationRequiredException.class)
+    public ResponseEntity<ApiErrorDTO> handleTrustConfirmation(
+            WorkflowAiTrustConfirmationRequiredException exception,
+            HttpServletRequest request
+    ) {
+        List<ApiFieldErrorDTO> fieldErrors = exception.getElevatedTools()
+                .stream()
+                .map(tool -> new ApiFieldErrorDTO(
+                        tool.stateName(),
+                        tool.grantedTrustLevel() + " " + tool.serverId() + "/" + tool.toolName()
+                                + (tool.serverDisplayName() == null ? "" : " (" + tool.serverDisplayName() + ")")
+                ))
+                .toList();
+        return build(
+                HttpStatus.CONFLICT,
+                "MCP_TRUST_CONFIRMATION_REQUIRED",
+                exception.getMessage(),
+                request,
+                fieldErrors
+        );
+    }
+
     @ExceptionHandler(OptimisticLockingFailureException.class)
     public ResponseEntity<ApiErrorDTO> handleOptimisticLock(
             OptimisticLockingFailureException exception,

@@ -10,7 +10,7 @@ with its messages, generated JSON, canvas positions, and settings restored.
 - [Configure a model](#configure-a-model)
 - [Start and resume conversations](#start-and-resume-conversations)
 - [Live turn progress](#live-turn-progress)
-- [JSON mode](#json-mode)
+- [Structured output](#structured-output)
 - [What the assistant can use](#what-the-assistant-can-use)
 - [Conversation context and summarization](#conversation-context-and-summarization)
 - [Retrying a response](#retrying-a-response)
@@ -147,30 +147,29 @@ progress frame, proves the turn is alive and resets it. It sits above the backen
 per-call model timeout so a genuinely stalled model surfaces the server's message instead of a
 generic client-side abort.
 
-## JSON mode
+## Structured output
 
-Voyager asks the model for its reply in **JSON mode** wherever the endpoint supports it, so the
-provider constrains decoding and a syntactically invalid reply becomes impossible. Without it the
-format is only a request in the prompt, and smaller models routinely break it in ways they cannot
-avoid by trying harder — an unescaped quote inside a string, a missing colon — which then costs up to
-three repair passes and often fails anyway.
+Voyager sends the workflow reply contract as a native **JSON Schema response format**. The closed
+top-level envelope requires `stage`, `message`, `aslDefinition`, `finalPlan`,
+`draftWorkflowPayload`, and `resourcePlan`; optional artifacts are represented by `null`. Resource
+proposals are typed and closed as well. This moves JSON correctness into provider-side constrained
+decoding instead of relying only on the prompt and repair passes.
 
-This is JSON mode, not a strict JSON schema, and that is deliberate: `aslDefinition` is an arbitrary
-nested state machine, while strict schemas require every property to be declared up front with
-`additionalProperties: false`. Guaranteeing well-formed JSON is achievable; describing every legal
-ASL document as a closed schema is not. Voyager already validates the semantics itself, so the
-constraint only needs to cover syntax.
+ASL itself remains an open JSON value because state names and nested payloads are user-defined. The
+schema guarantees the response envelope; Voyager's ASL, runtime-capability, function-resource, and
+MCP-resource validators remain authoritative for the dynamic workflow document and its invariants.
 
-Support is not universal, and a server that lacks it rejects the request outright rather than
-degrading. The first rejection per endpoint falls back to a plain request and is remembered, so later
-turns skip the attempt:
+"OpenAI compatible" endpoints do not all implement the same level of structured output. Voyager
+learns and persists the strongest accepted mode per registered endpoint/model:
 
 ```text
-JSON mode disabled for AI endpoint <baseUrl> (<reason>); asking for free-form JSON instead
+STRICT_JSON_SCHEMA → JSON_SCHEMA → JSON_OBJECT → PROMPT_ONLY
 ```
 
-Quota exhaustion, a rejected key, and rate limits are excluded from that fallback — retrying them
-without JSON mode fails identically and would only double the wait before the same error.
+A mode is weakened only after an explicit rejection naming `response_format`, JSON Schema, or
+structured output. Quota exhaustion, rejected credentials, rate limits, timeouts, and connection
+failures do not alter the learned capability. Schema-constrained turns use the blocking completion
+path because compatible providers do not consistently combine constrained decoding with SSE.
 
 ## What the assistant can use
 
@@ -201,6 +200,39 @@ Completed or superseded proposals remain visible as read-only conversation histo
 whose attachment metadata was overwritten are recovered from the original structured AI response.
 A model response that fails validation is retained as a diagnostic chat message, but its rejected
 resource payload is never published as a new card or allowed to replace the last accepted proposal.
+
+Because Voyager cannot create MCP servers itself (they are external endpoints with their own trust
+and credentials), each MCP requirement carries a **Find a server** link that deep-links to the MCP
+Servers page pre-searched for that capability (`/mcp?discover=<capability>`). That page's registry
+browser queries `PublicMcpRegistryService` — a JSON catalog bundled in-repo (always available, works
+offline) plus, when `scheduler.mcp.registry.external.enabled` is set, the external MCP registry at
+`scheduler.mcp.registry.external.url`. Picking an install option (an npm/PyPI/Docker package or a
+remote HTTP endpoint) prefills the register form — transport, command/args or URL, and env vars with
+secret ones left blank — so the user reviews the trust level and enters credentials before the server
+is created. Nothing is auto-registered.
+
+Saving a generated workflow that grants elevated MCP trust is gated. An MCP Task opts into mutation
+via the resource's `?trust=WRITE` or `?trust=DESTRUCTIVE` query (READ_ONLY is the default), so
+`WorkflowAiTrustReviewService` scans the definition — including Parallel branches and Map item
+processors — for those grants. When any are present, `saveConversationWorkflow`/`saveDraftWorkflow`
+throw `WorkflowAiTrustConfirmationRequiredException` **before** anything is created, mapped to HTTP 409
+`MCP_TRUST_CONFIRMATION_REQUIRED` with the offending tools in `fieldErrors`. The UI catches it, lists
+the tools in `TrustConfirmationModal`, and retries the identical save with `confirmElevatedTrust: true`
+once the user acknowledges. The gate is enforced server-side, so it holds for any caller, not just the
+Voyager UI.
+
+## Failure triage
+
+A failed or timed-out execution can be diagnosed with the model. **Diagnose with AI** on the
+execution trace calls `POST /app/v1/workflows/{id}/executions/{executionId}/triage`, which feeds the
+failing state (name, resource, input, error, cause), the execution input, and the full ASL to the
+model and returns a plain-English root cause, an explanation, and — when the fix is in the definition
+— a corrected ASL. `WorkflowAiFailureTriageService` is deliberately separate from the authoring
+conversation: it resolves the model through `WorkflowAiModelResolver` and calls `chat()` with a
+lenient JSON parse, then runs any proposed ASL through the same validators as authoring so the UI can
+show whether it validates. **Apply patch** stashes the corrected definition and opens the revision
+editor pre-loaded with it, so the fix is reviewed and saved through the normal path — including ASL
+validation and the trust-confirmation gate above. Triage is read-only until the user saves.
 
 AI-proposed function names are canonicalized before display and approval. Camel case and snake case
 inputs such as `shortenAndTitleCase` or `shorten_and_title_case` become the registry-safe kebab-case

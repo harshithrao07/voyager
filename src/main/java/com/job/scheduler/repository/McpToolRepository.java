@@ -2,6 +2,7 @@ package com.job.scheduler.repository;
 
 import com.job.scheduler.entity.McpServer;
 import com.job.scheduler.entity.McpTool;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -15,6 +16,7 @@ public interface McpToolRepository extends JpaRepository<McpTool, UUID> {
 
     List<McpTool> findByMcpServerAndEnabledTrueOrderByToolNameAsc(McpServer mcpServer);
 
+    @EntityGraph(attributePaths = "mcpServer")
     List<McpTool> findByEnabledTrue();
 
     Optional<McpTool> findByMcpServerAndToolName(McpServer mcpServer, String toolName);

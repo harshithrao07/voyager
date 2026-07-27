@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Boxes, Check, CheckCircle2, Code2, Loader2, Plug, ShieldAlert } from 'lucide-react';
+import { Boxes, Check, CheckCircle2, Code2, Library, Loader2, Plug, ShieldAlert } from 'lucide-react';
 import type {
   WorkflowAiMcpRequirement,
   WorkflowAiProposedFunction,
@@ -15,6 +15,8 @@ type Props = {
   onApprove: (functions: WorkflowAiProposedFunction[]) => void;
   onContinue: () => void;
   onOpenMcpServers: () => void;
+  /** Deep-link to the public MCP registry, pre-searched for a capability. */
+  onDiscoverMcp?: (capability: string) => void;
 };
 
 function normalizedResourceText(value?: string | null) {
@@ -23,6 +25,15 @@ function normalizedResourceText(value?: string | null) {
 
 function normalizeFunctionName(name: string) {
   return normalizedResourceText(name);
+}
+
+function hasMcpRequirementDetails(requirement: WorkflowAiMcpRequirement | null | undefined) {
+  return Boolean(
+    requirement?.capability?.trim()
+    || requirement?.suggestedToolName?.trim()
+    || requirement?.reason?.trim()
+    || requirement?.trustLevelHint?.trim(),
+  );
 }
 
 
@@ -39,6 +50,7 @@ export function ResourcePlanCard({
   onApprove,
   onContinue,
   onOpenMcpServers,
+  onDiscoverMcp,
 }: Props) {
   // A live card renders what is still outstanding, not what was first proposed. Later turns add
   // requirements, and a card frozen at the first proposal leaves those unreachable — there would be
@@ -69,6 +81,8 @@ export function ResourcePlanCard({
   const mcpRequirements = live && outstandingMcp.length > 0
     ? outstandingMcp
     : plan.mcpRequirements ?? [];
+  const visibleMcpRequirements = mcpRequirements.filter(hasMcpRequirementDetails);
+  const malformedMcpRequirementCount = mcpRequirements.length - visibleMcpRequirements.length;
 
   const pendingFunctionNames = useMemo(() => new Set(
     (activePlan?.functions ?? []).map((fn) => normalizeFunctionName(fn.name)),
@@ -135,7 +149,7 @@ export function ResourcePlanCard({
   const selectedCount = drafts.filter(
     (fn, index) => selected.has(index) && functionIsPending(fn),
   ).length;
-  const pendingMcpCount = mcpRequirements.filter(() => mcpIsPending()).length;
+  const pendingMcpCount = visibleMcpRequirements.filter(() => mcpIsPending()).length;
 
   return (
     <div className="rounded-DEFAULT border border-secondary/30 bg-secondary-container/[0.06] p-3">
@@ -225,7 +239,7 @@ export function ResourcePlanCard({
           <div className="flex items-center gap-1.5 font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant">
             <Plug size={11} /> MCP servers to attach
           </div>
-          {mcpRequirements.map((requirement: WorkflowAiMcpRequirement, index) => {
+          {visibleMcpRequirements.map((requirement: WorkflowAiMcpRequirement, index) => {
             const pending = mcpIsPending();
             return (
             <div key={index} className="rounded-[4px] border border-border-subtle bg-surface-container-low px-2.5 py-2">
@@ -250,9 +264,25 @@ export function ResourcePlanCard({
                   suggested tool: {requirement.suggestedToolName}
                 </div>
               )}
+              {pending && onDiscoverMcp && requirement.capability?.trim() && (
+                <button
+                  type="button"
+                  onClick={() => onDiscoverMcp(requirement.capability)}
+                  disabled={busy}
+                  className="mt-1.5 flex h-6 items-center gap-1 rounded-[3px] border border-secondary/40 px-1.5 font-mono-sm text-[10px] text-secondary transition-colors hover:bg-secondary-container/20 disabled:opacity-50"
+                >
+                  <Library size={11} /> Find a server →
+                </button>
+              )}
             </div>
             );
           })}
+          {malformedMcpRequirementCount > 0 && (
+            <div className="rounded-[4px] border border-status-warning/35 bg-status-warning/10 px-2.5 py-2 text-[11px] leading-snug text-status-warning">
+              MCP requirement details were missing from this reply. Retry it to regenerate the
+              server capabilities.
+            </div>
+          )}
           {!resolved && pendingMcpCount > 0 && <div className="flex flex-wrap gap-2">
             <button
               type="button"

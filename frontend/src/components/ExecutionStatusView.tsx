@@ -2,13 +2,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Braces,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Copy,
+  Loader2,
   Play,
   RefreshCw,
   Search,
+  Sparkles,
   Square,
+  Wrench,
   X,
 } from 'lucide-react';
 import {
@@ -16,6 +20,7 @@ import {
   getWorkflowExecution,
   listWorkflowExecutions,
   startWorkflowExecution,
+  triageWorkflowExecution,
   type WorkflowExecutionDetailDTO,
   type WorkflowExecutionPageDTO,
   type WorkflowExecutionStatusDTO,
@@ -24,7 +29,9 @@ import {
   type WorkflowRuntimeStatusDTO,
   type WorkflowStateExecutionAttemptDTO,
   type WorkflowStateExecutionDTO,
+  type WorkflowTriageResponse,
 } from '../api';
+import { setPendingTriagePatch } from './workflow-create/triagePatchStore';
 
 const PAGE_SIZE = 20;
 const POLL_INTERVAL_MS = 1_500;
@@ -58,6 +65,7 @@ const EXECUTION_STATUSES: WorkflowExecutionStatusDTO[] = [
 type Props = {
   workflow: WorkflowResponseDTO;
   selectedRevisionNumber: number | null;
+  onNavigate?: (path: string) => void;
 };
 
 function isActiveExecution(status?: WorkflowExecutionStatusDTO | null) {
@@ -139,7 +147,143 @@ function runButtonMessage(workflow: WorkflowResponseDTO) {
   return null;
 }
 
-export function ExecutionStatusView({ workflow, selectedRevisionNumber }: Props) {
+/**
+ * AI failure triage for a failed/timed-out execution: diagnoses the root cause and, when the fix is
+ * in the workflow, offers a validated ASL patch. "Apply patch" stashes the corrected definition and
+ * opens the revision editor pre-loaded with it (the user reviews and saves through the normal path).
+ */
+function TriagePanel({
+  workflowId,
+  executionId,
+  editRevision,
+  onNavigate,
+}: {
+  workflowId: string;
+  executionId: string;
+  editRevision: number | null;
+  onNavigate?: (path: string) => void;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<WorkflowTriageResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // A different execution is a different diagnosis; drop any stale result.
+  useEffect(() => {
+    setResult(null);
+    setError(null);
+  }, [executionId]);
+
+  const diagnose = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setResult(await triageWorkflowExecution(workflowId, executionId));
+    } catch (diagnoseError) {
+      setError(diagnoseError instanceof Error ? diagnoseError.message : 'Diagnosis failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const patch = result?.patch;
+  const canApply = Boolean(patch?.hasPatch && patch.valid && editRevision != null && onNavigate);
+
+  const applyPatch = () => {
+    if (!patch?.aslDefinition || editRevision == null) return;
+    setPendingTriagePatch(workflowId, patch.aslDefinition);
+    onNavigate?.(`/workflows/${encodeURIComponent(workflowId)}/revisions/${editRevision}/edit`);
+  };
+
+  return (
+    <div className="rounded border border-status-info/40 bg-surface-container-high p-3" data-testid="execution-triage">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 font-body-sm text-body-sm font-medium text-status-info">
+          <Sparkles size={15} /> AI failure triage
+        </div>
+        {!result && (
+          <button
+            type="button"
+            data-testid="execution-triage-run"
+            onClick={() => void diagnose()}
+            disabled={loading}
+            className="flex items-center gap-1.5 rounded border border-status-info/50 bg-status-info/10 px-2.5 py-1 font-body-sm text-[12px] text-status-info transition-colors hover:bg-status-info/20 disabled:opacity-50"
+          >
+            {loading ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            {loading ? 'Diagnosing…' : 'Diagnose with AI'}
+          </button>
+        )}
+      </div>
+
+      {error && <p className="mt-2 text-body-sm text-status-error">{error}</p>}
+
+      {result && (
+        <div className="mt-2 flex flex-col gap-2 text-body-sm" data-testid="execution-triage-result">
+          <div>
+            <div className="font-label-caps text-label-caps uppercase tracking-widest text-on-surface-variant">Root cause</div>
+            <p className="mt-0.5 text-on-surface">{result.rootCause}</p>
+          </div>
+          {result.explanation && (
+            <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-on-surface-variant">{result.explanation}</p>
+          )}
+
+          {patch?.hasPatch ? (
+            <div className="rounded border border-border-muted bg-surface-lowest p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 font-body-sm text-[12px] font-medium text-on-surface">
+                  <Wrench size={13} /> Proposed fix
+                </div>
+                {patch.valid ? (
+                  <span className="flex items-center gap-1 rounded border border-status-success/40 bg-status-success/10 px-1.5 py-0.5 font-mono-sm text-[10px] text-status-success">
+                    <CheckCircle2 size={10} /> Validates
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 rounded border border-status-error/40 bg-status-error/10 px-1.5 py-0.5 font-mono-sm text-[10px] text-status-error">
+                    <AlertTriangle size={10} /> Needs review
+                  </span>
+                )}
+              </div>
+              {patch.changes.length > 0 && (
+                <ul className="mt-1.5 list-disc pl-4 text-[12px] text-on-surface-variant">
+                  {patch.changes.map((change, index) => <li key={index}>{change}</li>)}
+                </ul>
+              )}
+              {!patch.valid && patch.validationIssues.length > 0 && (
+                <ul className="mt-1.5 list-disc pl-4 text-[11.5px] text-status-error">
+                  {patch.validationIssues.map((issue, index) => <li key={index}>{issue}</li>)}
+                </ul>
+              )}
+              <button
+                type="button"
+                data-testid="execution-triage-apply"
+                onClick={applyPatch}
+                disabled={!canApply}
+                title={patch.valid ? 'Open the corrected ASL in the revision editor' : 'The proposed ASL did not validate; open it anyway to edit'}
+                className="mt-2 flex items-center gap-1.5 rounded border border-status-info bg-status-info/15 px-2.5 py-1 font-body-sm text-[12px] text-status-info transition-colors hover:bg-status-info/25 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Wrench size={13} /> Apply patch in editor
+              </button>
+            </div>
+          ) : (
+            <p className="text-[12px] text-on-surface-variant">
+              No workflow change proposed — the fix is likely outside the definition (an outage, credentials, or input).
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={() => void diagnose()}
+            disabled={loading}
+            className="self-start text-[11px] text-on-surface-variant underline-offset-2 transition-colors hover:text-on-surface hover:underline disabled:opacity-50"
+          >
+            {loading ? 'Diagnosing…' : 'Re-diagnose'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ExecutionStatusView({ workflow, selectedRevisionNumber, onNavigate }: Props) {
   const [page, setPage] = useState(0);
   const [executionPage, setExecutionPage] = useState<WorkflowExecutionPageDTO | null>(null);
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
@@ -703,6 +847,17 @@ export function ExecutionStatusView({ workflow, selectedRevisionNumber }: Props)
                     </div>
                     {selectedDetail.execution.cause && <p className="mt-1 text-on-surface">{selectedDetail.execution.cause}</p>}
                   </div>
+                )}
+
+                {(selectedDetail.execution.status === 'FAILED'
+                  || selectedDetail.execution.status === 'TIMED_OUT') && (
+                  <TriagePanel
+                    workflowId={workflow.id}
+                    executionId={selectedDetail.execution.id}
+                    editRevision={selectedDetail.execution.definitionRevision
+                      ?? workflow.activeDefinition?.revision ?? null}
+                    onNavigate={onNavigate}
+                  />
                 )}
 
                 {showRawDetail ? (

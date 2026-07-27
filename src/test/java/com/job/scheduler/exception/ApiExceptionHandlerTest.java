@@ -142,6 +142,32 @@ class ApiExceptionHandlerTest {
     }
 
     @Test
+    void mapsTrustConfirmationToConflictWithToolsInFieldErrors() {
+        var exception = new WorkflowAiTrustConfirmationRequiredException(List.of(
+                new com.job.scheduler.dto.ElevatedMcpToolDTO(
+                        "CreateLead",
+                        "crm",
+                        "create-lead",
+                        com.job.scheduler.enums.McpTrustLevel.WRITE,
+                        "CRM",
+                        com.job.scheduler.enums.McpTrustLevel.WRITE
+                )
+        ));
+
+        var response = handler.handleTrustConfirmation(exception, request);
+
+        assertResponse(response.getBody(), HttpStatus.CONFLICT, "MCP_TRUST_CONFIRMATION_REQUIRED");
+        assertThat(response.getBody().fieldErrors()).singleElement()
+                .satisfies(error -> {
+                    assertThat(error.field()).isEqualTo("CreateLead");
+                    assertThat(error.message())
+                            .contains("WRITE")
+                            .contains("crm/create-lead")
+                            .contains("CRM");
+                });
+    }
+
+    @Test
     void hidesUnexpectedExceptionDetails() {
         ApiErrorDTO body = handler.handleUnexpected(
                 new RuntimeException("database password leaked"),

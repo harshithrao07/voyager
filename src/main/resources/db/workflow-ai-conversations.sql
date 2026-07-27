@@ -14,6 +14,22 @@ CREATE TABLE IF NOT EXISTS ai_model_configs (
 ALTER TABLE ai_model_configs
     ADD COLUMN IF NOT EXISTS credential_encrypted TEXT;
 
+ALTER TABLE ai_model_configs
+    ADD COLUMN IF NOT EXISTS evaluation_run_id UUID,
+    ADD COLUMN IF NOT EXISTS evaluation_status VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS evaluation_mode VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS evaluation_repetitions INTEGER,
+    ADD COLUMN IF NOT EXISTS evaluation_completed_cases INTEGER,
+    ADD COLUMN IF NOT EXISTS evaluation_total_cases INTEGER,
+    ADD COLUMN IF NOT EXISTS evaluation_cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS evaluation_result JSONB,
+    ADD COLUMN IF NOT EXISTS evaluation_error TEXT,
+    ADD COLUMN IF NOT EXISTS evaluation_started_at TIMESTAMP WITH TIME ZONE,
+    ADD COLUMN IF NOT EXISTS evaluation_finished_at TIMESTAMP WITH TIME ZONE;
+
+ALTER TABLE ai_model_configs
+    ADD COLUMN IF NOT EXISTS structured_output_mode VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN';
+
 -- Legacy releases used either a plaintext api_key or a deployment reference.
 -- Neither can be converted to ciphertext without its plaintext value; operators
 -- re-enter credentials through the write-only UI/API after the upgrade.

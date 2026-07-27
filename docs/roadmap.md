@@ -1,14 +1,14 @@
 # Roadmap
 
-Proposed, **not yet committed** work. Everything here is pending — a backlog of ideas to pull from
-once the core app is stable. Items reference the systems they plug into so they can be picked up
-without re-deriving context.
+Tracked product and AI-engineering work. Pending items form the backlog; completed and in-progress
+items remain here as delivery context. Items reference the systems they plug into so future work can
+be picked up without re-deriving context.
 
 Status: `[ ]` pending · `[~]` in progress · `[x]` done
 
 ---
 
-## AI features (pending)
+## AI features
 
 Grounding: the AI stack lives in
 [`WorkflowAiConversationService`](../src/main/java/com/job/scheduler/service/WorkflowAiConversationService.java)
@@ -21,14 +21,19 @@ functions via [`FunctionRegistryService`](../src/main/java/com/job/scheduler/ser
 
 ### Next up (high value, reuses existing machinery)
 
-- [ ] **AI failure triage on executions** — on a failed run, feed the failing state + input +
-  `errorOutput` + ASL to the model and return a plain-English root cause **plus a one-click ASL
-  patch** (add Retry/Catch, fix a JSONata path). Reuses the repair loop + validators already in
-  `WorkflowAiConversationService`, pointed at executions instead of authoring.
+- [x] **AI failure triage on executions** — a "Diagnose with AI" action on a failed/timed-out run
+  feeds the failing state + input + error/cause + ASL to the model and returns a plain-English root
+  cause plus an optional validated ASL patch; **Apply patch** opens the revision editor pre-loaded
+  with the fix (so it still passes ASL validation + the trust gate on save). `WorkflowAiFailureTriageService`
+  reuses the model resolver and the authoring validators; endpoint `POST /workflows/{id}/executions/{execId}/triage`.
+  - [ ] **Pending:** live verification of the *patch-generation* branch. Endpoint guards (400/404) and
+    the *no-patch* branch are verified live; the model-returns-a-validated-patch path is covered by unit
+    tests only. Reproduce end-to-end with a genuinely fixable failure (e.g. a Task with a broken JSONata
+    path) and confirm the model returns a patch that validates and applies in the editor.
 - [ ] **AI JSONata expression assistant** — in the state inspector, "describe what you want" →
   validated JSONata `{% … %}` from the state's input shape + desired output. Removes the biggest
   authoring pain point.
-- [ ] **Placeholder-secret guard on provisioning** — reject creating any AI-proposed function whose
+- [x] **Placeholder-secret guard on provisioning** — reject creating any AI-proposed function whose
   code carries placeholder credentials (`YOUR_API_KEY`, bearer tokens) or won't serialize. Small;
   closes a real hole in the resource-provisioning flow.
 - [ ] **Auto-generate function test cases** — have the model propose input/expected-output cases so
@@ -45,8 +50,10 @@ functions via [`FunctionRegistryService`](../src/main/java/com/job/scheduler/ser
 
 ### MCP & catalog
 
-- [ ] **MCP registry recommendation** — when a `RESOURCES_PROPOSED` MCP requirement appears, search a
-  public MCP registry for a matching server and offer one-click "register this."
+- [x] **MCP registry recommendation** — a "Find a server" deep-link on each `RESOURCES_PROPOSED` MCP
+  requirement opens a public-catalog browser (`PublicMcpRegistryService`: bundled JSON always, external
+  `registry.modelcontextprotocol.io` opt-in via `scheduler.mcp.registry.external.*`); picking an install
+  option prefills the register form for the user to review trust + secrets before creating.
 - [ ] **Embeddings / RAG catalog matching** — embed functions + MCP tools and retrieve only relevant
   ones per prompt instead of injecting the whole catalog. Scales the catalog and cuts token/
   truncation pressure on local models.
@@ -65,8 +72,11 @@ functions via [`FunctionRegistryService`](../src/main/java/com/job/scheduler/ser
 
 - [ ] **Pre-activation AI review** — before activation, flag risky patterns: unguarded `DESTRUCTIVE`
   MCP calls, PII in logs, missing error handling.
-- [ ] **Trust-aware confirmation** — surface when the AI wires in a `WRITE`/`DESTRUCTIVE` tool and
-  require explicit confirmation.
+- [x] **Trust-aware confirmation** — saving an AI-authored workflow that grants `WRITE`/`DESTRUCTIVE`
+  MCP trust (`?trust=…`) is blocked until the user confirms. `WorkflowAiTrustReviewService` scans the
+  definition; `saveWorkspaceWorkflow` throws `WorkflowAiTrustConfirmationRequiredException` → HTTP 409
+  `MCP_TRUST_CONFIRMATION_REQUIRED` with the tools; the UI shows `TrustConfirmationModal` and retries
+  the save with `confirmElevatedTrust: true`.
 
 ### Platform / UX
 
@@ -77,7 +87,7 @@ functions via [`FunctionRegistryService`](../src/main/java/com/job/scheduler/ser
 
 ---
 
-## AI engineering concepts / experiments (pending)
+## AI engineering concepts / experiments
 
 Techniques worth building into Voyager as much for the learning as the feature. Voyager is a strong
 sandbox for these because it pairs **structured output** (ASL/JSONata), **deterministic validators**
@@ -87,14 +97,17 @@ Suggested arc: evals → constrained decoding → distillation / tool-calling.
 
 ### Fixes problems already hit
 
-- [ ] **Constrained decoding / grammar-guided generation** ⭐ — force valid output instead of hoping
-  for it. Ollama/llama.cpp support GBNF grammars; OpenAI-compat supports `response_format:
-  json_schema`. Feed the response contract (stage/message/aslDefinition/resourcePlan) as a schema so
-  the model *cannot* emit comments, unescaped quotes, or truncated JSON. Root-cause fix for the
-  malformed-JSON failures the lenient parser only patches.
-- [ ] **Evals + LLM-as-judge** ⭐ — a benchmark of prompts → expected outcome (proposes function?
-  proposes MCP? ASL validates? runs?). The ASL validators are a ready-made automatic grader, so
-  prompt/model changes can be *measured* instead of eyeballed.
+- [x] **Constrained decoding / grammar-guided generation** ⭐ — the provider call now sends the
+  workflow response contract through `response_format: json_schema`, starting with strict schema
+  enforcement where supported. Capability negotiation is cached per registered model and degrades
+  only on an explicit provider rejection: strict schema → schema → JSON object → prompt-only. The
+  dynamic ASL payload remains subject to Voyager's deterministic semantic validators.
+- [~] **Evals + LLM-as-judge** ⭐ — deterministic `workflow-ai-v1` benchmark, registered-model
+  runner, ranked comparison, and prompt-freshness tracking delivered; LLM judge remains pending.
+  The benchmark covers prompts → expected outcome
+  (proposes function? proposes MCP? ASL validates? runs?) and persists a comparable Chat / ASL /
+  MCP / Functions / Safety capability tape for each model. The ASL validators are a ready-made
+  automatic grader, so prompt/model changes can be *measured* instead of eyeballed.
 - [ ] **Distillation / fine-tuning a small ASL model** — generate synthetic training data with a
   large model, then SFT/LoRA a small local model on Voyager's ASL + JSONata + function format.
   Structural fix for weak local models (e.g. qwen3:8b) failing at code-in-JSON.

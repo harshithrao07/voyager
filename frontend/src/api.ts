@@ -64,7 +64,15 @@ export interface AiModelConfigDTO {
   enabled: boolean;
   defaultModel: boolean;
   hasCredential: boolean;
+  structuredOutputMode: AiStructuredOutputMode;
 }
+
+export type AiStructuredOutputMode =
+  | 'UNKNOWN'
+  | 'STRICT_JSON_SCHEMA'
+  | 'JSON_SCHEMA'
+  | 'JSON_OBJECT'
+  | 'PROMPT_ONLY';
 
 export interface AiModelConfigRequest {
   displayName: string;
@@ -95,6 +103,67 @@ export interface AiModelDiscoverRequest {
 
 export interface AiModelEnabledRequest {
   enabled: boolean;
+}
+
+export type AiModelEvaluationMode = 'QUICK' | 'RELIABILITY';
+export type AiModelEvaluationStatus = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type AiModelRecommendation = 'RECOMMENDED' | 'LIMITED' | 'FAILED';
+
+export interface AiModelEvaluationMetric {
+  passed: number;
+  total: number;
+  rate: number;
+  failures: string[];
+}
+
+export interface AiModelEvaluationResult {
+  suiteId: string;
+  suiteDescription: string;
+  promptFingerprint: string;
+  mode: AiModelEvaluationMode;
+  repetitions: number;
+  modelName: string;
+  providerType: AiModelConfigDTO['providerType'];
+  structuredOutputMode: AiStructuredOutputMode;
+  metrics: Record<string, AiModelEvaluationMetric>;
+  qualityGates: Record<string, {
+    minimum: number;
+    actual: number;
+    passed: boolean;
+  }>;
+  capabilities: {
+    chat: number;
+    asl: number;
+    mcp: number;
+    functions: number;
+    safety: number;
+  };
+  summary: {
+    passedCases: number;
+    totalCases: number;
+    casePassRate: number;
+    qualityGatesPassed: boolean;
+    recommendation: AiModelRecommendation;
+    latencyP50Ms: number;
+    latencyP95Ms: number;
+  };
+}
+
+export interface AiModelEvaluationDTO {
+  runId: string;
+  modelConfigId: string;
+  modelDisplayName: string;
+  status: AiModelEvaluationStatus;
+  mode: AiModelEvaluationMode;
+  repetitions: number;
+  completedCases: number;
+  totalCases: number;
+  cancelRequested: boolean;
+  stale?: boolean;
+  result?: AiModelEvaluationResult | null;
+  errorMessage?: string | null;
+  startedAt: string;
+  finishedAt?: string | null;
 }
 
 export interface CreateWorkflowRequest {
@@ -544,6 +613,35 @@ export function getWorkflowExecution(
   );
 }
 
+export interface WorkflowTriagePatch {
+  hasPatch: boolean;
+  aslDefinition: any | null;
+  changes: string[];
+  valid: boolean;
+  validationIssues: string[];
+}
+
+export interface WorkflowTriageResponse {
+  executionId: string;
+  failingStateName: string | null;
+  rootCause: string;
+  explanation: string;
+  patch: WorkflowTriagePatch;
+}
+
+/** AI diagnosis of a failed execution: root cause + an optional validated ASL patch. */
+export function triageWorkflowExecution(
+  workflowId: string,
+  executionId: string,
+  modelConfigId?: string | null,
+): Promise<WorkflowTriageResponse> {
+  return sendJson<WorkflowTriageResponse>(
+    `/app/v1/workflows/${workflowId}/executions/${executionId}/triage`,
+    'POST',
+    { modelConfigId: modelConfigId ?? null },
+  );
+}
+
 export function cancelWorkflowExecution(
   workflowId: string,
   executionId: string,
@@ -920,6 +1018,32 @@ export function listAllAiModels(): Promise<AiModelConfigDTO[]> {
   return getJson<AiModelConfigDTO[]>('/app/v1/ai/models/all');
 }
 
+export function listLatestAiModelEvaluations(): Promise<AiModelEvaluationDTO[]> {
+  return getJson<AiModelEvaluationDTO[]>('/app/v1/ai/models/evaluations/latest');
+}
+
+export function startAiModelEvaluation(
+  modelId: string,
+  mode: AiModelEvaluationMode,
+): Promise<AiModelEvaluationDTO> {
+  return sendJson<AiModelEvaluationDTO>(
+    `/app/v1/ai/models/${encodeURIComponent(modelId)}/evaluations`,
+    'POST',
+    { mode },
+  );
+}
+
+export function cancelAiModelEvaluation(
+  modelId: string,
+  runId: string,
+): Promise<AiModelEvaluationDTO> {
+  return sendJson<AiModelEvaluationDTO>(
+    `/app/v1/ai/models/${encodeURIComponent(modelId)}/evaluations/${encodeURIComponent(runId)}/cancel`,
+    'POST',
+    {},
+  );
+}
+
 export function getWorkflowAiConversation(
   conversationId: string,
 ): Promise<WorkflowAiConversationDetailDTO> {
@@ -931,11 +1055,55 @@ export function getWorkflowAiConversation(
 export interface WorkflowAiSaveWorkflowRequest {
   workflow: CreateWorkflowRequest;
   canvasLayout: CanvasNodePositions;
+  /** Set once the user has acknowledged the WRITE/DESTRUCTIVE MCP tools this workflow calls. */
+  confirmElevatedTrust?: boolean;
 }
 
 export interface WorkflowAiSaveWorkflowResponse {
   workflow: WorkflowResponseDTO;
   revision: WorkflowDefinitionResponseDTO;
+}
+
+/** An MCP call that grants WRITE/DESTRUCTIVE trust, surfaced for explicit confirmation. */
+export interface ElevatedMcpTool {
+  /** ASL state that makes the call. */
+  stateName: string;
+  /** Trust granted by the call, e.g. "WRITE crm/create-lead (CRM)". */
+  detail: string;
+}
+
+/**
+ * Thrown by the workflow-save calls when the definition wires in WRITE/DESTRUCTIVE MCP tools
+ * that the user has not yet confirmed. Retry the same save with confirmElevatedTrust: true.
+ */
+export class TrustConfirmationRequiredError extends Error {
+  readonly tools: ElevatedMcpTool[];
+  constructor(message: string, tools: ElevatedMcpTool[]) {
+    super(message);
+    this.name = 'TrustConfirmationRequiredError';
+    this.tools = tools;
+  }
+}
+
+/** Returns the typed error when a save failed only for lack of trust confirmation, else null. */
+async function readTrustConfirmation(response: Response): Promise<TrustConfirmationRequiredError | null> {
+  if (response.status !== 409) {
+    return null;
+  }
+  const body = await response.clone().json().catch(() => null);
+  if (!body || body.error !== 'MCP_TRUST_CONFIRMATION_REQUIRED') {
+    return null;
+  }
+  const tools: ElevatedMcpTool[] = Array.isArray(body.fieldErrors)
+    ? body.fieldErrors.map((entry: { field?: string; message?: string }) => ({
+        stateName: entry.field ?? '',
+        detail: entry.message ?? '',
+      }))
+    : [];
+  return new TrustConfirmationRequiredError(
+    body.message ?? 'This workflow calls MCP tools that can write or delete data.',
+    tools,
+  );
 }
 
 export function getWorkflowAiDraft(
@@ -1067,6 +1235,8 @@ export async function saveWorkflowAiConversation(
     },
   );
   if (!response.ok) {
+    const trustError = await readTrustConfirmation(response);
+    if (trustError) throw trustError;
     throw new Error(`Failed to save conversation workflow: ${await readError(response)}`);
   }
   return response.json();
@@ -1085,6 +1255,8 @@ export async function saveWorkflowAiDraft(
     },
   );
   if (!response.ok) {
+    const trustError = await readTrustConfirmation(response);
+    if (trustError) throw trustError;
     throw new Error(`Failed to save draft workflow: ${await readError(response)}`);
   }
   return response.json();
@@ -1243,7 +1415,11 @@ function parseStompFrames(data: string) {
         .find((line) => line.startsWith('subscription:'))
         ?.slice('subscription:'.length)
         .trim();
-      return { command, body, subscription };
+      const heartBeat = headerLines
+        .find((line) => line.startsWith('heart-beat:'))
+        ?.slice('heart-beat:'.length)
+        .trim();
+      return { command, body, subscription, heartBeat };
     });
 }
 
@@ -1263,38 +1439,96 @@ export interface WorkflowAiStreamEvent {
 
 const STREAM_SUBSCRIPTION = '/user/queue/workflow-ai-stream';
 const RESPONSE_SUBSCRIPTION = '/user/queue/workflow-ai';
+/** Heart-beat interval requested in the STOMP CONNECT, in ms (both directions). */
+const HEARTBEAT_MS = 10000;
+/** Miss this many heart-beat intervals with no inbound data and the connection is treated as dead. */
+const HEARTBEAT_TOLERANCE = 2;
 /**
- * Idle budget, not a total budget. A local reasoning model can legitimately work for minutes; what
- * signals a dead connection is silence. Sits above the backend's own 150 s per-call timeout so a
- * stalled model surfaces the server's message instead of a generic client-side abort.
+ * Fallback liveness budget, used ONLY when the broker declines heart-beats (an older backend). With
+ * heart-beats negotiated, a dead connection is caught in ~HEARTBEAT_MS * HEARTBEAT_TOLERANCE instead,
+ * decoupled from how long a turn legitimately runs.
  */
 const SOCKET_IDLE_TIMEOUT_MS = 180000;
+
+/** Cancellation surfaces as an AbortError so callers can tell it apart from a real failure. */
+export function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function abortError(): Error {
+  return Object.assign(new Error('Generation cancelled'), { name: 'AbortError' });
+}
 
 function sendWorkflowAiSocket(
   destination: string,
   payload: unknown,
   onEvent?: (event: WorkflowAiStreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<WorkflowAiResponse> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(websocketUrl());
-    let idleTimer = 0;
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
 
-    const armIdleTimer = () => {
-      window.clearTimeout(idleTimer);
-      idleTimer = window.setTimeout(() => {
-        socket.close();
-        reject(new Error('Workflow AI socket timed out'));
-      }, SOCKET_IDLE_TIMEOUT_MS);
-    };
+    const socket = new WebSocket(websocketUrl());
+    // Liveness is proven by STOMP heart-beats negotiated on CONNECTED, not by guessing how long a turn
+    // should take. Heart-beats flow from the broker independently of the turn thread, so even a long
+    // blocking model call keeps the connection provably alive. The fixed idle timer is only a fallback
+    // for a broker that declines heart-beats (e.g. an older backend).
+    let idleTimer = 0;
+    let livenessTimer = 0;
+    let heartbeatSender = 0;
+    let serverHeartbeatMs = 0;
 
     const cleanup = () => {
       window.clearTimeout(idleTimer);
+      window.clearTimeout(livenessTimer);
+      window.clearInterval(heartbeatSender);
+      signal?.removeEventListener('abort', onAbort);
       socket.onopen = null;
       socket.onmessage = null;
       socket.onerror = null;
       socket.onclose = null;
     };
 
+    const failDead = () => {
+      cleanup();
+      try {
+        socket.close();
+      } catch {
+        // Already closing; the reject below is what matters.
+      }
+      reject(new Error('Workflow AI connection lost'));
+    };
+
+    const armIdleTimer = () => {
+      window.clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(failDead, SOCKET_IDLE_TIMEOUT_MS);
+    };
+
+    // Any inbound data — a frame or a bare heart-beat newline — proves the connection is alive.
+    const markInbound = () => {
+      if (serverHeartbeatMs > 0) {
+        window.clearTimeout(idleTimer);
+        window.clearTimeout(livenessTimer);
+        livenessTimer = window.setTimeout(failDead, serverHeartbeatMs * HEARTBEAT_TOLERANCE);
+      } else {
+        armIdleTimer();
+      }
+    };
+
+    const onAbort = () => {
+      cleanup();
+      try {
+        socket.close();
+      } catch {
+        // Already closing; the reject below is what matters.
+      }
+      reject(abortError());
+    };
+
+    signal?.addEventListener('abort', onAbort);
     armIdleTimer();
 
     socket.onerror = () => {
@@ -1302,17 +1536,43 @@ function sendWorkflowAiSocket(
       reject(new Error('Workflow AI socket connection failed'));
     };
 
+    socket.onclose = () => {
+      // A server- or network-initiated close; our own intentional closes null this handler first.
+      failDead();
+    };
+
     socket.onopen = () => {
       socket.send(encodeStompFrame('CONNECT', {
         'accept-version': '1.2',
-        'heart-beat': '0,0',
+        'heart-beat': `${HEARTBEAT_MS},${HEARTBEAT_MS}`,
       }));
     };
 
     socket.onmessage = (event) => {
+      markInbound();
       const frames = parseStompFrames(String(event.data));
       for (const frame of frames) {
         if (frame.command === 'CONNECTED') {
+          // Negotiate heart-beat intervals per the STOMP spec, then move liveness off the fallback
+          // idle timer and onto heart-beat monitoring. Header is "<server-out>,<server-wants-in>".
+          const [serverOutMs, serverWantsInMs] = (frame.heartBeat || '0,0')
+            .split(',')
+            .map((value) => Number(value) || 0);
+          serverHeartbeatMs = serverOutMs === 0 ? 0 : Math.max(HEARTBEAT_MS, serverOutMs);
+          const clientToServerMs = serverWantsInMs === 0
+            ? 0
+            : Math.max(HEARTBEAT_MS, serverWantsInMs);
+          if (clientToServerMs > 0) {
+            heartbeatSender = window.setInterval(() => {
+              try {
+                socket.send('\n');
+              } catch {
+                // Socket closing; cleanup will clear this interval.
+              }
+            }, clientToServerMs);
+          }
+          markInbound();
+
           socket.send(encodeStompFrame('SUBSCRIBE', {
             id: 'workflow-ai-response',
             destination: RESPONSE_SUBSCRIPTION,
@@ -1328,8 +1588,6 @@ function sendWorkflowAiSocket(
           }, JSON.stringify(payload)));
         }
         if (frame.command === 'MESSAGE') {
-          // Any traffic proves the turn is alive, including progress frames.
-          armIdleTimer();
           if (frame.subscription === 'workflow-ai-stream') {
             try {
               onEvent?.(JSON.parse(frame.body) as WorkflowAiStreamEvent);
@@ -1355,15 +1613,17 @@ function sendWorkflowAiSocket(
 export function startWorkflowAiConversation(
   request: WorkflowAiStartRequest,
   onEvent?: (event: WorkflowAiStreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<WorkflowAiResponse> {
-  return sendWorkflowAiSocket('/app/workflow-ai/start', request, onEvent);
+  return sendWorkflowAiSocket('/app/workflow-ai/start', request, onEvent, signal);
 }
 
 export function continueWorkflowAiConversation(
   request: WorkflowAiChatRequest,
   onEvent?: (event: WorkflowAiStreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<WorkflowAiResponse> {
-  return sendWorkflowAiSocket('/app/workflow-ai/message', request, onEvent);
+  return sendWorkflowAiSocket('/app/workflow-ai/message', request, onEvent, signal);
 }
 
 export async function provisionWorkflowAiResources(
@@ -1390,6 +1650,9 @@ export async function regenerateWorkflowAiMessage(
 ): Promise<WorkflowAiResponse> {
   const response = await fetch(`/app/v1/workflow-ai/messages/${messageId}/regenerate`, {
     method: 'POST',
+    // A retry is persisted by the backend. Let the small request outlive a page refresh so the
+    // server can finish and the reloaded conversation can recover the regenerated message.
+    keepalive: true,
     headers: {
       'Content-Type': 'application/json',
     },
@@ -1532,6 +1795,42 @@ export interface McpToolCallResult {
   content?: McpToolCallContentBlock[];
   structuredContent?: unknown;
   isError?: boolean | null;
+}
+
+export type PublicMcpSource = 'BUNDLED' | 'EXTERNAL';
+
+export interface PublicMcpEnvVar {
+  name: string;
+  description: string | null;
+  secret: boolean;
+  required: boolean;
+  defaultValue: string | null;
+}
+
+export interface PublicMcpInstallOption {
+  label: string;
+  transport: McpTransport;
+  command: string | null;
+  args: string[] | null;
+  baseUrl: string | null;
+  endpoint: string | null;
+  env: PublicMcpEnvVar[];
+}
+
+export interface PublicMcpServer {
+  sourceId: string;
+  name: string;
+  description: string | null;
+  version: string | null;
+  repositoryUrl: string | null;
+  source: PublicMcpSource;
+  installs: PublicMcpInstallOption[];
+  suggestedTrustLevel: McpTrustLevel;
+}
+
+/** Searches the public MCP catalog (bundled + external when enabled) for a capability. */
+export function searchMcpRegistry(query: string, limit = 10): Promise<PublicMcpServer[]> {
+  return getJson<PublicMcpServer[]>(`/app/v1/mcp/servers/registry/search${buildQuery({ query, limit })}`);
 }
 
 export function listMcpServers(status?: McpServerStatus): Promise<McpServerDTO[]> {

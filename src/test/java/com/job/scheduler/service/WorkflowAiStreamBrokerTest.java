@@ -31,6 +31,9 @@ class WorkflowAiStreamBrokerTest {
     @Mock
     private SimpMessagingTemplate messagingTemplate;
 
+    @Mock
+    private WorkflowAiTurnRegistry turnRegistry;
+
     @InjectMocks
     private WorkflowAiStreamBroker broker;
 

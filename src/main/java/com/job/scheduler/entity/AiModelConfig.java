@@ -1,6 +1,9 @@
 package com.job.scheduler.entity;
 
 import com.job.scheduler.enums.AiModelProviderType;
+import com.job.scheduler.enums.AiModelEvaluationMode;
+import com.job.scheduler.enums.AiModelEvaluationStatus;
+import com.job.scheduler.enums.AiStructuredOutputMode;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -13,7 +16,9 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -56,6 +61,46 @@ public class AiModelConfig {
 
     @Column(name = "default_model", nullable = false)
     private boolean defaultModel;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "structured_output_mode", nullable = false)
+    private AiStructuredOutputMode structuredOutputMode = AiStructuredOutputMode.UNKNOWN;
+
+    @Column(name = "evaluation_run_id")
+    private UUID evaluationRunId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "evaluation_status")
+    private AiModelEvaluationStatus evaluationStatus;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "evaluation_mode")
+    private AiModelEvaluationMode evaluationMode;
+
+    @Column(name = "evaluation_repetitions")
+    private Integer evaluationRepetitions;
+
+    @Column(name = "evaluation_completed_cases")
+    private Integer evaluationCompletedCases;
+
+    @Column(name = "evaluation_total_cases")
+    private Integer evaluationTotalCases;
+
+    @Column(name = "evaluation_cancel_requested", nullable = false)
+    private boolean evaluationCancelRequested;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "evaluation_result", columnDefinition = "JSONB")
+    private String evaluationResult;
+
+    @Column(name = "evaluation_error", columnDefinition = "TEXT")
+    private String evaluationError;
+
+    @Column(name = "evaluation_started_at")
+    private Instant evaluationStartedAt;
+
+    @Column(name = "evaluation_finished_at")
+    private Instant evaluationFinishedAt;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

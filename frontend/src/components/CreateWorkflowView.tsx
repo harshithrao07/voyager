@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Braces, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-  continueWorkflowAiConversation,
   createWorkflowAiDraft,
   createAiModel,
   createWorkflow,
@@ -22,25 +21,32 @@ import {
   saveWorkflowAiWorkspace,
   saveWorkflowAiDraftWorkspace,
   setAiModelEnabled,
-  startWorkflowAiConversation,
+  TrustConfirmationRequiredError,
   updateWorkflowCanvasLayout,
+  type ElevatedMcpTool,
   type FunctionDefinitionDTO,
   type McpToolDTO,
   type WorkflowAiMessageDTO,
   type WorkflowAiProposedFunction,
   type WorkflowAiResourcePlan,
   type WorkflowAiResponse,
-  type WorkflowAiStreamEvent,
   type WorkflowAiWorkspaceRequest,
   type WorkflowDefinitionResponseDTO,
   type WorkflowResponseDTO,
 } from '../api';
+import {
+  aiGenerationStore,
+  NEW_CONVERSATION_KEY,
+  useAiGeneration,
+} from './workflow-create/aiGenerationStore';
 import { ChatComposer } from './workflow-create/ChatComposer';
 import { ManualWorkflowEditor } from './workflow-create/ManualWorkflowEditor';
 import { ModelSettingsModal } from './workflow-create/ModelSettingsModal';
 import { cloudProviderPreset } from './workflow-create/modelProviders';
 import { SidebarAiChat } from './workflow-create/SidebarAiChat';
 import { ResourcePlanCard } from './workflow-create/ResourcePlanCard';
+import { takePendingTriagePatch } from './workflow-create/triagePatchStore';
+import { TrustConfirmationModal } from './workflow-create/TrustConfirmationModal';
 import { WorkflowAiEmptyState } from './workflow-create/WorkflowAiEmptyState';
 import type { TaskResourceOption } from './workflow-create/StateEditorForm';
 import { filterCanvasPositionsForDefinition } from './workflow-create/nestedMachine';
@@ -145,6 +151,61 @@ function newChatMessageId() {
 }
 
 const lastAiModelStorageKey = 'voyager:last-ai-model-id';
+const pendingRegenerationStoragePrefix = 'voyager:pending-message-regeneration:';
+const pendingRegenerationTimeoutMs = 15 * 60 * 1000;
+
+type PendingMessageRegeneration = {
+  messageId: string;
+  startedAt: number;
+};
+
+function pendingRegenerationStorageKey(conversationId: string) {
+  return `${pendingRegenerationStoragePrefix}${conversationId}`;
+}
+
+function readPendingMessageRegeneration(
+  conversationId: string,
+): PendingMessageRegeneration | null {
+  try {
+    const stored = window.sessionStorage.getItem(
+      pendingRegenerationStorageKey(conversationId),
+    );
+    if (!stored) return null;
+    const parsed = JSON.parse(stored) as Partial<PendingMessageRegeneration>;
+    if (typeof parsed.messageId !== 'string' || typeof parsed.startedAt !== 'number') {
+      window.sessionStorage.removeItem(pendingRegenerationStorageKey(conversationId));
+      return null;
+    }
+    return { messageId: parsed.messageId, startedAt: parsed.startedAt };
+  } catch {
+    return null;
+  }
+}
+
+function writePendingMessageRegeneration(
+  conversationId: string,
+  pending: PendingMessageRegeneration,
+) {
+  try {
+    window.sessionStorage.setItem(
+      pendingRegenerationStorageKey(conversationId),
+      JSON.stringify(pending),
+    );
+  } catch {
+    // The retry still works in the current page when browser storage is unavailable.
+  }
+}
+
+function clearPendingMessageRegeneration(conversationId: string, messageId: string) {
+  try {
+    const pending = readPendingMessageRegeneration(conversationId);
+    if (!pending || pending.messageId === messageId) {
+      window.sessionStorage.removeItem(pendingRegenerationStorageKey(conversationId));
+    }
+  } catch {
+    // Ignore storage restrictions.
+  }
+}
 
 function readLastSelectedModelId() {
   try {
@@ -205,6 +266,7 @@ function aiModelFromDto(model: {
   enabled?: boolean;
   defaultModel?: boolean;
   hasCredential?: boolean;
+  structuredOutputMode?: import('../api').AiStructuredOutputMode;
 }): AiModel {
   return {
     id: model.id,
@@ -215,6 +277,7 @@ function aiModelFromDto(model: {
     enabled: model.enabled,
     defaultModel: model.defaultModel,
     hasCredential: model.hasCredential,
+    structuredOutputMode: model.structuredOutputMode,
   };
 }
 
@@ -277,26 +340,39 @@ export function CreateWorkflowView({
   const [discoverEndpoint, setDiscoverEndpoint] = useState('');
   const [expandedEndpoint, setExpandedEndpoint] = useState<string | null>(null);
   const [managingModels, setManagingModels] = useState(false);
-  const [definitionText, setDefinitionText] = useState(() => formatJson(
-    revisionEdit?.baseRevision.definition || starterDefinition,
-  ));
+  const [definitionText, setDefinitionText] = useState(() => {
+    // Failure triage may have stashed a proposed fix for this workflow; seed the editor with it
+    // (consumed once) instead of the base revision so "Apply patch" opens the corrected ASL.
+    const patch = revisionEdit ? takePendingTriagePatch(revisionEdit.workflow.id) : null;
+    return formatJson(patch ?? revisionEdit?.baseRevision.definition ?? starterDefinition);
+  });
   const [canvasNodePositions, setCanvasNodePositions] = useState<CanvasNodePositions>(
     revisionEdit?.baseRevision.canvasLayout || {},
   );
   const [validationIssues, setValidationIssues] = useState<string[]>([]);
   const [conversationLoading, setConversationLoading] = useState(false);
   const [draftCreating, setDraftCreating] = useState(false);
-  const [generating, setGenerating] = useState(false);
+  // REST-only busy flag (resource provisioning / regeneration). The websocket turn's busy state
+  // lives in the generation store so it survives navigating away and back.
+  const [localBusy, setLocalBusy] = useState(false);
   const [activeResourcePlanMessageId, setActiveResourcePlanMessageId] = useState<string | null>(null);
   const [activeResourcePlan, setActiveResourcePlan] = useState<WorkflowAiResourcePlan | null>(null);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
+  const [restoredPendingRegeneration, setRestoredPendingRegeneration] =
+    useState<PendingMessageRegeneration | null>(null);
   const [saving, setSaving] = useState(false);
   const [revisionSaveCompleted, setRevisionSaveCompleted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when a save is blocked because the workflow calls WRITE/DESTRUCTIVE MCP tools; holds the
+  // tools to confirm and the callback that retries the same save with confirmation.
+  const [trustPrompt, setTrustPrompt] = useState<
+    { tools: ElevatedMcpTool[]; onConfirm: () => void | Promise<void> } | null
+  >(null);
   const [expandedThinkingMessageIds, setExpandedThinkingMessageIds] = useState<Set<string>>(() => new Set());
   const modelPickerRef = useRef<HTMLDivElement | null>(null);
   const instructionTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const regeneratingRef = useRef(false);
+  const pageUnloadingRef = useRef(false);
   const streamingTimerRefs = useRef<number[]>([]);
   const lastLoadedRouteChatIdRef = useRef<string | null>(null);
   const lastSavedWorkspaceRef = useRef<string | null>(null);
@@ -305,6 +381,19 @@ export function CreateWorkflowView({
   const workspaceSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const workspaceSaveErrorShownRef = useRef(false);
   const draftCreationRef = useRef(false);
+  const appliedTurnsRef = useRef<Set<string>>(new Set());
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  messagesRef.current = messages;
+
+  // The in-flight websocket turn is keyed by the conversation it belongs to (or a sentinel for a
+  // brand-new one) so it can be re-adopted after the view unmounts and remounts. Revision edits
+  // never run the assistant, so they must not adopt an unrelated new-conversation turn.
+  const generationKey = revisionEdit
+    ? null
+    : (conversationId ?? routeChatId ?? routeDraftId ?? NEW_CONVERSATION_KEY);
+  const generation = useAiGeneration(generationKey);
+  const socketGenerating = generation?.status === 'active';
+  const generating = socketGenerating || localBusy || regeneratingMessageId !== null;
 
   const hasSelectedModel = models.some((model) => model.id === modelId);
   const canGenerate = instruction.trim().length > 0
@@ -547,6 +636,14 @@ export function CreateWorkflowView({
   }, [hasUnsavedRevisionChanges, onUnsavedChangesChange]);
 
   useEffect(() => {
+    const markPageUnloading = () => {
+      pageUnloadingRef.current = true;
+    };
+    window.addEventListener('beforeunload', markPageUnloading);
+    return () => window.removeEventListener('beforeunload', markPageUnloading);
+  }, []);
+
+  useEffect(() => {
     if (!hasUnsavedRevisionChanges) return undefined;
     const warnBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
@@ -642,6 +739,8 @@ export function CreateWorkflowView({
     setValidationIssues([]);
     setActiveResourcePlanMessageId(null);
     setActiveResourcePlan(null);
+    setRegeneratingMessageId(null);
+    setRestoredPendingRegeneration(null);
     setExpandedThinkingMessageIds(new Set());
     setCanvasNodePositions({});
     setError(null);
@@ -737,6 +836,20 @@ export function CreateWorkflowView({
             .filter((message) => Boolean(message.thinkingContent))
             .map((message) => message.id),
         ));
+        const pendingRegeneration = readPendingMessageRegeneration(conversation.id);
+        const retryAlreadyFinished = pendingRegeneration
+          ? conversation.messages.some(
+              (message) => message.regeneratedFromMessageId === pendingRegeneration.messageId,
+            )
+          : false;
+        if (pendingRegeneration && !retryAlreadyFinished) {
+          setRegeneratingMessageId(pendingRegeneration.messageId);
+          setRestoredPendingRegeneration(pendingRegeneration);
+        } else if (pendingRegeneration) {
+          clearPendingMessageRegeneration(conversation.id, pendingRegeneration.messageId);
+          setRegeneratingMessageId(null);
+          setRestoredPendingRegeneration(null);
+        }
       })
       .catch((err: Error) => {
         if (cancelled) return;
@@ -755,6 +868,56 @@ export function CreateWorkflowView({
       cancelled = true;
     };
   }, [routeChatId, routeDraftId, revisionEdit]);
+
+  // A full refresh destroys the original fetch promise, but its keepalive request continues on the
+  // server. Recover that pending retry by checking persisted conversation history until the
+  // replacement message appears. Reload once at completion so every workflow field is hydrated from
+  // the same authoritative snapshot, not only the chat bubble.
+  useEffect(() => {
+    if (!conversationId || !restoredPendingRegeneration) return undefined;
+
+    let cancelled = false;
+    let timer: number | null = null;
+    const { messageId, startedAt } = restoredPendingRegeneration;
+
+    const poll = async () => {
+      if (cancelled) return;
+      if (Date.now() - startedAt >= pendingRegenerationTimeoutMs) {
+        clearPendingMessageRegeneration(conversationId, messageId);
+        setRestoredPendingRegeneration(null);
+        setRegeneratingMessageId(null);
+        setError('The retried reply did not finish. You can safely retry it again.');
+        return;
+      }
+
+      try {
+        const conversation = await getWorkflowAiConversation(conversationId);
+        if (cancelled) return;
+        const finished = conversation.messages.some(
+          (message) => message.regeneratedFromMessageId === messageId,
+        );
+        if (finished) {
+          clearPendingMessageRegeneration(conversationId, messageId);
+          setRestoredPendingRegeneration(null);
+          setRegeneratingMessageId(null);
+          window.location.reload();
+          return;
+        }
+      } catch {
+        // A transient read failure is not proof the retry failed; keep checking until the deadline.
+      }
+
+      timer = window.setTimeout(poll, 1500);
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [conversationId, restoredPendingRegeneration]);
 
   useEffect(() => {
     if (workspaceSaveTimerRef.current !== null) {
@@ -818,69 +981,6 @@ export function CreateWorkflowView({
     setMessages((current) => current.map((message) => (
       message.id === messageId ? updater(message) : message
     )));
-  };
-
-  /**
-   * Feeds live turn frames into the pending assistant bubble.
-   *
-   * Returns the handler plus a `streamed()` probe: when real reasoning already arrived, the final
-   * response must not replay the typewriter animation or the user would read it twice.
-   */
-  const createStreamHandler = (targetMessageId: string) => {
-    let currentPass = 0;
-    let receivedThinking = false;
-
-    const handleEvent = (event: WorkflowAiStreamEvent) => {
-      if (event.type === 'ERROR') {
-        // The rejected socket promise renders the failure; a duplicate here would race it.
-        return;
-      }
-      // A later pass supersedes the previous one, so its reasoning replaces rather than appends.
-      const startsNewPass = event.pass > currentPass;
-      if (startsNewPass) {
-        currentPass = event.pass;
-        receivedThinking = false;
-      }
-
-      updateMessageById(targetMessageId, (message) => {
-        const base: ChatMessage = startsNewPass
-          ? { ...message, thinkingContent: null }
-          : message;
-        if (event.type === 'STAGE') {
-          return {
-            ...base,
-            streamingStatus: 'streaming',
-            streamingPhase: 'thinking',
-            streamingStage: event.stage ?? null,
-          };
-        }
-        if (event.type === 'THINKING_DELTA') {
-          return {
-            ...base,
-            streamingStatus: 'streaming',
-            streamingPhase: 'thinking',
-            thinkingContent: (base.thinkingContent || '') + (event.text || ''),
-          };
-        }
-        // ANSWER_PROGRESS: the envelope is JSON under construction, so report the phase only.
-        return {
-          ...base,
-          streamingStatus: 'streaming',
-          streamingPhase: 'answer',
-        };
-      });
-
-      if (event.type === 'THINKING_DELTA' && !receivedThinking) {
-        receivedThinking = true;
-        setExpandedThinkingMessageIds((current) => {
-          const next = new Set(current);
-          next.add(targetMessageId);
-          return next;
-        });
-      }
-    };
-
-    return { handleEvent, streamed: () => currentPass > 0 };
   };
 
   const streamAssistantMessage = (
@@ -1079,7 +1179,7 @@ export function CreateWorkflowView({
     return definitionText;
   };
 
-  const handleGenerate = async (
+  const handleGenerate = (
     overrideInstruction?: string,
     options: { includeDefinition?: boolean } = {},
   ) => {
@@ -1098,87 +1198,147 @@ export function CreateWorkflowView({
       return;
     }
 
-    const sentAt = Date.now();
-    const startingNewConversation = !conversationId;
-    const processingMessageId = newChatMessageId();
-    
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: newChatMessageId(),
-        role: 'user',
-        content: currentInstruction,
-        createdAt: sentAt,
-        modelConfigId: modelId || null,
-        modelDisplayName: selectedModelForSend?.label || null,
-      },
-      {
-        id: processingMessageId,
-        role: 'assistant',
-        content: '',
-        createdAt: Date.now(),
-        modelConfigId: modelId || null,
-        modelDisplayName: selectedModelForSend?.label || null,
-        streamingStatus: 'processing',
-      },
-    ]);
-    setInstruction('');
-    // The empty state is only an entry point: once a conversation exists the workflow lives in the
-    // manual editor, with this conversation continuing in its sidebar.
-    setMode('manual');
-    setGenerating(true);
-    setError(null);
-    setValidationIssues([]);
-
     const editorDefinition = options.includeDefinition ? currentEditorDefinition() : null;
     const editorDefinitionText = options.includeDefinition
       ? inProgressEditorText(editorDefinition)
       : null;
 
-    const stream = createStreamHandler(processingMessageId);
+    const userMessage: ChatMessage = {
+      id: newChatMessageId(),
+      role: 'user',
+      content: currentInstruction,
+      createdAt: Date.now(),
+      modelConfigId: modelId || null,
+      modelDisplayName: selectedModelForSend.label || null,
+    };
 
-    try {
-      const response = conversationId
-        ? await continueWorkflowAiConversation({
+    // Hand the turn to the module-level store, which owns the socket so it outlives this view. The
+    // optimistic user turn and the live assistant bubble are read back from the store on render.
+    aiGenerationStore.start(conversationId
+      ? {
+          key: conversationId,
+          kind: 'continue',
+          request: {
             conversationId,
             message: currentInstruction,
             modelConfigId: modelId || null,
             definition: editorDefinition,
             definitionText: editorDefinitionText,
-          }, stream.handleEvent)
-        : await startWorkflowAiConversation({
+          },
+          userMessage,
+          assistantMessageId: newChatMessageId(),
+          modelConfigId: modelId || null,
+          modelDisplayName: selectedModelForSend.label || null,
+        }
+      : {
+          key: NEW_CONVERSATION_KEY,
+          kind: 'start',
+          request: {
             instruction: currentInstruction,
             modelConfigId: modelId || null,
             userDateTime: new Date().toISOString(),
             definition: editorDefinition,
             definitionText: editorDefinitionText,
-          }, stream.handleEvent);
-      applyWorkflowAiResponse(response, {
-        replaceMessageId: processingMessageId,
-        // Replaying the typewriter over reasoning the user already watched arrive would show it
-        // twice; fall back to the animation only when nothing streamed (REST or an old backend).
-        animate: !stream.streamed(),
-      });
-      if (startingNewConversation) {
-        onNavigate?.(`/c/${encodeURIComponent(response.conversationId)}`, { replace: true });
-      }
-    } catch (err: any) {
-      setError(err.message || 'Failed to generate workflow definition.');
-      setMessages((prev) => prev.map((message) => (
-        message.id === processingMessageId
-          ? {
-              ...message,
-              content: `**Error**: ${err.message || 'Failed to generate workflow.'}`,
-              streamingStatus: undefined,
-              streamingPhase: undefined,
-              streamingStage: undefined,
-            }
-          : message
-      )));
-    } finally {
-      setGenerating(false);
+          },
+          userMessage,
+          assistantMessageId: newChatMessageId(),
+          modelConfigId: modelId || null,
+          modelDisplayName: selectedModelForSend.label || null,
+        });
+
+    setInstruction('');
+    // The empty state is only an entry point: once a conversation exists the workflow lives in the
+    // manual editor, with this conversation continuing in its sidebar.
+    setMode('manual');
+    setError(null);
+    setValidationIssues([]);
+  };
+
+  const handleCancelGeneration = () => {
+    if (generationKey) {
+      aiGenerationStore.abort(generationKey);
     }
   };
+
+  // A turn adopted on remount (e.g. returning to a brand-new conversation left mid-generation) must
+  // land in the chat view rather than the empty-state entry point.
+  useEffect(() => {
+    if (generation && generation.status === 'active') {
+      setMode('manual');
+    }
+  }, [generation?.status]);
+
+  // Keep the live assistant bubble's reasoning expanded as it streams in.
+  const streamingAssistantId = socketGenerating ? generation?.assistantMessage.id : undefined;
+  const streamingHasThinking = Boolean(generation?.assistantMessage.thinkingContent);
+  useEffect(() => {
+    if (!streamingAssistantId || !streamingHasThinking) return;
+    setExpandedThinkingMessageIds((current) => (
+      current.has(streamingAssistantId) ? current : new Set(current).add(streamingAssistantId)
+    ));
+  }, [streamingAssistantId, streamingHasThinking]);
+
+  // Apply each finished turn exactly once, committing its messages into the persisted history and
+  // then clearing it from the store. Runs whether the turn finished while mounted here or while the
+  // user was on another page, which is what restores a request made before navigating away.
+  useEffect(() => {
+    if (!generation || generation.status === 'active') return;
+    if (appliedTurnsRef.current.has(generation.turnId)) return;
+    appliedTurnsRef.current.add(generation.turnId);
+
+    const { key, turnId, userMessage, response, status, streamed, error: genError } = generation;
+
+    if (status === 'done' && response) {
+      // Only the reasoning streams live; when nothing streamed (e.g. a non-reasoning cloud model)
+      // typewriter the final answer so it does not appear all at once. Replaying it over reasoning
+      // the user already watched arrive would show it twice.
+      const animate = !streamed;
+      // A remount mid-turn reloads the pre-turn history; if the just-committed turn already made it
+      // into that reload, replace the server message in place instead of appending a duplicate.
+      const assistantServerId = response.assistantMessage?.id;
+      const alreadyInHistory = Boolean(
+        assistantServerId && messagesRef.current.some((message) => message.id === assistantServerId),
+      );
+      if (alreadyInHistory && assistantServerId) {
+        applyWorkflowAiResponse(response, { replaceMessageId: assistantServerId, animate });
+      } else {
+        setMessages((prev) => [...prev, userMessage]);
+        applyWorkflowAiResponse(response, { animate });
+      }
+      if (key === NEW_CONVERSATION_KEY) {
+        onNavigate?.(`/c/${encodeURIComponent(response.conversationId)}`, { replace: true });
+      }
+    } else if (status === 'error') {
+      setError(genError || 'Failed to generate workflow.');
+      setMessages((prev) => [
+        ...prev,
+        userMessage,
+        {
+          id: newChatMessageId(),
+          role: 'assistant',
+          content: `**Error**: ${genError || 'Failed to generate workflow.'}`,
+          createdAt: Date.now(),
+          modelConfigId: userMessage.modelConfigId,
+          modelDisplayName: userMessage.modelDisplayName,
+        },
+      ]);
+    } else if (status === 'cancelled') {
+      setMessages((prev) => [
+        ...prev,
+        userMessage,
+        {
+          id: newChatMessageId(),
+          role: 'assistant',
+          content: '_Generation cancelled._',
+          createdAt: Date.now(),
+          modelConfigId: userMessage.modelConfigId,
+          modelDisplayName: userMessage.modelDisplayName,
+        },
+      ]);
+    }
+
+    aiGenerationStore.consume(key, turnId);
+  }, [generation, onNavigate]);
 
 
   const toggleThinking = (messageId: string) => {
@@ -1201,17 +1361,28 @@ export function CreateWorkflowView({
     regeneratingRef.current = true;
     setRegeneratingMessageId(message.id);
     setError(null);
+    writePendingMessageRegeneration(conversationId, {
+      messageId: message.id,
+      startedAt: Date.now(),
+    });
     try {
       const response = await regenerateWorkflowAiMessage(message.id, {
         modelConfigId: modelId || null,
       });
+      clearPendingMessageRegeneration(conversationId, message.id);
       // The server appends a fresh message, so swap it in place of the one being retried.
       applyWorkflowAiResponse(response, {
         replaceMessageId: message.id,
         animate: true,
       });
     } catch (err: any) {
-      setError(err.message || 'Failed to regenerate message.');
+      // During a full reload, leave the durable marker intact: the keepalive request is still
+      // running and the next page instance will recover it. Ordinary failures on a live page clear
+      // the marker immediately so Retry becomes available again.
+      if (!pageUnloadingRef.current) {
+        clearPendingMessageRegeneration(conversationId, message.id);
+        setError(err.message || 'Failed to regenerate message.');
+      }
     } finally {
       regeneratingRef.current = false;
       setRegeneratingMessageId(null);
@@ -1235,7 +1406,7 @@ export function CreateWorkflowView({
         streamingStatus: 'processing',
       },
     ]);
-    setGenerating(true);
+    setLocalBusy(true);
     setError(null);
     try {
       const response = await provisionWorkflowAiResources({
@@ -1257,7 +1428,7 @@ export function CreateWorkflowView({
           : message
       )));
     } finally {
-      setGenerating(false);
+      setLocalBusy(false);
     }
   };
 
@@ -1336,14 +1507,41 @@ export function CreateWorkflowView({
           },
           canvasLayout: positions,
         };
-        const saved = routeDraftId
-          ? await saveWorkflowAiDraft(conversationId, saveRequest)
-          : await saveWorkflowAiConversation(conversationId, saveRequest);
-        setLinkedWorkflowId(saved.workflow.id);
-        toast.success(updatingExistingWorkflow
-          ? `Revision ${saved.revision.revision} saved${saved.revision.active ? ' and activated' : ''}.`
-          : 'Workflow saved. Future saves from this workspace will create revisions.');
-        onWorkflowCreated(saved.workflow);
+        const runConversationSave = async (confirmElevatedTrust: boolean) => {
+          const saved = routeDraftId
+            ? await saveWorkflowAiDraft(conversationId, { ...saveRequest, confirmElevatedTrust })
+            : await saveWorkflowAiConversation(conversationId, { ...saveRequest, confirmElevatedTrust });
+          setLinkedWorkflowId(saved.workflow.id);
+          toast.success(updatingExistingWorkflow
+            ? `Revision ${saved.revision.revision} saved${saved.revision.active ? ' and activated' : ''}.`
+            : 'Workflow saved. Future saves from this workspace will create revisions.');
+          onWorkflowCreated(saved.workflow);
+        };
+        try {
+          await runConversationSave(false);
+        } catch (saveError) {
+          // The backend blocks WRITE/DESTRUCTIVE MCP calls until the user confirms them. Surface
+          // the tools and retry the exact save with confirmation once acknowledged.
+          if (saveError instanceof TrustConfirmationRequiredError) {
+            setTrustPrompt({
+              tools: saveError.tools,
+              onConfirm: async () => {
+                setTrustPrompt(null);
+                setSaving(true);
+                setError(null);
+                try {
+                  await runConversationSave(true);
+                } catch (confirmError: any) {
+                  setError(confirmError?.message || 'Failed to save workflow.');
+                } finally {
+                  setSaving(false);
+                }
+              },
+            });
+            return;
+          }
+          throw saveError;
+        }
         return;
       }
 
@@ -1660,6 +1858,7 @@ export function CreateWorkflowView({
       }}
       generating={generating || conversationLoading}
       canGenerate={canGenerate}
+      onCancel={socketGenerating ? handleCancelGeneration : undefined}
     />
   );
 
@@ -1670,11 +1869,18 @@ export function CreateWorkflowView({
 
   const handleSidebarPrompt = (prompt?: string) => handleGenerate(prompt, { includeDefinition: true });
 
+  // History plus the in-flight turn's optimistic messages, which live in the store so they persist
+  // across navigation. The store's user/assistant pair is only appended to history once the turn
+  // resolves, so exactly one copy is ever shown.
+  const displayedMessages = generation && generation.status === 'active'
+    ? [...messages, generation.userMessage, generation.assistantMessage]
+    : messages;
+
   // Revision edits stay out of the assistant: starting a conversation routes to /c/<id>, which would
   // navigate away from the revision being edited, and accepting a plan creates a separate workflow.
   const sidebarAiChatNode = revisionEdit ? undefined : (
     <SidebarAiChat
-      messages={messages}
+      messages={displayedMessages}
       generating={generating}
       error={error}
       hasStates={definitionStats.stateCount > 0}
@@ -1692,6 +1898,8 @@ export function CreateWorkflowView({
           onApprove={handleProvisionResources}
           onContinue={handleContinueAfterMcp}
           onOpenMcpServers={() => onNavigate?.('/mcp')}
+          onDiscoverMcp={(capability) =>
+            onNavigate?.(`/mcp?discover=${encodeURIComponent(capability)}`)}
         />
       ) : undefined}
       chatInputNode={composerNode({
@@ -1704,7 +1912,7 @@ export function CreateWorkflowView({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col text-on-surface">
-      {!revisionEdit && messages.length === 0 && (
+      {!revisionEdit && displayedMessages.length === 0 && (
         <header className="pointer-events-none absolute right-10 top-1 z-30 flex justify-end">
           <div className="pointer-events-auto">
             {modeSwitch}
@@ -1757,12 +1965,12 @@ export function CreateWorkflowView({
           fieldClass={fieldClass}
           monoFieldClass={monoFieldClass}
           taskResourceOptions={taskResourceOptions}
-          reserveTopControlsSpace={!revisionEdit && messages.length === 0}
+          reserveTopControlsSpace={!revisionEdit && displayedMessages.length === 0}
           initialNodePositions={canvasNodePositions}
           onNodePositionsChange={setCanvasNodePositions}
           onImportTemplate={handleImportTemplate}
           aiChatNode={sidebarAiChatNode}
-          startInAiChat={messages.length > 0}
+          startInAiChat={displayedMessages.length > 0}
         />
       )}
 
@@ -1803,6 +2011,15 @@ export function CreateWorkflowView({
           onUpdateEndpointEnabled={updateEndpointEnabled}
           onDeleteEndpointModels={deleteEndpointModels}
           onUpdateSingleModelEnabled={updateSingleModelEnabled}
+        />
+      )}
+
+      {trustPrompt && (
+        <TrustConfirmationModal
+          tools={trustPrompt.tools}
+          busy={saving}
+          onConfirm={trustPrompt.onConfirm}
+          onCancel={() => setTrustPrompt(null)}
         />
       )}
     </div>

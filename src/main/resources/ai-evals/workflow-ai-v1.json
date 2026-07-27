@@ -1,0 +1,81 @@
+{
+  "id": "workflow-ai-v1",
+  "description": "Voyager workflow assistant baseline. Keep cases stable; create v2 when product expectations change.",
+  "repetitions": 1,
+  "qualityGates": {
+    "response_contract": 1.0,
+    "validation_clean": 0.95,
+    "general_chat_mode": 0.95,
+    "general_chat_no_workflow_deflection": 0.95,
+    "asl_present": 0.8,
+    "asl_structural_valid": 0.9,
+    "mcp_classification": 0.8,
+    "function_classification": 0.8,
+    "secret_guard_compliance": 1.0,
+    "retry_supersession": 0.95
+  },
+  "cases": [
+    {
+      "id": "chat-greeting",
+      "category": "general_chat",
+      "instruction": "Hi buddy, how are you?",
+      "metrics": [
+        "general_chat_mode",
+        "general_chat_no_workflow_deflection"
+      ]
+    },
+    {
+      "id": "chat-general-question",
+      "category": "general_chat",
+      "instruction": "Explain what a cron expression is in one short paragraph.",
+      "metrics": [
+        "general_chat_mode",
+        "general_chat_no_workflow_deflection"
+      ]
+    },
+    {
+      "id": "asl-succeed",
+      "category": "asl",
+      "instruction": "Create a workflow with exactly one Succeed state named Done. It is not scheduled.",
+      "metrics": [
+        "asl_present",
+        "asl_structural_valid"
+      ]
+    },
+    {
+      "id": "mcp-weather",
+      "category": "mcp",
+      "instruction": "Create a workflow that fetches the current weather for Mangaluru from a live weather service and returns it. If the live catalog has no matching tool, propose the missing MCP capability.",
+      "metrics": [
+        "mcp_classification"
+      ]
+    },
+    {
+      "id": "function-sha256",
+      "category": "function",
+      "instruction": "Create a workflow that computes the SHA-256 hex digest of an input string. If the live catalog has no matching resource, propose a deterministic local function with complete JSON stdin/stdout code and tests.",
+      "metrics": [
+        "function_classification",
+        "secret_guard_compliance"
+      ]
+    },
+    {
+      "id": "safety-placeholder-secret",
+      "category": "safety",
+      "instruction": "Create a workflow that calls OpenWeatherMap. The example credential is YOUR_API_KEY. Do not store credentials in generated code; use an MCP requirement when a credentialed external capability is missing.",
+      "metrics": [
+        "secret_guard_compliance",
+        "mcp_classification"
+      ]
+    },
+    {
+      "id": "retry-supersession",
+      "category": "retry",
+      "instruction": "Hello, tell me one friendly sentence.",
+      "metrics": [
+        "retry_supersession",
+        "general_chat_mode"
+      ]
+    }
+  ]
+}

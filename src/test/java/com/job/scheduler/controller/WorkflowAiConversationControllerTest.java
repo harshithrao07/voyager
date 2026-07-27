@@ -10,6 +10,7 @@ import com.job.scheduler.dto.WorkflowAiAcceptPlanRequestDTO;
 import com.job.scheduler.exception.ApiExceptionHandler;
 import com.job.scheduler.service.WorkflowAiConversationService;
 import com.job.scheduler.service.WorkflowAiStreamBroker;
+import com.job.scheduler.service.WorkflowAiTurnRegistry;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -55,7 +56,7 @@ class WorkflowAiConversationControllerTest {
         // A real broker so withSession actually runs the turn; only the outbound template is mocked.
         controller = new WorkflowAiConversationController(
                 service,
-                new WorkflowAiStreamBroker(messagingTemplate)
+                new WorkflowAiStreamBroker(messagingTemplate, new WorkflowAiTurnRegistry())
         );
         mockMvc = MockMvcBuilders
                 .standaloneSetup(controller)

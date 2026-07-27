@@ -3,13 +3,17 @@ import {
   Activity,
   AlertTriangle,
   ArrowLeft,
+  ArrowRight,
+  Boxes,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock3,
   Copy,
+  ExternalLink,
   Globe,
   KeyRound,
+  Library,
   Loader2,
   Pencil,
   Play,
@@ -34,6 +38,7 @@ import {
   listMcpLiveTools,
   listMcpServers,
   registerMcpServer,
+  searchMcpRegistry,
   syncMcpTools,
   updateMcpServer,
   updateMcpServerStatus,
@@ -47,6 +52,8 @@ import {
   type McpToolSyncResultDTO,
   type McpTransport,
   type McpTrustLevel,
+  type PublicMcpInstallOption,
+  type PublicMcpServer,
 } from '../api';
 
 type DetailTab = 'tools' | 'executions' | 'playground';
@@ -59,6 +66,48 @@ function slugifyServerId(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Values used to seed the register form when a server is chosen from the public
+ * catalog. A recommendation only — the user still reviews trust and fills in secrets.
+ */
+type ServerPrefill = {
+  displayName: string;
+  serverId: string;
+  transport: McpTransport;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  /** Secret env var names; rendered as blank, masked fields for the user to fill. */
+  secretEnvKeys: string[];
+  baseUrl: string;
+  endpoint: string;
+  trustLevel: McpTrustLevel;
+};
+
+function prefillFromInstall(server: PublicMcpServer, option: PublicMcpInstallOption): ServerPrefill {
+  const env: Record<string, string> = {};
+  const secretEnvKeys: string[] = [];
+  for (const variable of option.env) {
+    if (variable.secret) {
+      secretEnvKeys.push(variable.name);
+    } else {
+      env[variable.name] = variable.defaultValue ?? '';
+    }
+  }
+  return {
+    displayName: server.name,
+    serverId: slugifyServerId(server.name),
+    transport: option.transport,
+    command: option.command ?? '',
+    args: option.args ?? [],
+    env,
+    secretEnvKeys,
+    baseUrl: option.baseUrl ?? '',
+    endpoint: option.endpoint ?? '/mcp',
+    trustLevel: server.suggestedTrustLevel ?? 'UNTRUSTED',
+  };
 }
 const fieldClass =
   'h-9 w-full rounded-lg border border-border-subtle bg-surface-container-lowest px-3 text-[12px] text-on-surface outline-none transition-colors placeholder:text-on-surface-variant/45 focus:border-primary/60';
@@ -322,24 +371,28 @@ function authTypeLabel(authType: McpAuthType): string {
 type ServerFormModalProps = {
   mode: 'create' | 'edit';
   initial?: McpServerDTO;
+  /** Create-mode seed from the public catalog; ignored in edit mode. */
+  prefill?: ServerPrefill | null;
   onCancel: () => void;
   onSaved: (server: McpServerDTO) => void;
 };
 
-function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalProps) {
-  const [displayName, setDisplayName] = useState(initial?.displayName ?? '');
-  const [serverId, setServerId] = useState(initial?.serverId ?? '');
-  const [serverIdTouched, setServerIdTouched] = useState(mode === 'edit');
-  const [transport, setTransport] = useState<McpTransport>(initial?.transport ?? 'HTTP');
-  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? '');
-  const [endpoint, setEndpoint] = useState(initial?.endpoint ?? '/mcp');
-  const [command, setCommand] = useState(initial?.command ?? '');
-  const [argsText, setArgsText] = useState((initial?.args ?? []).join('\n'));
-  const [envText, setEnvText] = useState(formatEnv(initial?.env));
+function ServerFormModal({ mode, initial, prefill, onCancel, onSaved }: ServerFormModalProps) {
+  // Edit mode reads the saved server; create mode may be seeded from the catalog.
+  const seed = mode === 'edit' ? null : prefill ?? null;
+  const [displayName, setDisplayName] = useState(initial?.displayName ?? seed?.displayName ?? '');
+  const [serverId, setServerId] = useState(initial?.serverId ?? seed?.serverId ?? '');
+  const [serverIdTouched, setServerIdTouched] = useState(mode === 'edit' || Boolean(seed?.serverId));
+  const [transport, setTransport] = useState<McpTransport>(initial?.transport ?? seed?.transport ?? 'HTTP');
+  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? seed?.baseUrl ?? '');
+  const [endpoint, setEndpoint] = useState(initial?.endpoint ?? seed?.endpoint ?? '/mcp');
+  const [command, setCommand] = useState(initial?.command ?? seed?.command ?? '');
+  const [argsText, setArgsText] = useState((initial?.args ?? seed?.args ?? []).join('\n'));
+  const [envText, setEnvText] = useState(formatEnv(initial?.env ?? seed?.env));
   // Secret env values are never returned; prefill existing keys with empty values
   // (blank = keep the stored encrypted value on save).
   const [secretEnvText, setSecretEnvText] = useState(
-    (initial?.secretEnvKeys ?? []).map((name) => `${name}=`).join('\n'),
+    (initial?.secretEnvKeys ?? seed?.secretEnvKeys ?? []).map((name) => `${name}=`).join('\n'),
   );
   const [secretHeadersText, setSecretHeadersText] = useState(
     [...(initial?.secretHeaderNames ?? [])].sort().map((name) => `${name}=`).join('\n'),
@@ -349,7 +402,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
   const [authToken, setAuthToken] = useState('');
   const [authHeaderName, setAuthHeaderName] = useState(initial?.authHeaderName ?? '');
   const [authUsername, setAuthUsername] = useState(initial?.authUsername ?? '');
-  const [trustLevel, setTrustLevel] = useState<McpTrustLevel>(initial?.trustLevel ?? 'UNTRUSTED');
+  const [trustLevel, setTrustLevel] = useState<McpTrustLevel>(initial?.trustLevel ?? seed?.trustLevel ?? 'UNTRUSTED');
   const [enabled, setEnabled] = useState(initial ? initial.status === 'ENABLED' : false);
   const [timeoutMs, setTimeoutMs] = useState(initial?.requestTimeoutMs ? String(initial.requestTimeoutMs) : '');
   const [error, setError] = useState<string | null>(null);
@@ -600,6 +653,7 @@ function ServerFormModal({ mode, initial, onCancel, onSaved }: ServerFormModalPr
               <label className="sm:col-span-2">
                 <span className={labelClass}>Secret environment (KEY=VALUE per line)</span>
                 <textarea
+                  data-testid="mcp-secret-env"
                   value={secretEnvText}
                   onChange={(event) => setSecretEnvText(event.target.value)}
                   placeholder={'GITHUB_TOKEN=ghp_...'}
@@ -1663,6 +1717,7 @@ function ServerList({
   onRetry,
   onSelect,
   onRegister,
+  onBrowseRegistry,
   onRefresh,
 }: {
   servers: McpServerDTO[];
@@ -1671,6 +1726,7 @@ function ServerList({
   onRetry: () => void;
   onSelect: (serverId: string) => void;
   onRegister: () => void;
+  onBrowseRegistry: () => void;
   onRefresh: () => void;
 }) {
   const [search, setSearch] = useState('');
@@ -1761,6 +1817,15 @@ function ServerList({
         {filterButton('DISABLED', 'Disabled', disabledCount)}
         <button
           type="button"
+          data-testid="mcp-registry-open"
+          onClick={onBrowseRegistry}
+          className="flex h-9 items-center gap-2 rounded-lg border border-border-subtle px-3 text-[13px] text-on-surface-variant transition-colors hover:border-secondary/45 hover:text-on-surface"
+        >
+          <Library size={15} />
+          Browse registry
+        </button>
+        <button
+          type="button"
           data-testid="mcp-register-open"
           onClick={onRegister}
           className="flex h-9 items-center gap-2 rounded-lg border border-primary/45 bg-primary px-3 text-[13px] font-semibold text-on-primary shadow-[0_16px_42px_rgba(242,121,90,0.24)] transition-colors hover:bg-primary-fixed-dim"
@@ -1835,6 +1900,199 @@ function ServerList({
   );
 }
 
+function RegistrySourceBadge({ source }: { source: PublicMcpServer['source'] }) {
+  const external = source === 'EXTERNAL';
+  return (
+    <span
+      className={`shrink-0 rounded border px-1.5 py-0.5 font-mono-sm text-[9px] uppercase tracking-[0.06em] ${
+        external
+          ? 'border-primary/30 bg-primary/10 text-primary'
+          : 'border-secondary/30 bg-secondary/10 text-secondary'
+      }`}
+      title={external ? 'From the external MCP registry' : 'From the bundled catalog'}
+    >
+      {external ? 'Registry' : 'Bundled'}
+    </span>
+  );
+}
+
+/**
+ * Searches the public MCP catalog and lets the user pick an install option, which
+ * seeds the register form. Nothing is created here — it is a discovery + prefill step.
+ */
+function RegistryBrowserModal({
+  initialQuery,
+  onClose,
+  onPick,
+}: {
+  initialQuery: string;
+  onClose: () => void;
+  onPick: (prefill: ServerPrefill) => void;
+}) {
+  const [query, setQuery] = useState(initialQuery);
+  const [results, setResults] = useState<PublicMcpServer[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [searched, setSearched] = useState(false);
+
+  const runSearch = useCallback((value: string) => {
+    setLoading(true);
+    setError(null);
+    searchMcpRegistry(value, 20)
+      .then((found) => {
+        setResults(found);
+        setSearched(true);
+      })
+      .catch((searchError) => {
+        setError(searchError instanceof Error ? searchError.message : 'Registry search failed.');
+        setResults([]);
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    runSearch(initialQuery);
+  }, [initialQuery, runSearch]);
+
+  return (
+    <div
+      data-testid="mcp-registry-browser"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-full w-full max-w-[720px] flex-col overflow-hidden rounded-xl border border-border-subtle bg-surface-container-lowest shadow-[0_30px_80px_rgba(0,0,0,0.5)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-start gap-3 border-b border-border-subtle p-5 pb-4">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-secondary/35 bg-secondary/10 text-secondary">
+            <Library size={18} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-[15px] font-semibold text-on-surface">Browse public MCP registry</h3>
+            <p className="mt-1 text-[12px] leading-5 text-on-surface-variant">
+              Find a server that provides the capability you need, then register it — you review the
+              trust level and enter any secrets before it is created.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 rounded-md p-1 text-on-surface-variant transition-colors hover:text-on-surface"
+            aria-label="Close"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            runSearch(query);
+          }}
+          className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-5 py-3"
+        >
+          <label className="flex h-9 flex-1 items-center gap-2 rounded-lg border border-border-subtle bg-surface-container-lowest px-3">
+            <Search size={14} className="text-on-surface-variant" />
+            <input
+              data-testid="mcp-registry-search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="e.g. github, weather, postgres..."
+              autoFocus
+              className="min-w-0 flex-1 border-none bg-transparent text-[12px] text-on-surface outline-none placeholder:text-on-surface-variant/55"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={loading}
+            className="flex h-9 items-center gap-2 rounded-lg border border-primary bg-primary px-4 text-[12px] font-semibold text-on-primary transition-colors hover:bg-primary-fixed-dim disabled:opacity-50"
+          >
+            {loading ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+            Search
+          </button>
+        </form>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {error && <ErrorNote message={error} />}
+          {!error && loading && (
+            <div className="flex items-center justify-center gap-2 rounded-lg border border-border-subtle px-3 py-12 text-[12px] text-on-surface-variant">
+              <Loader2 size={14} className="animate-spin" /> Searching the catalog...
+            </div>
+          )}
+          {!error && !loading && searched && results.length === 0 && (
+            <div className="rounded-lg border border-dashed border-border-subtle px-3 py-12 text-center text-[12px] text-on-surface-variant">
+              No servers matched. Try a broader term, or register one manually if you know its address.
+            </div>
+          )}
+          {!error && !loading && results.length > 0 && (
+            <div className="flex flex-col gap-3">
+              {results.map((server) => (
+                <div
+                  key={`${server.source}:${server.sourceId}`}
+                  data-testid={`mcp-registry-result-${server.sourceId}`}
+                  className="rounded-lg border border-border-subtle bg-surface-container-low/40 p-3.5"
+                >
+                  <div className="flex items-center gap-2">
+                    <Boxes size={14} className="shrink-0 text-secondary" />
+                    <span className="min-w-0 truncate text-[13px] font-semibold text-on-surface">{server.name}</span>
+                    <RegistrySourceBadge source={server.source} />
+                    {server.version && (
+                      <span className="shrink-0 font-mono-sm text-[10px] text-on-surface-variant/70">v{server.version}</span>
+                    )}
+                    {server.repositoryUrl && (
+                      <a
+                        href={server.repositoryUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(event) => event.stopPropagation()}
+                        className="ml-auto flex shrink-0 items-center gap-1 font-mono-sm text-[10px] text-on-surface-variant transition-colors hover:text-secondary"
+                      >
+                        <ExternalLink size={11} /> source
+                      </a>
+                    )}
+                  </div>
+                  {server.description && (
+                    <p className="mt-1.5 text-[12px] leading-5 text-on-surface-variant">{server.description}</p>
+                  )}
+                  <div className="mt-2.5 flex flex-col gap-1.5">
+                    {server.installs.map((option, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface-container-lowest px-2.5 py-2"
+                      >
+                        <span className="shrink-0 rounded border border-border-subtle px-1.5 py-0.5 font-mono-sm text-[9px] uppercase text-on-surface-variant">
+                          {option.transport}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate font-mono-sm text-[11px] text-on-surface-variant">
+                          {option.transport === 'STDIO'
+                            ? [option.command, ...(option.args ?? [])].filter(Boolean).join(' ')
+                            : `${option.baseUrl ?? ''}${option.endpoint ?? ''}`}
+                        </span>
+                        <span className="shrink-0 font-mono-sm text-[10px] text-on-surface-variant/70">{option.label}</span>
+                        <button
+                          type="button"
+                          data-testid={`mcp-registry-use-${server.sourceId}-${index}`}
+                          onClick={() => onPick(prefillFromInstall(server, option))}
+                          className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-primary/45 bg-primary/10 px-2.5 font-mono-sm text-[11px] text-primary transition-colors hover:bg-primary/20"
+                        >
+                          Use <ArrowRight size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function McpServersPage() {
   const [servers, setServers] = useState<McpServerDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1842,6 +2100,20 @@ export function McpServersPage() {
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [prefill, setPrefill] = useState<ServerPrefill | null>(null);
+  const [registryOpen, setRegistryOpen] = useState(false);
+  // A "discover" query deep-linked from the AI chat's resource plan opens the browser
+  // pre-searched. Read it once on mount, then strip it so a refresh/back is clean.
+  const [registryQuery, setRegistryQuery] = useState('');
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const discover = params.get('discover');
+    if (discover !== null) {
+      setRegistryQuery(discover);
+      setRegistryOpen(true);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
 
   const loadServers = useCallback(() => {
     setLoading(true);
@@ -1887,18 +2159,42 @@ export function McpServersPage() {
           error={error}
           onRetry={loadServers}
           onSelect={setSelectedServerId}
-          onRegister={() => setCreateOpen(true)}
+          onRegister={() => {
+            setPrefill(null);
+            setCreateOpen(true);
+          }}
+          onBrowseRegistry={() => {
+            setRegistryQuery('');
+            setRegistryOpen(true);
+          }}
           onRefresh={loadServers}
+        />
+      )}
+
+      {registryOpen && (
+        <RegistryBrowserModal
+          initialQuery={registryQuery}
+          onClose={() => setRegistryOpen(false)}
+          onPick={(picked) => {
+            setPrefill(picked);
+            setRegistryOpen(false);
+            setCreateOpen(true);
+          }}
         />
       )}
 
       {createOpen && (
         <ServerFormModal
           mode="create"
-          onCancel={() => setCreateOpen(false)}
+          prefill={prefill}
+          onCancel={() => {
+            setCreateOpen(false);
+            setPrefill(null);
+          }}
           onSaved={(saved) => {
             upsertServer(saved);
             setCreateOpen(false);
+            setPrefill(null);
             setSelectedServerId(saved.serverId);
           }}
         />

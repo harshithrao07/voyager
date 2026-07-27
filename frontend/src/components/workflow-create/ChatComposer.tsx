@@ -1,5 +1,5 @@
 import type { Dispatch, RefObject, SetStateAction } from 'react';
-import { Bot, ChevronDown, Loader2, Plus, Sparkles } from 'lucide-react';
+import { Bot, ChevronDown, Loader2, Plus, Sparkles, Square } from 'lucide-react';
 import type { AiModel } from './types';
 
 type Props = {
@@ -21,6 +21,8 @@ type Props = {
   onOpenModelSettings: () => void;
   generating: boolean;
   canGenerate: boolean;
+  /** Aborts the in-flight turn. When provided, the send button becomes a stop button. */
+  onCancel?: () => void;
   placeholder?: string;
   /** Narrow the model picker for the sidebar, where a full-width dropdown would overflow. */
   compact?: boolean;
@@ -45,9 +47,13 @@ export function ChatComposer({
   onOpenModelSettings,
   generating,
   canGenerate,
+  onCancel,
   placeholder = 'Describe a workflow...',
   compact = false,
 }: Props) {
+  // While a turn runs we expose a stop button rather than a disabled/loading composer, so the input
+  // does not read as "loading" and the request can be cancelled.
+  const showCancel = generating && Boolean(onCancel);
   const hasPrompt = instruction.trim().length > 0;
   const openModelPicker = () => {
     if (!modelPickerOpen) {
@@ -88,7 +94,7 @@ export function ChatComposer({
           rows={1}
           className="max-h-[190px] min-h-[46px] w-full resize-none overflow-hidden border-0 bg-transparent p-0 pb-7 font-body-md text-[13px] leading-[1.5] text-on-surface shadow-none outline-none placeholder:text-on-surface-variant/75 focus:border-0 focus:outline-none focus:ring-0 focus-visible:outline-none"
           placeholder={placeholder}
-          disabled={generating}
+          disabled={generating && !showCancel}
         />
       </div>
 
@@ -174,15 +180,26 @@ export function ChatComposer({
         )}
       </div>
 
-      <button
-        type="button"
-        onClick={handleSubmitIntent}
-        disabled={sendDisabled}
-        title={sendTitle}
-        className="absolute bottom-[18px] right-[18px] flex h-[38px] w-[38px] items-center justify-center rounded-lg border border-primary/40 bg-primary text-on-primary shadow-[0_12px_34px_rgba(239,138,76,0.28)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-45"
-      >
-        {generating ? <Loader2 className="animate-spin" size={16} /> : <span className="material-symbols-outlined text-[18px]">arrow_upward</span>}
-      </button>
+      {showCancel ? (
+        <button
+          type="button"
+          onClick={onCancel}
+          title="Stop generating"
+          className="absolute bottom-[18px] right-[18px] flex h-[38px] w-[38px] items-center justify-center rounded-lg border border-border-subtle bg-surface-container-high text-on-surface transition-colors hover:border-status-error/50 hover:text-status-error"
+        >
+          <Square size={14} fill="currentColor" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={handleSubmitIntent}
+          disabled={sendDisabled}
+          title={sendTitle}
+          className="absolute bottom-[18px] right-[18px] flex h-[38px] w-[38px] items-center justify-center rounded-lg border border-primary/40 bg-primary text-on-primary shadow-[0_12px_34px_rgba(239,138,76,0.28)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          {generating ? <Loader2 className="animate-spin" size={16} /> : <span className="material-symbols-outlined text-[18px]">arrow_upward</span>}
+        </button>
+      )}
     </div>
   );
 }

@@ -5,7 +5,11 @@ import com.job.scheduler.dto.McpServerRequestDTO;
 import com.job.scheduler.dto.McpToolExecutionResponseDTO;
 import com.job.scheduler.dto.McpToolResponseDTO;
 import com.job.scheduler.dto.McpToolSyncResultDTO;
+import com.job.scheduler.dto.PublicMcpEnvVarDTO;
+import com.job.scheduler.dto.PublicMcpInstallOptionDTO;
+import com.job.scheduler.dto.PublicMcpServerDTO;
 import com.job.scheduler.enums.McpAuthType;
+import com.job.scheduler.enums.PublicMcpSource;
 import com.job.scheduler.enums.McpServerStatus;
 import com.job.scheduler.enums.McpToolExecutionStatus;
 import com.job.scheduler.enums.McpTransport;
@@ -14,6 +18,7 @@ import com.job.scheduler.exception.ApiExceptionHandler;
 import com.job.scheduler.service.McpClientService;
 import com.job.scheduler.service.McpServerRegistryService;
 import com.job.scheduler.service.McpToolExecutionService;
+import com.job.scheduler.service.PublicMcpRegistryService;
 import com.job.scheduler.service.McpToolRegistryService;
 import io.modelcontextprotocol.spec.McpSchema;
 import jakarta.persistence.EntityNotFoundException;
@@ -58,6 +63,9 @@ class McpServerControllerTest {
     @Mock
     private McpToolExecutionService mcpToolExecutionService;
 
+    @Mock
+    private PublicMcpRegistryService publicMcpRegistryService;
+
     private MockMvc mockMvc;
 
     @BeforeEach
@@ -67,7 +75,8 @@ class McpServerControllerTest {
                         mcpServerRegistryService,
                         mcpClientService,
                         mcpToolRegistryService,
-                        mcpToolExecutionService
+                        mcpToolExecutionService,
+                        publicMcpRegistryService
                 ))
                 .setControllerAdvice(new ApiExceptionHandler())
                 .build();
@@ -96,6 +105,32 @@ class McpServerControllerTest {
                 .andExpect(jsonPath("$.serverId").value("local-tools"))
                 .andExpect(jsonPath("$.status").value("DISABLED"))
                 .andExpect(jsonPath("$.trustLevel").value("READ_ONLY"));
+    }
+
+    @Test
+    void searchRegistryReturnsCandidates() throws Exception {
+        PublicMcpServerDTO candidate = new PublicMcpServerDTO(
+                "modelcontextprotocol/github",
+                "GitHub",
+                "Manage GitHub repositories.",
+                null,
+                "https://github.com/modelcontextprotocol/servers",
+                PublicMcpSource.BUNDLED,
+                List.of(new PublicMcpInstallOptionDTO(
+                        "npm (npx)", McpTransport.STDIO, "npx",
+                        List.of("-y", "@modelcontextprotocol/server-github"), null, null,
+                        List.of(new PublicMcpEnvVarDTO("GITHUB_PERSONAL_ACCESS_TOKEN", "PAT", true, true, null)))),
+                McpTrustLevel.UNTRUSTED);
+        when(publicMcpRegistryService.search(eq("github"), eq(5))).thenReturn(List.of(candidate));
+
+        mockMvc.perform(get("/app/v1/mcp/servers/registry/search")
+                        .param("query", "github")
+                        .param("limit", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].name").value("GitHub"))
+                .andExpect(jsonPath("$[0].source").value("BUNDLED"))
+                .andExpect(jsonPath("$[0].installs[0].command").value("npx"))
+                .andExpect(jsonPath("$[0].installs[0].env[0].secret").value(true));
     }
 
     @Test

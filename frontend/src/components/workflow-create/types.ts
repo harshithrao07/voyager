@@ -1,4 +1,4 @@
-import type { WorkflowAiResourcePlan } from '../../api';
+import type { AiStructuredOutputMode, WorkflowAiResourcePlan } from '../../api';
 
 export type DefinitionMode = 'manual' | 'ai';
 
@@ -11,6 +11,7 @@ export type AiModel = {
   enabled?: boolean;
   defaultModel?: boolean;
   hasCredential?: boolean;
+  structuredOutputMode?: AiStructuredOutputMode;
 };
 
 export type ChatMessage = {

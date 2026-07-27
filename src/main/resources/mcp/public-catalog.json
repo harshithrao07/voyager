@@ -1,0 +1,370 @@
+[
+  {
+    "sourceId": "modelcontextprotocol/filesystem",
+    "name": "Filesystem",
+    "description": "Read, write, and search files within allowed directories on the host.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"],
+        "env": []
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/github",
+    "name": "GitHub",
+    "description": "Manage repositories, issues, pull requests, and code search on GitHub.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": [
+          {
+            "name": "GITHUB_PERSONAL_ACCESS_TOKEN",
+            "description": "GitHub personal access token with the scopes your workflow needs.",
+            "secret": true,
+            "required": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/gitlab",
+    "name": "GitLab",
+    "description": "Interact with GitLab projects, issues, and merge requests.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-gitlab"],
+        "env": [
+          {
+            "name": "GITLAB_PERSONAL_ACCESS_TOKEN",
+            "description": "GitLab personal access token.",
+            "secret": true,
+            "required": true
+          },
+          {
+            "name": "GITLAB_API_URL",
+            "description": "Base API URL for self-hosted GitLab (defaults to gitlab.com).",
+            "secret": false,
+            "required": false
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/slack",
+    "name": "Slack",
+    "description": "Post messages and read channels and users in a Slack workspace.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-slack"],
+        "env": [
+          {
+            "name": "SLACK_BOT_TOKEN",
+            "description": "Slack bot user OAuth token (xoxb-...).",
+            "secret": true,
+            "required": true
+          },
+          {
+            "name": "SLACK_TEAM_ID",
+            "description": "Slack workspace/team ID.",
+            "secret": false,
+            "required": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/postgres",
+    "name": "PostgreSQL",
+    "description": "Run read-only SQL queries and inspect schemas on a PostgreSQL database.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://user:pass@host:5432/db"],
+        "env": []
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/sqlite",
+    "name": "SQLite",
+    "description": "Query and inspect a local SQLite database file.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "PyPI (uvx)",
+        "transport": "STDIO",
+        "command": "uvx",
+        "args": ["mcp-server-sqlite", "--db-path", "/path/to/database.db"],
+        "env": []
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/git",
+    "name": "Git",
+    "description": "Read, search, and inspect the history of a local Git repository.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "PyPI (uvx)",
+        "transport": "STDIO",
+        "command": "uvx",
+        "args": ["mcp-server-git", "--repository", "/path/to/repo"],
+        "env": []
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/fetch",
+    "name": "Fetch",
+    "description": "Fetch a URL and return its content converted to markdown for the model.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "PyPI (uvx)",
+        "transport": "STDIO",
+        "command": "uvx",
+        "args": ["mcp-server-fetch"],
+        "env": []
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/time",
+    "name": "Time",
+    "description": "Current time and timezone conversion utilities.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "PyPI (uvx)",
+        "transport": "STDIO",
+        "command": "uvx",
+        "args": ["mcp-server-time"],
+        "env": []
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/memory",
+    "name": "Memory",
+    "description": "A persistent knowledge-graph memory the model can read and write across turns.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-memory"],
+        "env": []
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/sequentialthinking",
+    "name": "Sequential Thinking",
+    "description": "A structured step-by-step reasoning scratchpad tool.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequentialthinking"],
+        "env": []
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/everything",
+    "name": "Everything (reference)",
+    "description": "Reference server exercising prompts, resources, and tools — useful for testing a setup.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-everything"],
+        "env": []
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/brave-search",
+    "name": "Brave Search",
+    "description": "Web and local search via the Brave Search API.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+        "env": [
+          {
+            "name": "BRAVE_API_KEY",
+            "description": "Brave Search API key.",
+            "secret": true,
+            "required": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/google-maps",
+    "name": "Google Maps",
+    "description": "Geocoding, places, directions, and distance queries via Google Maps.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-google-maps"],
+        "env": [
+          {
+            "name": "GOOGLE_MAPS_API_KEY",
+            "description": "Google Maps Platform API key.",
+            "secret": true,
+            "required": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/puppeteer",
+    "name": "Puppeteer",
+    "description": "Drive a headless Chrome browser to navigate, screenshot, and scrape pages.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+        "env": []
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/everart",
+    "name": "EverArt",
+    "description": "Generate images via the EverArt API.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-everart"],
+        "env": [
+          {
+            "name": "EVERART_API_KEY",
+            "description": "EverArt API key.",
+            "secret": true,
+            "required": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "sourceId": "sentry/sentry",
+    "name": "Sentry",
+    "description": "Retrieve and analyze error events and issues from Sentry.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "PyPI (uvx)",
+        "transport": "STDIO",
+        "command": "uvx",
+        "args": ["mcp-server-sentry", "--auth-token", "YOUR_SENTRY_TOKEN"],
+        "env": []
+      }
+    ]
+  },
+  {
+    "sourceId": "notionhq/notion",
+    "name": "Notion",
+    "description": "Read and update Notion pages and databases.",
+    "repositoryUrl": "https://github.com/makenotion/notion-mcp-server",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@notionhq/notion-mcp-server"],
+        "env": [
+          {
+            "name": "NOTION_TOKEN",
+            "description": "Notion internal integration token.",
+            "secret": true,
+            "required": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/redis",
+    "name": "Redis",
+    "description": "Get, set, and manage keys on a Redis server.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-redis", "redis://localhost:6379"],
+        "env": []
+      }
+    ]
+  },
+  {
+    "sourceId": "modelcontextprotocol/google-drive",
+    "name": "Google Drive",
+    "description": "List, search, and read files from Google Drive.",
+    "repositoryUrl": "https://github.com/modelcontextprotocol/servers",
+    "installs": [
+      {
+        "label": "npm (npx)",
+        "transport": "STDIO",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-gdrive"],
+        "env": [
+          {
+            "name": "GDRIVE_CREDENTIALS_PATH",
+            "description": "Path to the OAuth credentials JSON on the host.",
+            "secret": false,
+            "required": true
+          }
+        ]
+      }
+    ]
+  }
+]

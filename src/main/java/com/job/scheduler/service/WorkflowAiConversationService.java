@@ -16,6 +16,8 @@ import com.job.scheduler.dto.WorkflowAiMcpRequirementDTO;
 import com.job.scheduler.dto.WorkflowAiMessageDTO;
 import com.job.scheduler.dto.WorkflowAiResponseDTO;
 import com.job.scheduler.dto.WorkflowAiSaveWorkflowRequestDTO;
+import com.job.scheduler.dto.WorkflowAiTrustReviewDTO;
+import com.job.scheduler.exception.WorkflowAiTrustConfirmationRequiredException;
 import com.job.scheduler.dto.WorkflowAiSaveWorkflowResponseDTO;
 import com.job.scheduler.dto.WorkflowDefinitionResponseDTO;
 import com.job.scheduler.dto.WorkflowResponseDTO;
@@ -29,6 +31,7 @@ import com.job.scheduler.enums.WorkflowAiMessageRole;
 import com.job.scheduler.enums.WorkflowAiWorkspaceKind;
 import com.job.scheduler.enums.FunctionStatus;
 import com.job.scheduler.enums.WorkflowStatus;
+import com.job.scheduler.enums.AiStructuredOutputMode;
 import com.job.scheduler.repository.WorkflowAiConversationRepository;
 import com.job.scheduler.repository.WorkflowAiMessageRepository;
 import com.job.scheduler.workflow.asl.runtime.AslRuntimeCapabilityValidator;
@@ -61,8 +64,12 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -71,6 +78,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -101,9 +109,56 @@ public class WorkflowAiConversationService {
      * a slow local model's first token, short enough that a stream which never starts — or dies
      * part-way — costs one noticeable pause rather than the whole request budget.
      */
-    private static final long STREAM_IDLE_SECONDS = 25;
     private static final long STREAM_IDLE_POLL_SECONDS = 5;
     private static final Pattern FUNCTION_NAME_PATTERN = Pattern.compile("^[a-z0-9][a-z0-9-]*$");
+
+    // Cheap heuristic to tell a "just chatting" turn (a greeting or a general question) from a real
+    // build request, so a general turn can skip shipping the whole function/MCP catalog to the model
+    // and answer far faster. It errs toward treating a turn as a build (catalog included): a general
+    // opener only counts when it is not also a build imperative.
+    private static final Pattern GENERAL_CHAT_OPENER = Pattern.compile(
+            "(?is)^\\s*(hi|hii|hey|hello|yo|sup|greetings|thanks|thank you|ok|okay|cool|nice|great|"
+                    + "good|fine|sure|yeah|yep|yes|no|nope|nah|lol|haha|hmm|oh|nothing|nvm|"
+                    + "i'm|im|i am|i feel|i'm doing|i was|i just|just|who|what|whats|what's|how|why|"
+                    + "which|when|where|is|are|was|were|do|does|did|can|could|would|should|explain|"
+                    + "tell me|help me understand|difference)\\b.*");
+    private static final Pattern BUILD_IMPERATIVE_OPENER = Pattern.compile(
+            "(?is)^\\s*(add|create|make|build|generate|design|write|set ?up|fetch|send|schedule|"
+                    + "update|change|modify|edit|remove|delete|connect|call|use|give me|i want|i need|"
+                    + "please)\\b.*");
+    private static final Pattern MISSING_RESOURCE_DEFLECTION = Pattern.compile(
+            "(?is).*(?:\\b(?:need|needs|missing|attach|provide|connect|available|additional)\\b"
+                    + ".{0,160}\\b(?:mcp|server|api|service|tool|resource|credential)\\b"
+                    + "|\\b(?:mcp|server|api|service|tool|resource|credential)\\b.{0,160}"
+                    + "\\b(?:need|needs|missing|attach|provide|connect|available|required)\\b).*"
+    );
+    private static final Pattern MISSING_FUNCTION_DEFLECTION = Pattern.compile(
+            "(?is).*(?:\\b(?:need|needs|require|required|write|create|local)\\b.{0,120}"
+                    + "\\b(?:function|helper|code)\\b|\\b(?:function|helper|code)\\b.{0,120}"
+                    + "\\b(?:need|needs|require|required|write|create|local)\\b).*"
+    );
+    private static final Pattern EXPLICIT_ARTIFACT_REQUEST = Pattern.compile(
+            "(?is).*(?:\\bexactly\\b.{0,120}\\b(?:state|states|workflow)\\b"
+                    + "|\\bpropose\\b.{0,160}\\b(?:function|mcp|capability|resource)\\b"
+                    + "|\\buse\\b.{0,80}\\b(?:an?\\s+)?mcp requirement\\b).*"
+    );
+    private static final Pattern CLARIFICATION_QUESTION = Pattern.compile(
+            "(?is)^\\s*(?:which|what|where|when|how|why|do you|would you|could you|"
+                    + "please (?:specify|provide|choose)|tell me)\\b.*"
+    );
+    private static final Pattern PREMATURE_WORKFLOW_NAME_QUESTION = Pattern.compile(
+            "(?is).*(?:\\bworkflow name\\b|\\bname (?:for|of) (?:the|your) workflow\\b"
+                    + "|\\bprovide (?:a|the) name\\b|\\bwhat should (?:it|the workflow) be called\\b).*"
+    );
+    private static final Pattern SCHEDULE_OPT_OUT = Pattern.compile(
+            "(?is)\\b(?:not scheduled|no schedule|without (?:a )?schedule|unscheduled|"
+                    + "run manually|manual(?:ly)? only|on[ -]demand|standalone)\\b"
+    );
+    private static final Pattern SCHEDULE_REQUEST = Pattern.compile(
+            "(?is)\\b(?:schedule|scheduled|cron|daily|weekly|hourly|monthly|"
+                    + "every\\s+(?:minute|hour|day|week|month|weekday|morning|evening)|"
+                    + "each\\s+(?:minute|hour|day|week|month|weekday|morning|evening))s?\\b"
+    );
 
     // Small local models routinely emit near-JSON: // or # comments, single quotes, trailing commas,
     // and literal newlines/tabs inside strings. Parsing model replies leniently lets a usable
@@ -129,6 +184,24 @@ public class WorkflowAiConversationService {
               "draftWorkflowPayload": optional object with name, cronExpression, timezone, maxAttempts, idempotencyKey, definition,
               "resourcePlan": optional object {functions:[{name,description,languageId,sourceCode,testCases,rationale}], mcpRequirements:[{capability,suggestedToolName,reason,trustLevelHint}]}
             }
+            Always include all six top-level fields. Use null for optional artifacts that do not apply.
+            Stage/artifact invariants are mandatory:
+            - ASL_READY requires a valid aslDefinition.
+            - RESOURCES_PROPOSED requires a non-empty resourcePlan with at least one concrete function
+              or MCP requirement. Never tell the user to attach, choose, or provide a service without
+              emitting the matching concrete mcpRequirement.
+            - COLLECTING_SCHEDULE_DETAILS requires valid ASL and is allowed only when the user explicitly
+              requested scheduling.
+            - PLAN_READY requires a complete draftWorkflowPayload containing a valid definition.
+            You can also just talk. When the user's message is a general question, a greeting, or
+            conversation rather than a request to build or change a workflow (for example "what is a
+            cron schedule?", "how does retry work?", or "thanks"), answer it directly and concisely in
+            "message". In that case keep the conversation's current stage (use COLLECTING_WORKFLOW_DETAILS
+            if no workflow exists yet), and do NOT emit aslDefinition, resourcePlan, draftWorkflowPayload,
+            or finalPlan, and do NOT ask for a workflow name, cron expression, timezone, or other build
+            details. Only drive the build and detail-collection steps when the user actually asks to
+            build or change a workflow, or is continuing one already in progress. Never answer a plain
+            question by demanding schedule or workflow details.
             ASL rules: omit QueryLanguage and Version, use JSONata expressions with {% %}, reject JSONPath fields and States.* intrinsics.
             Never use JSONPath-only InputPath, OutputPath, Parameters, Result, ResultPath, ResultSelector,
             ItemsPath, or a field ending in '.$'. ItemSelector is allowed for a JSONata Map state.
@@ -180,11 +253,32 @@ public class WorkflowAiConversationService {
             ASL referencing voyager://function/<name>@v<version> and the exact MCP URIs. If MCP tools are still
             missing, keep stage RESOURCES_PROPOSED, restate only the unmet mcpRequirements, and ask the user to attach
             and sync those servers and then continue.
-            After ASL is approved, collect workflow name, cron expression if scheduled, timezone, and max attempts.
+            Scheduling is opt-in. Never ask for cron or timezone and never enter
+            COLLECTING_SCHEDULE_DETAILS unless the user explicitly requested a schedule. For an
+            unscheduled workflow, keep cronExpression null and continue without schedule questions.
+            After ASL is approved, collect the workflow name and max attempts, plus cron expression
+            and timezone only when scheduling was explicitly requested.
             When everything is ready, return PLAN_READY with finalPlan and draftWorkflowPayload.
             If the selected local model supports visible reasoning, put that reasoning before the JSON as <think>...</think>.
             The content after </think> must still be strict JSON only. Keep any <think> reasoning brief and keep
             the JSON output concise so it always completes and is never cut off mid-object.
+            """;
+
+    /**
+     * Slim prompt used when the turn is just conversation (a greeting or general question), not a
+     * request to build a workflow. It drops the whole builder ruleset — which is what made a small
+     * model deflect chit-chat into "what's the workflow name?" — and only keeps the JSON envelope the
+     * backend parses. Far fewer tokens too, so these turns are fast.
+     */
+    private static final String GENERAL_CHAT_SYSTEM_PROMPT = """
+            You are Voyager's friendly assistant. Voyager is a workflow scheduler, but right now the
+            user is just chatting, not asking you to build a workflow.
+            Reply naturally and helpfully to their message in a sentence or two.
+            Do NOT ask for a workflow name, a schedule, a cron expression, or any other build details,
+            and do NOT try to design or describe a workflow. If they later ask to build or change a
+            workflow, you will help then.
+            Respond with strict JSON only — no markdown, no comments, no text outside the JSON:
+            {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"<your natural reply>"}
             """;
 
     private static final String FUNCTION_CREATION_PROMPT = """
@@ -227,6 +321,7 @@ public class WorkflowAiConversationService {
     private final AiModelConfigService aiModelConfigService;
     private final WorkflowAiModelResolver modelResolver;
     private final WorkflowAiStreamBroker streamBroker;
+    private final WorkflowAiTurnRegistry turnRegistry;
     private final WorkflowAiConversationRepository conversationRepository;
     private final WorkflowAiMessageRepository messageRepository;
     private final AslDefinitionValidator aslDefinitionValidator;
@@ -237,13 +332,40 @@ public class WorkflowAiConversationService {
     private final WorkflowAiResourceCatalogService resourceCatalogService;
     private final FunctionRegistryService functionRegistryService;
     private final FunctionRuntimePolicy functionRuntimePolicy;
+    private final WorkflowAiProposedFunctionSafetyValidator proposedFunctionSafetyValidator;
+    private final WorkflowAiTrustReviewService trustReviewService;
     private final ObjectMapper objectMapper;
+
+    public String promptFingerprint() {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest((
+                    SYSTEM_PROMPT + "\n" + GENERAL_CHAT_SYSTEM_PROMPT + "\n"
+                            + FUNCTION_CREATION_PROMPT
+            ).getBytes(StandardCharsets.UTF_8));
+            return "sha256:" + HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
 
     @Value("${scheduler.workflow-ai.context.max-estimated-tokens:12000}")
     private int maximumContextTokens = 12000;
 
     @Value("${scheduler.workflow-ai.context.recent-estimated-tokens:4000}")
     private int recentContextTokens = 4000;
+
+    /**
+     * How long to wait for the model's FIRST streamed token before giving up on the stream. Generous,
+     * because a large prompt makes prompt-eval (time to first token) legitimately long on a local
+     * model; the old single 25 s budget tripped here and forced a wasteful blocking re-run.
+     */
+    @Value("${scheduler.workflow-ai.stream.first-token-seconds:60}")
+    private long streamFirstTokenSeconds = 60;
+
+    /** How long a stream may go silent AFTER it has started before it is treated as dead. */
+    @Value("${scheduler.workflow-ai.stream.idle-seconds:25}")
+    private long streamIdleSeconds = 25;
 
     @Value("${scheduler.workflow-ai.context.summary-max-characters:6000}")
     private int maximumSummaryCharacters = 6000;
@@ -408,6 +530,17 @@ public class WorkflowAiConversationService {
         requireWorkspaceKind(conversation, workspaceKind);
 
         CreateWorkflowRequestDTO requestedWorkflow = request.workflow();
+
+        // Before creating anything, require explicit confirmation when the definition wires in
+        // WRITE/DESTRUCTIVE MCP tools. Checked here (not just in the UI) so the gate holds for
+        // every caller of this endpoint.
+        if (!Boolean.TRUE.equals(request.confirmElevatedTrust())) {
+            WorkflowAiTrustReviewDTO trustReview = trustReviewService.review(requestedWorkflow.definition());
+            if (trustReview.requiresConfirmation()) {
+                throw new WorkflowAiTrustConfirmationRequiredException(trustReview.tools());
+            }
+        }
+
         WorkflowResponseDTO workflow = conversation.getWorkflowId() == null
                 ? workflowService.createWorkflow(requestedWorkflow)
                 : workflowService.getWorkflow(conversation.getWorkflowId());
@@ -526,6 +659,7 @@ public class WorkflowAiConversationService {
         return true;
     }
 
+    @Transactional
     public WorkflowAiResponseDTO startConversation(
             String instruction,
             UUID modelConfigId,
@@ -863,6 +997,7 @@ public class WorkflowAiConversationService {
     }
 
     private String provisionFunction(WorkflowAiProposedFunctionDTO function) {
+        proposedFunctionSafetyValidator.assertSafe(function);
         String requestedName = requireText(function.name(), "Function name");
         String name = normalizeFunctionName(requestedName);
         if (name.isBlank() || !FUNCTION_NAME_PATTERN.matcher(name).matches()) {
@@ -936,12 +1071,13 @@ public class WorkflowAiConversationService {
         // generating so every continuation keeps one durable resource-plan card.
         ensureResourcePlanMessageId(conversation);
         ChatModel model = modelResolver.resolve(modelConfig);
-        List<ChatMessage> messages = buildPrompt(
+        BuiltPrompt prompt = buildPrompt(
                 conversation,
                 task,
                 historyOverride,
                 model
         );
+        List<ChatMessage> messages = prompt.messages();
         // One turn is several model calls. The pass counter labels each of them for the live UI so a
         // repair or review pass visibly replaces the previous pass's reasoning instead of appending.
         TurnStream turnStream = openTurnStream(conversation, modelConfig);
@@ -950,7 +1086,7 @@ public class WorkflowAiConversationService {
                 model,
                 modelConfig,
                 turnStream,
-                "Designing the workflow",
+                prompt.generalTurn() ? "Thinking" : "Designing the workflow",
                 messages
         );
         if (attempt.hasFunctionProposalSignal()) {
@@ -962,7 +1098,13 @@ public class WorkflowAiConversationService {
                     functionCreationReviewPrompt(messages, attempt.cleaned())
             );
         }
-        List<String> validationIssues = validateAssistantAttempt(attempt.parsed());
+        List<String> validationIssues = validateAssistantAttempt(
+                conversation,
+                attempt.parsed(),
+                prompt.schedulingRequested(),
+                prompt.generalTurn(),
+                prompt.artifactRequired()
+        );
         for (int generationAttempt = 1;
              !validationIssues.isEmpty()
                      && generationAttempt < MAX_ASSISTANT_GENERATION_ATTEMPTS;
@@ -972,8 +1114,10 @@ public class WorkflowAiConversationService {
                     model,
                     modelConfig,
                     turnStream,
-                    "Repairing the response (attempt " + (generationAttempt + 1)
-                            + " of " + MAX_ASSISTANT_GENERATION_ATTEMPTS + ")",
+                    prompt.generalTurn()
+                            ? "Preparing the reply"
+                            : "Repairing the response (attempt " + (generationAttempt + 1)
+                                    + " of " + MAX_ASSISTANT_GENERATION_ATTEMPTS + ")",
                     repairPrompt(
                             messages,
                             attempt.cleaned(),
@@ -990,7 +1134,13 @@ public class WorkflowAiConversationService {
                         functionCreationReviewPrompt(messages, attempt.cleaned())
                 );
             }
-            validationIssues = validateAssistantAttempt(attempt.parsed());
+            validationIssues = validateAssistantAttempt(
+                    conversation,
+                    attempt.parsed(),
+                    prompt.schedulingRequested(),
+                    prompt.generalTurn(),
+                    prompt.artifactRequired()
+            );
         }
         long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
         ParsedAssistantResponse parsed = attempt.parsed();
@@ -1117,11 +1267,16 @@ public class WorkflowAiConversationService {
             String stageLabel,
             List<ChatMessage> messages
     ) {
+        // Abort before spending another model call if the client cancelled between passes.
+        turnRegistry.throwIfCancelled(streamBroker.currentSession());
         ChatResponse modelResponse;
         try {
             modelResponse = turnStream == null
                     ? blockingChat(model, modelConfig, messages)
                     : turnStream.generate(model, stageLabel, messages);
+        } catch (WorkflowAiCancelledException exception) {
+            // A cancelled turn must stay cancelled, not be reframed as a model-call failure.
+            throw exception;
         } catch (IllegalStateException exception) {
             throw exception;
         } catch (RuntimeException exception) {
@@ -1154,26 +1309,115 @@ public class WorkflowAiConversationService {
             AiModelConfig modelConfig,
             List<ChatMessage> messages
     ) {
-        if (modelConfig == null || !modelResolver.supportsJsonMode(modelConfig)) {
+        if (modelConfig == null) {
             return model.chat(messages);
         }
-        try {
-            return model.chat(ChatRequest.builder()
-                    .messages(messages)
-                    .responseFormat(ResponseFormat.JSON)
-                    .build());
-        } catch (RuntimeException exception) {
-            if (isUnrecoverableProviderError(exception)) {
-                throw exception;
+
+        AiStructuredOutputMode mode =
+                modelResolver.preferredStructuredOutputMode(modelConfig);
+        // Production resolvers never return null. Prompt-only is a defensive fallback for custom
+        // resolver implementations and keeps focused unit-test mocks backward compatible.
+        if (mode == null || mode == AiStructuredOutputMode.UNKNOWN) {
+            mode = AiStructuredOutputMode.PROMPT_ONLY;
+        }
+
+        while (true) {
+            try {
+                ChatModel selectedModel = mode == AiStructuredOutputMode.JSON_SCHEMA
+                        ? nonStrictModel(model, modelConfig)
+                        : model;
+                ChatResponse response = switch (mode) {
+                    case STRICT_JSON_SCHEMA, JSON_SCHEMA -> selectedModel.chat(
+                            structuredRequest(messages)
+                    );
+                    case JSON_OBJECT -> selectedModel.chat(ChatRequest.builder()
+                            .messages(messages)
+                            .responseFormat(ResponseFormat.JSON)
+                            .build());
+                    case PROMPT_ONLY, UNKNOWN -> selectedModel.chat(messages);
+                };
+                modelResolver.recordStructuredOutputMode(modelConfig, mode);
+                return response;
+            } catch (RuntimeException exception) {
+                if (isUnrecoverableProviderError(exception)
+                        || isConnectionFailure(exception)
+                        || !isStructuredOutputRejection(exception)) {
+                    throw exception;
+                }
+                AiStructuredOutputMode fallback = weakerStructuredOutputMode(mode);
+                if (fallback == null) {
+                    throw exception;
+                }
+                log.info(
+                        "AI endpoint {} rejected structured output mode {} ({}); retrying with {}",
+                        modelConfig.getBaseUrl(),
+                        mode,
+                        exception.getMessage(),
+                        fallback
+                );
+                modelResolver.recordStructuredOutputMode(modelConfig, fallback);
+                mode = fallback;
             }
-            log.info(
-                    "JSON mode disabled for AI endpoint {} ({}); asking for free-form JSON instead",
-                    modelConfig.getBaseUrl(),
-                    exception.getMessage()
-            );
-            modelResolver.markJsonModeUnsupported(modelConfig);
-            return model.chat(messages);
         }
+    }
+
+    private ChatModel nonStrictModel(ChatModel fallback, AiModelConfig modelConfig) {
+        ChatModel nonStrict = modelResolver.resolveNonStrict(modelConfig);
+        return nonStrict == null ? fallback : nonStrict;
+    }
+
+    private ChatRequest structuredRequest(List<ChatMessage> messages) {
+        return ChatRequest.builder()
+                .messages(messages)
+                .responseFormat(WorkflowAiResponseSchema.responseFormat())
+                .build();
+    }
+
+    private AiStructuredOutputMode weakerStructuredOutputMode(AiStructuredOutputMode mode) {
+        return switch (mode) {
+            case STRICT_JSON_SCHEMA -> AiStructuredOutputMode.JSON_SCHEMA;
+            case JSON_SCHEMA -> AiStructuredOutputMode.JSON_OBJECT;
+            case JSON_OBJECT -> AiStructuredOutputMode.PROMPT_ONLY;
+            case PROMPT_ONLY, UNKNOWN -> null;
+        };
+    }
+
+    private boolean isSchemaMode(AiStructuredOutputMode mode) {
+        return mode == AiStructuredOutputMode.STRICT_JSON_SCHEMA
+                || mode == AiStructuredOutputMode.JSON_SCHEMA;
+    }
+
+    /**
+     * True only when the provider identifies the structured-output request itself as invalid.
+     */
+    private boolean isStructuredOutputRejection(Throwable failure) {
+        for (Throwable current = failure; current != null;
+             current = current.getCause() == current ? null : current.getCause()) {
+            String message = current.getMessage();
+            if (message == null) {
+                continue;
+            }
+            String lowered = message.toLowerCase(Locale.ROOT);
+            boolean namesConstraint = lowered.contains("response_format")
+                    || lowered.contains("response format")
+                    || lowered.contains("json_schema")
+                    || lowered.contains("json schema")
+                    || lowered.contains("json mode")
+                    || lowered.contains("structured output")
+                    || lowered.contains("strict schema")
+                    || lowered.contains("strictjsonschema");
+            if (namesConstraint && (lowered.contains("unsupported")
+                    || lowered.contains("not supported")
+                    || lowered.contains("unknown")
+                    || lowered.contains("invalid")
+                    || lowered.contains("not allowed")
+                    || lowered.contains("unrecognized")
+                    || lowered.contains("couldn't be met")
+                    || lowered.contains("could not be met"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1195,6 +1439,34 @@ public class WorkflowAiConversationService {
                 || lowered.contains("api key")
                 || lowered.contains("unauthorized")
                 || lowered.contains("rate limit");
+    }
+
+    /**
+     * True when the endpoint could not be reached at all — a transient/environmental failure (a local
+     * model still starting, a network blip), not evidence the endpoint lacks a capability. Such a
+     * failure must not permanently disable streaming or JSON mode for the endpoint.
+     */
+    private boolean isConnectionFailure(Throwable failure) {
+        for (Throwable current = failure; current != null;
+             current = current.getCause() == current ? null : current.getCause()) {
+            if (current instanceof java.net.ConnectException
+                    || current instanceof java.net.UnknownHostException
+                    || current instanceof java.net.NoRouteToHostException
+                    || current instanceof java.net.SocketTimeoutException) {
+                return true;
+            }
+            String message = current.getMessage();
+            if (message != null) {
+                String lowered = message.toLowerCase(Locale.ROOT);
+                if (lowered.contains("connection refused")
+                        || lowered.contains("connection reset")
+                        || lowered.contains("failed to connect")
+                        || lowered.contains("connect timed out")) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -1250,15 +1522,20 @@ public class WorkflowAiConversationService {
     }
 
     /**
-     * Returns a live stream for this turn, or {@code null} when nobody is subscribed (the REST entry
+     * Returns a stream driver for this turn, or {@code null} when nobody is subscribed (the REST entry
      * points) so the turn falls back to a single blocking call.
+     *
+     * <p>Opened whenever a browser is subscribed, even for an endpoint currently marked non-streaming:
+     * {@link TurnStream#generate} re-checks streaming support per pass and routes to a blocking call
+     * when needed, but still emits a stage frame first. That keeps the frontend informed (and its idle
+     * timer fed) during an otherwise frame-less blocking turn instead of leaving it spinning blind.
      */
     private TurnStream openTurnStream(
             WorkflowAiConversation conversation,
             AiModelConfig modelConfig
     ) {
         String sessionId = streamBroker.currentSession();
-        if (sessionId == null || !modelResolver.supportsStreaming(modelConfig)) {
+        if (sessionId == null) {
             return null;
         }
         try {
@@ -1312,6 +1589,14 @@ public class WorkflowAiConversationService {
             int currentPass = pass;
             streamBroker.emitStage(sessionId, conversationId, stageLabel, currentPass);
 
+            AiStructuredOutputMode outputMode =
+                    modelResolver.preferredStructuredOutputMode(modelConfig);
+            // Schema-constrained decoding is not consistently streamable across compatible
+            // providers. Preserve the stage event, then use the negotiated blocking path.
+            if (isSchemaMode(outputMode)) {
+                return blockingChat(blockingModel, modelConfig, messages);
+            }
+
             // Re-check per pass, not just when the turn opened. A turn runs up to five model calls,
             // and once one of them proves the endpoint cannot stream, every later pass must skip
             // straight to blocking instead of stalling out the idle budget again.
@@ -1325,12 +1610,14 @@ public class WorkflowAiConversationService {
             WorkflowAiThinkingStream splitter = new WorkflowAiThinkingStream();
             StringBuilder thinkingBuffer = new StringBuilder();
             AtomicLong lastActivityAt = new AtomicLong(System.nanoTime());
+            AtomicBoolean firstTokenSeen = new AtomicBoolean(false);
             int[] answerCharacters = {0};
             int[] reportedAnswerCharacters = {0};
 
             model.chat(streamingRequest(messages), new StreamingChatResponseHandler() {
                 @Override
                 public void onPartialResponse(String token) {
+                    firstTokenSeen.set(true);
                     lastActivityAt.set(System.nanoTime());
                     try {
                         consume(splitter.accept(token), false);
@@ -1341,6 +1628,7 @@ public class WorkflowAiConversationService {
 
                 @Override
                 public void onCompleteResponse(ChatResponse response) {
+                    firstTokenSeen.set(true);
                     try {
                         consume(splitter.flush(), true);
                     } catch (Exception exception) {
@@ -1392,12 +1680,13 @@ public class WorkflowAiConversationService {
                 }
             });
 
-            return awaitCompletion(completion, lastActivityAt, blockingModel, messages);
+            return awaitCompletion(completion, lastActivityAt, firstTokenSeen, blockingModel, messages);
         }
 
         private ChatRequest streamingRequest(List<ChatMessage> messages) {
             ChatRequest.Builder request = ChatRequest.builder().messages(messages);
-            if (modelResolver.supportsJsonMode(modelConfig)) {
+            if (modelResolver.preferredStructuredOutputMode(modelConfig)
+                    == AiStructuredOutputMode.JSON_OBJECT) {
                 request.responseFormat(ResponseFormat.JSON);
             }
             return request.build();
@@ -1415,6 +1704,7 @@ public class WorkflowAiConversationService {
         private ChatResponse awaitCompletion(
                 CompletableFuture<ChatResponse> completion,
                 AtomicLong lastActivityAt,
+                AtomicBoolean firstTokenSeen,
                 ChatModel blockingModel,
                 List<ChatMessage> messages
         ) {
@@ -1423,24 +1713,49 @@ public class WorkflowAiConversationService {
             while (true) {
                 try {
                     // Poll well below the idle budget: waiting a full budget per slice would let a
-                    // dead stream burn up to twice STREAM_IDLE_SECONDS before being noticed.
+                    // dead stream burn up to twice the idle budget before being noticed.
                     return completion.get(STREAM_IDLE_POLL_SECONDS, TimeUnit.SECONDS);
                 } catch (InterruptedException exception) {
+                    // A cancel interrupts this wait; abandon the turn so its transaction rolls back.
+                    if (turnRegistry.isCancelled(sessionId)) {
+                        Thread.interrupted();
+                        throw new WorkflowAiCancelledException();
+                    }
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException("The AI request was interrupted.", exception);
                 } catch (ExecutionException exception) {
                     Throwable cause =
                             exception.getCause() == null ? exception : exception.getCause();
+                    // A connection failure says the endpoint was unreachable this instant (a not-yet-
+                    // ready local model, a blip) — not that it cannot stream. Fall back for this turn
+                    // only, leaving streaming enabled so a later turn tries again once reachable.
+                    if (isConnectionFailure(cause)) {
+                        log.info(
+                                "Streaming attempt could not reach {} ({}); using a blocking request "
+                                        + "for this turn but keeping streaming enabled",
+                                modelConfig.getBaseUrl(),
+                                cause
+                        );
+                        return blockingChat(blockingModel, modelConfig, messages);
+                    }
                     return fallback(blockingModel, messages, cause.toString());
                 } catch (TimeoutException exception) {
+                    turnRegistry.throwIfCancelled(sessionId);
                     long idleSeconds = TimeUnit.NANOSECONDS.toSeconds(
                             System.nanoTime() - lastActivityAt.get()
                     );
-                    if (idleSeconds >= STREAM_IDLE_SECONDS) {
+                    // Two budgets: be patient while the model is still reading the prompt (no token
+                    // yet), then strict once tokens are flowing and a gap really does mean a dead
+                    // stream. The old single budget punished a slow first token as if the stream died.
+                    boolean streaming = firstTokenSeen.get();
+                    long budgetSeconds = streaming ? streamIdleSeconds : streamFirstTokenSeconds;
+                    if (idleSeconds >= budgetSeconds) {
                         return fallback(
                                 blockingModel,
                                 messages,
-                                "the stream went silent for " + idleSeconds + "s"
+                                streaming
+                                        ? "the stream went silent for " + idleSeconds + "s"
+                                        : "no first token within " + idleSeconds + "s"
                         );
                     }
                     if (System.nanoTime() >= overallDeadline) {
@@ -1499,6 +1814,13 @@ public class WorkflowAiConversationService {
                 aslDefinition: return "stage":"RESOURCES_PROPOSED" with a complete resourcePlan (functions and/or
                 mcpRequirements) and omit aslDefinition. Otherwise, preserve the user's requested workflow and return
                 JSONata-only ASL when aslDefinition is present.
+                Never return ASL_READY without aslDefinition, RESOURCES_PROPOSED without at least one concrete
+                resource, COLLECTING_SCHEDULE_DETAILS before valid ASL, or PLAN_READY without a complete
+                draftWorkflowPayload containing valid ASL. If the rejected reply told the user to attach, choose, or
+                provide an external service, API, MCP server, tool, or credential, replace that deflection with a
+                concrete mcpRequirement. Use a complete function proposal instead for deterministic local parsing,
+                math, hashing, validation, or formatting. Scheduling is opt-in: do not ask about frequency, cron, or
+                timezone unless the user explicitly requested a schedule.
                 Re-read the available Voyager Task catalog in the system context and keep every matching exact URI.
                 In Task Arguments use $states.input or $states.context only, never $states.result. Use $states.result
                 only inside that same Task's Output. State output becomes the next state's $states.input, so preserve
@@ -1542,12 +1864,25 @@ public class WorkflowAiConversationService {
                 + resourceCatalogService.buildFunctionCreationContext();
     }
 
-    private List<String> validateAssistantAttempt(ParsedAssistantResponse parsed) {
+    private List<String> validateAssistantAttempt(
+            WorkflowAiConversation conversation,
+            ParsedAssistantResponse parsed,
+            boolean schedulingRequested,
+            boolean generalTurn,
+            boolean artifactRequired
+    ) {
         List<String> issues = new ArrayList<>();
         if (!parsed.structured()) {
             issues.add(INVALID_AI_RESPONSE + " " + parsed.failureReason());
             return List.copyOf(issues);
         }
+        issues.addAll(validateStageContract(
+                conversation,
+                parsed,
+                schedulingRequested,
+                generalTurn,
+                artifactRequired
+        ));
         if (parsed.aslDefinition() != null) {
             issues.addAll(validateExecutableDefinition(parsed.aslDefinition()));
         }
@@ -1606,17 +1941,39 @@ public class WorkflowAiConversationService {
                                         + "' is missing sourceCode."
                         );
                     }
+                    proposedFunctionSafetyValidator.validate(function)
+                            .forEach(issue -> issues.add(
+                                    "[AI_RESOURCE_PLAN] Function '" + functionName + "': " + issue
+                            ));
                 }
             }
             if (parsed.resourcePlan().mcpRequirements() != null) {
+                Set<String> proposedMcpCapabilities = new HashSet<>();
                 for (WorkflowAiMcpRequirementDTO requirement :
                         parsed.resourcePlan().mcpRequirements()) {
+                    if (requirement == null) {
+                        issues.add("[AI_RESOURCE_PLAN] MCP requirement cannot be null.");
+                        continue;
+                    }
+                    String capability = optionalText(requirement.capability());
+                    if (capability == null) {
+                        issues.add(
+                                "[AI_RESOURCE_PLAN] MCP requirement is missing a capability. "
+                                        + "Describe the external action the server must provide."
+                        );
+                    } else if (!proposedMcpCapabilities.add(
+                            capability.toLowerCase(Locale.ROOT)
+                    )) {
+                        issues.add(
+                                "[AI_RESOURCE_PLAN] MCP capability is duplicated: " + capability
+                        );
+                    }
                     String suggestedTool = optionalText(requirement.suggestedToolName());
                     if (suggestedTool != null
                             && suggestedTool.toLowerCase(Locale.ROOT)
                             .startsWith("voyager://function/")) {
                         issues.add(
-                                "[AI_RESOURCE_PLAN] Capability '" + requirement.capability()
+                                "[AI_RESOURCE_PLAN] Capability '" + capability
                                         + "' was incorrectly proposed as MCP tool '"
                                         + suggestedTool + "'. Put deterministic local logic in "
                                         + "resourcePlan.functions with complete sourceCode instead."
@@ -1638,6 +1995,109 @@ public class WorkflowAiConversationService {
         return List.copyOf(issues);
     }
 
+    private List<String> validateStageContract(
+            WorkflowAiConversation conversation,
+            ParsedAssistantResponse parsed,
+            boolean schedulingRequested,
+            boolean generalTurn,
+            boolean artifactRequired
+    ) {
+        List<String> issues = new ArrayList<>();
+        WorkflowAiConversationStage stage = parsed.stage();
+        boolean hasPersistedDefinition = optionalText(conversation.getDraftAsl()) != null;
+        boolean hasDefinition = parsed.hasDefinitionCandidate() || hasPersistedDefinition;
+
+        if (stage == WorkflowAiConversationStage.ASL_READY
+                && parsed.aslDefinition() == null) {
+            issues.add(
+                    "[AI_RESPONSE] ASL_READY requires a valid aslDefinition."
+            );
+        }
+        if (stage == WorkflowAiConversationStage.RESOURCES_PROPOSED
+                && !parsed.hasResourcePlan()) {
+            issues.add(
+                    "[AI_RESOURCE_PLAN] RESOURCES_PROPOSED requires a non-empty resourcePlan "
+                            + "with at least one concrete function or MCP requirement."
+            );
+        }
+        if (stage == WorkflowAiConversationStage.COLLECTING_SCHEDULE_DETAILS) {
+            if (!hasDefinition) {
+                issues.add(
+                        "[AI_RESPONSE] COLLECTING_SCHEDULE_DETAILS requires valid ASL first. "
+                                + "Return ASL_READY or a concrete RESOURCES_PROPOSED plan."
+                );
+            }
+            if (!schedulingRequested) {
+                issues.add(
+                        "[AI_RESPONSE] Scheduling is opt-in. Do not ask for schedule details "
+                                + "unless the user explicitly requested a schedule."
+                );
+            }
+        }
+        if (stage == WorkflowAiConversationStage.COLLECTING_WORKFLOW_DETAILS
+                && !hasDefinition
+                && PREMATURE_WORKFLOW_NAME_QUESTION.matcher(parsed.message()).matches()) {
+            issues.add(
+                    "[AI_RESPONSE] Do not collect the workflow name before valid ASL exists. "
+                            + "First produce ASL or ask only for missing behavioral details."
+            );
+        }
+        if (stage == WorkflowAiConversationStage.PLAN_READY) {
+            if (!hasDefinition) {
+                issues.add(
+                        "[AI_RESPONSE] PLAN_READY requires a valid ASL definition."
+                );
+            }
+            if (parsed.draftWorkflowPayload() == null
+                    || parsed.draftWorkflowPayload().definition() == null) {
+                issues.add(
+                        "[AI_RESPONSE] PLAN_READY requires a complete draftWorkflowPayload "
+                                + "containing the workflow definition."
+                );
+            }
+        }
+        if (!parsed.hasResourcePlan()
+                && !parsed.hasDefinitionCandidate()
+                && parsed.draftWorkflowPayload() == null
+                && MISSING_RESOURCE_DEFLECTION.matcher(parsed.message()).matches()) {
+            issues.add(
+                    "[AI_RESOURCE_PLAN] The reply says a service or tool is missing but does not "
+                            + "provide a concrete resourcePlan. External capabilities must be "
+                            + "represented as mcpRequirements."
+            );
+        }
+        if (!parsed.hasResourcePlan()
+                && !parsed.hasDefinitionCandidate()
+                && parsed.draftWorkflowPayload() == null
+                && MISSING_FUNCTION_DEFLECTION.matcher(parsed.message()).matches()) {
+            issues.add(
+                    "[AI_RESOURCE_PLAN] The reply says a local function is needed but does not "
+                            + "provide a complete resourcePlan.functions proposal."
+            );
+        }
+        if (!generalTurn
+                && artifactRequired
+                && stage == WorkflowAiConversationStage.COLLECTING_WORKFLOW_DETAILS
+                && !parsed.hasResourcePlan()
+                && !parsed.hasDefinitionCandidate()
+                && parsed.draftWorkflowPayload() == null
+                && !asksClarifyingQuestion(parsed.message())) {
+            issues.add(
+                    "[AI_RESPONSE] The user explicitly requested a workflow artifact, but the "
+                            + "reply neither produced one nor asked a concrete clarification."
+            );
+        }
+        return List.copyOf(issues);
+    }
+
+    private boolean asksClarifyingQuestion(String message) {
+        String text = optionalText(message);
+        if (text == null) {
+            return false;
+        }
+        return text.contains("?") || CLARIFICATION_QUESTION.matcher(text).matches();
+    }
+
     private String requireModelReply(ChatResponse modelResponse) {
         String reply = modelResponse == null || modelResponse.aiMessage() == null
                 ? null
@@ -1656,7 +2116,18 @@ public class WorkflowAiConversationService {
         return reply.trim();
     }
 
-    private List<ChatMessage> buildPrompt(
+    /**
+     * The assembled prompt plus turn intent used by response-contract validation.
+     */
+    private record BuiltPrompt(
+            List<ChatMessage> messages,
+            boolean generalTurn,
+            boolean schedulingRequested,
+            boolean artifactRequired
+    ) {
+    }
+
+    private BuiltPrompt buildPrompt(
             WorkflowAiConversation conversation,
             String task,
             List<WorkflowAiMessage> historyOverride,
@@ -1666,13 +2137,35 @@ public class WorkflowAiConversationService {
                 ? messageRepository.findByConversationOrderByCreatedAtAsc(conversation)
                 : historyOverride;
         List<WorkflowAiMessage> effectiveHistory = effectiveHistory(rawHistory);
-        String durableContext = durableConversationContext(conversation, task);
+        // A general/chat turn doesn't need the resource catalog; skipping it shrinks the prompt a lot
+        // and speeds up the reply. Building turns always get the full catalog.
+        String lastUserMessage = effectiveHistory.stream()
+                .filter(message -> message.getRole() == WorkflowAiMessageRole.USER)
+                .reduce((first, second) -> second)
+                .map(WorkflowAiMessage::getContent)
+                .orElse(null);
+        boolean generalTurn = isGeneralChatTurn(
+                conversation,
+                lastUserMessage == null ? task : lastUserMessage
+        );
+        // A plain-chat turn uses the slim prompt (so a small model stops deflecting into "what's the
+        // workflow name?") and skips the catalog entirely. Building turns get the full builder prompt.
+        String systemPrompt = generalTurn ? GENERAL_CHAT_SYSTEM_PROMPT : SYSTEM_PROMPT;
+
+        // Cache-friendly ordering: the stable blocks (system prompt, then the catalog) go first and
+        // stay byte-identical across turns, so a server that caches the KV of an unchanged prompt
+        // prefix (Ollama, vLLM, SGLang) only re-evaluates the new tail. Everything that changes per
+        // turn — stage, task, latest ASL, settings — is emitted last, after the chat history, where it
+        // also lands closest to where the model starts generating.
+        String catalogContext = generalTurn ? null : resourceCatalogContext();
+        String turnContext = turnContext(conversation, task);
         String exactIdentifiers = exactSourceIdentifiers(effectiveHistory);
         if (exactIdentifiers != null) {
-            durableContext += "\nExact source identifiers (verbatim):\n" + exactIdentifiers;
+            turnContext += "\nExact source identifiers (verbatim):\n" + exactIdentifiers;
         }
-        int fixedContextTokens = estimatedTokens(SYSTEM_PROMPT)
-                + estimatedTokens(durableContext);
+        int fixedContextTokens = estimatedTokens(systemPrompt)
+                + (catalogContext == null ? 0 : estimatedTokens(catalogContext))
+                + estimatedTokens(turnContext);
         ContextWindow contextWindow = compactContextIfNeeded(
                 conversation,
                 effectiveHistory,
@@ -1682,8 +2175,10 @@ public class WorkflowAiConversationService {
         );
 
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.systemMessage(SYSTEM_PROMPT));
-        messages.add(SystemMessage.systemMessage(durableContext));
+        messages.add(SystemMessage.systemMessage(systemPrompt));
+        if (catalogContext != null) {
+            messages.add(SystemMessage.systemMessage(catalogContext));
+        }
         if (contextWindow.summary() != null) {
             messages.add(SystemMessage.systemMessage(
                     "Summary of earlier conversation turns:\n" + contextWindow.summary()
@@ -1696,10 +2191,87 @@ public class WorkflowAiConversationService {
                 messages.add(UserMessage.userMessage(message.getContent()));
             }
         }
-        return messages;
+        // The volatile turn context is emitted last so it never invalidates the cached prefix above.
+        messages.add(SystemMessage.systemMessage(turnContext));
+        return new BuiltPrompt(
+                messages,
+                generalTurn,
+                schedulingRequested(conversation, lastUserMessage == null ? task : lastUserMessage),
+                artifactRequired(conversation, lastUserMessage == null ? task : lastUserMessage)
+        );
     }
 
-    private String durableConversationContext(
+    /**
+     * True when this turn is a greeting or a general question rather than a request to build or change
+     * a workflow — the case where the model can answer directly and does not need the resource catalog.
+     * Conservative: any workflow already in progress, or any build-imperative phrasing, disqualifies it.
+     */
+    private boolean isGeneralChatTurn(WorkflowAiConversation conversation, String lastUserMessage) {
+        if (conversation.getStage() != WorkflowAiConversationStage.COLLECTING_WORKFLOW_DETAILS) {
+            return false;
+        }
+        if (optionalText(conversation.getDraftAsl()) != null) {
+            return false;
+        }
+        if (lastUserMessage == null || lastUserMessage.isBlank()) {
+            return false;
+        }
+        String text = lastUserMessage.trim();
+        return GENERAL_CHAT_OPENER.matcher(text).matches()
+                && !BUILD_IMPERATIVE_OPENER.matcher(text).matches();
+    }
+
+    private boolean schedulingRequested(
+            WorkflowAiConversation conversation,
+            String lastUserMessage
+    ) {
+        Boolean currentIntent = explicitScheduleIntent(lastUserMessage);
+        if (currentIntent != null) {
+            return currentIntent;
+        }
+        return Boolean.TRUE.equals(explicitScheduleIntent(
+                conversation.getInitialInstruction()
+        ));
+    }
+
+    private Boolean explicitScheduleIntent(String value) {
+        String text = optionalText(value);
+        if (text == null) {
+            return null;
+        }
+        if (SCHEDULE_OPT_OUT.matcher(text).find()) {
+            return false;
+        }
+        return SCHEDULE_REQUEST.matcher(text).find() ? true : null;
+    }
+
+    private boolean artifactRequired(
+            WorkflowAiConversation conversation,
+            String lastUserMessage
+    ) {
+        return matchesExplicitArtifactRequest(lastUserMessage)
+                || matchesExplicitArtifactRequest(conversation.getInitialInstruction());
+    }
+
+    private boolean matchesExplicitArtifactRequest(String value) {
+        String text = optionalText(value);
+        return text != null && EXPLICIT_ARTIFACT_REQUEST.matcher(text).matches();
+    }
+
+    /**
+     * The resource catalog block. Stable across turns unless the registry itself changes, so it is
+     * emitted as its own leading message to stay inside the cacheable prompt prefix.
+     */
+    private String resourceCatalogContext() {
+        return "Available Voyager Task resources (current registry):\n"
+                + resourceCatalogService.buildCatalog();
+    }
+
+    /**
+     * The per-turn context that changes as the conversation progresses (stage, task, latest ASL,
+     * settings). Emitted last so it never invalidates the cached prefix above it.
+     */
+    private String turnContext(
             WorkflowAiConversation conversation,
             String task
     ) {
@@ -1709,9 +2281,7 @@ public class WorkflowAiConversationService {
                 .append("\nInitial request: ")
                 .append(conversation.getInitialInstruction())
                 .append("\nTask: ")
-                .append(task)
-                .append("\nAvailable Voyager Task resources (current registry):\n")
-                .append(resourceCatalogService.buildCatalog());
+                .append(task);
         if (optionalText(conversation.getDraftAsl()) != null) {
             context.append("\nLatest ASL definition (authoritative):\n")
                     .append(conversation.getDraftAsl());

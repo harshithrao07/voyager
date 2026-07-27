@@ -328,7 +328,8 @@ public class AiModelConfigService {
                 model.getModelName(),
                 model.isEnabled(),
                 model.isDefaultModel(),
-                model.getCredentialEncrypted() != null
+                model.getCredentialEncrypted() != null,
+                model.getStructuredOutputMode()
         );
     }
 

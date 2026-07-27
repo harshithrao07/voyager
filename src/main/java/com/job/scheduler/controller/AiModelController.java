@@ -4,9 +4,12 @@ import com.job.scheduler.dto.AiModelConfigDTO;
 import com.job.scheduler.dto.AiModelConfigRequestDTO;
 import com.job.scheduler.dto.AiModelDiscoverRequestDTO;
 import com.job.scheduler.dto.AiModelEnabledRequestDTO;
+import com.job.scheduler.dto.AiModelEvaluationDTO;
+import com.job.scheduler.dto.AiModelEvaluationStartRequestDTO;
 import com.job.scheduler.dto.AiModelTestRequestDTO;
 import com.job.scheduler.dto.AiModelTestResponseDTO;
 import com.job.scheduler.service.AiModelConfigService;
+import com.job.scheduler.service.AiModelEvaluationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -27,6 +30,7 @@ import java.util.UUID;
 @RequestMapping("/app/v1/ai")
 public class AiModelController {
     private final AiModelConfigService aiModelConfigService;
+    private final AiModelEvaluationService aiModelEvaluationService;
 
     @GetMapping("/models")
     public ResponseEntity<List<AiModelConfigDTO>> listModels() {
@@ -83,5 +87,28 @@ public class AiModelController {
     public ResponseEntity<Void> deleteModel(@PathVariable UUID modelId) {
         aiModelConfigService.deleteModel(modelId);
         return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/models/evaluations/latest")
+    public ResponseEntity<List<AiModelEvaluationDTO>> listLatestEvaluations() {
+        return ResponseEntity.ok(aiModelEvaluationService.listLatest());
+    }
+
+    @PostMapping("/models/{modelId}/evaluations")
+    public ResponseEntity<AiModelEvaluationDTO> startEvaluation(
+            @PathVariable UUID modelId,
+            @Valid @RequestBody AiModelEvaluationStartRequestDTO request
+    ) {
+        return ResponseEntity.accepted().body(
+                aiModelEvaluationService.start(modelId, request.mode())
+        );
+    }
+
+    @PostMapping("/models/{modelId}/evaluations/{runId}/cancel")
+    public ResponseEntity<AiModelEvaluationDTO> cancelEvaluation(
+            @PathVariable UUID modelId,
+            @PathVariable UUID runId
+    ) {
+        return ResponseEntity.ok(aiModelEvaluationService.cancel(modelId, runId));
     }
 }

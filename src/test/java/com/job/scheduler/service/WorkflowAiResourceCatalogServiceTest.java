@@ -135,6 +135,32 @@ class WorkflowAiResourceCatalogServiceTest {
         assertThat(matches).isEmpty();
     }
 
+    @Test
+    void doesNotTreatGenericWebSearchAsAProviderSpecificWeatherApi() {
+        McpServer tavily = server(
+                "tavily-free-search",
+                McpServerStatus.ENABLED,
+                McpTrustLevel.READ_ONLY
+        );
+        McpTool search = tool(
+                tavily,
+                "tavily_research",
+                "Research current information on any topic using public web search"
+        );
+        when(mcpToolRepository.findByEnabledTrue()).thenReturn(List.of(search));
+
+        var matches = service.findMcpRequirementMatches(List.of(
+                new WorkflowAiMcpRequirementDTO(
+                        "OpenWeatherMap API access",
+                        "openweathermap",
+                        "fetch current weather data using a credential",
+                        "READ_ONLY"
+                )
+        ));
+
+        assertThat(matches).isEmpty();
+    }
+
     private FunctionDefinition function(String name, FunctionStatus status, Integer activeVersion) {
         FunctionDefinition function = new FunctionDefinition();
         function.setName(name);

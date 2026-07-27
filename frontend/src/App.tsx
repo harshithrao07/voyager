@@ -177,7 +177,7 @@ type WorkspaceRenameTarget = {
 };
 
 function parseRoute(pathname: string): AppRoute {
-  const normalized = pathname.replace(/\/+$/, '') || '/';
+  const normalized = pathname.split(/[?#]/)[0].replace(/\/+$/, '') || '/';
   if (normalized === '/') return { page: 'create' };
   if (normalized === '/workflows/new') return { page: 'create' };
   if (normalized === '/workflows') return { page: 'workflows' };
@@ -1545,6 +1545,7 @@ function App() {
             onCloseRevisionPanel={() => setRevisionPanelOpen(false)}
             onWorkflowGenerated={handleWorkflowGenerated}
             onCanvasLayoutChange={handleCanvasLayoutChange}
+            onNavigate={navigate}
           />
           )}
         </main>

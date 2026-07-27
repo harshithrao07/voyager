@@ -607,3 +607,45 @@ test('MCP lifecycle is registered, synced, called, used by workflow, edited, and
   await expect(page.getByTestId('execution-output-json')).toContainText('hello from workflow');
   await expect(page.getByTestId('execution-output-json')).toContainText('"ok": true');
 });
+
+test('public MCP registry browser searches the catalog and prefills the register form', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+
+  // Browse-button flow: open the registry, search, and pick an install option.
+  await page.goto('/mcp');
+  await page.getByTestId('mcp-registry-open').click();
+  await expect(page.getByTestId('mcp-registry-browser')).toBeVisible();
+
+  await page.getByTestId('mcp-registry-search').fill('github');
+  await page.getByTestId('mcp-registry-search').press('Enter');
+  await expect(page.getByTestId('mcp-registry-result-modelcontextprotocol/github')).toBeVisible({
+    timeout: 15_000,
+  });
+
+  await page.locator('[data-testid^="mcp-registry-use-"]').first().click();
+
+  // The register form opens prefilled from the chosen npm install option; secrets stay blank.
+  await expect(page.getByTestId('mcp-server-form')).toBeVisible();
+  await expect(page.getByTestId('mcp-display-name')).toHaveValue('GitHub');
+  await expect(page.getByTestId('mcp-server-id')).toHaveValue('github');
+  await expect(page.getByTestId('mcp-transport')).toHaveValue('STDIO');
+  await expect(page.getByTestId('mcp-command')).toHaveValue('npx');
+  await expect(page.getByTestId('mcp-args')).toHaveValue('-y\n@modelcontextprotocol/server-github');
+  await expect(page.getByTestId('mcp-secret-env')).toHaveValue('GITHUB_PERSONAL_ACCESS_TOKEN=');
+
+  // Nothing is created — this is a review step. Cancel out.
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByTestId('mcp-server-form')).toHaveCount(0);
+
+  // Deep-link flow: a "?discover=" link from the AI chat opens the browser pre-searched,
+  // then strips the query so a refresh/back is clean.
+  await page.goto('/mcp?discover=slack');
+  await expect(page.getByTestId('mcp-registry-browser')).toBeVisible();
+  await expect(page.getByTestId('mcp-registry-search')).toHaveValue('slack');
+  await expect(page.getByTestId('mcp-registry-result-modelcontextprotocol/slack')).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page).toHaveURL(/\/mcp$/);
+});

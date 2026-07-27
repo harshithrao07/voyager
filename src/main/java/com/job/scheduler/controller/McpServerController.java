@@ -7,11 +7,13 @@ import com.job.scheduler.dto.McpToolCallRequestDTO;
 import com.job.scheduler.dto.McpToolExecutionResponseDTO;
 import com.job.scheduler.dto.McpToolResponseDTO;
 import com.job.scheduler.dto.McpToolSyncResultDTO;
+import com.job.scheduler.dto.PublicMcpServerDTO;
 import com.job.scheduler.enums.McpServerStatus;
 import com.job.scheduler.service.McpClientService;
 import com.job.scheduler.service.McpServerRegistryService;
 import com.job.scheduler.service.McpToolExecutionService;
 import com.job.scheduler.service.McpToolRegistryService;
+import com.job.scheduler.service.PublicMcpRegistryService;
 import io.modelcontextprotocol.spec.McpSchema;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -38,12 +40,26 @@ public class McpServerController {
     private final McpClientService mcpClientService;
     private final McpToolRegistryService mcpToolRegistryService;
     private final McpToolExecutionService mcpToolExecutionService;
+    private final PublicMcpRegistryService publicMcpRegistryService;
 
     @PostMapping
     public ResponseEntity<McpServerResponseDTO> registerServer(
             @Valid @RequestBody McpServerRequestDTO request
     ) {
         return ResponseEntity.ok(mcpServerRegistryService.registerServer(request));
+    }
+
+    /**
+     * Searches the public MCP catalog (bundled, plus the external registry when enabled)
+     * for servers matching a capability. Read-only recommendations — the caller registers
+     * a chosen server through {@link #registerServer}.
+     */
+    @GetMapping("/registry/search")
+    public ResponseEntity<List<PublicMcpServerDTO>> searchRegistry(
+            @RequestParam(required = false) String query,
+            @RequestParam(defaultValue = "10") int limit
+    ) {
+        return ResponseEntity.ok(publicMcpRegistryService.search(query, limit));
     }
 
     @GetMapping
