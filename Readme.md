@@ -164,11 +164,11 @@ Latest JaCoCo run across the full Testcontainers-backed suite:
 
 | Metric | Covered | Total | Coverage |
 |---|---:|---:|---:|
-| Instructions | 33,793 | 41,158 | 82% |
-| Branches | 2,934 | 4,525 | 65% |
-| Lines | 7,429 | 9,108 | 82% |
-| Methods | 1,224 | 1,414 | 87% |
-| Classes | 283 | 296 | 96% |
+| Instructions | 34,944 | 42,688 | 82% |
+| Branches | 3,083 | 4,761 | 65% |
+| Lines | 7,688 | 9,454 | 81% |
+| Methods | 1,251 | 1,449 | 86% |
+| Classes | 287 | 300 | 96% |
 
 Per-package instruction coverage:
 
