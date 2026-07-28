@@ -92,4 +92,17 @@ class FunctionRuntimePolicyTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Allowed language ids");
     }
+
+    @Test
+    void aiDefaultPrefersConfiguredPythonRuntime() {
+        when(judge0Client.listSelectableLanguages()).thenReturn(List.of(
+                new FunctionLanguageDTO(63, "JavaScript (Node.js 12.14.0)", true),
+                new FunctionLanguageDTO(71, "Python (3.8.1)", true)
+        ));
+        ReflectionTestUtils.setField(policy, "aiDefaultLanguageId", 71);
+
+        assertThat(policy.aiDefaultLanguage())
+                .extracting(FunctionLanguageDTO::id)
+                .isEqualTo(71);
+    }
 }

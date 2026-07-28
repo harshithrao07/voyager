@@ -19,6 +19,7 @@ public record AiModelEvaluationDTO(
         boolean cancelRequested,
         boolean stale,
         JsonNode result,
+        JsonNode progressObservations,
         String errorMessage,
         Instant startedAt,
         Instant finishedAt

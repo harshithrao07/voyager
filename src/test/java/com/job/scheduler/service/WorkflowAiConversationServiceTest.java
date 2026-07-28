@@ -69,6 +69,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
 
@@ -108,6 +109,8 @@ class WorkflowAiConversationServiceTest {
     @Mock
     private WorkflowAiProposedFunctionSafetyValidator proposedFunctionSafetyValidator;
     @Mock
+    private WorkflowAiFunctionQualificationService functionQualificationService;
+    @Mock
     private WorkflowAiTrustReviewService trustReviewService;
     @Mock
     private ChatModel chatModel;
@@ -133,6 +136,7 @@ class WorkflowAiConversationServiceTest {
                 functionRegistryService,
                 functionRuntimePolicy,
                 proposedFunctionSafetyValidator,
+                functionQualificationService,
                 trustReviewService,
                 objectMapper
         );
@@ -154,9 +158,15 @@ class WorkflowAiConversationServiceTest {
         lenient().when(resourceCatalogService.buildCatalog())
                 .thenReturn("FUNCTIONS:\nNone registered.\nMCP TOOLS:\nNone registered.");
         lenient().when(resourceCatalogService.buildFunctionCreationContext())
-                .thenReturn("SUPPORTED FUNCTION LANGUAGES (languageId — name):\n- 71 — Python");
+                .thenReturn("AI DEFAULT FUNCTION LANGUAGE:\n- 71 — Python");
+        lenient().when(functionRuntimePolicy.aiDefaultLanguage())
+                .thenReturn(new com.job.scheduler.dto.FunctionLanguageDTO(71, "Python", true));
         lenient().when(proposedFunctionSafetyValidator.validate(any()))
                 .thenReturn(List.of());
+        lenient().when(functionQualificationService.qualify(any(), any(), any(), any()))
+                .thenReturn(WorkflowAiFunctionQualificationService.QualificationResult.qualified(
+                        "voyager://function/generated@v1"
+                ));
         lenient().when(trustReviewService.review(any()))
                 .thenReturn(WorkflowAiTrustReviewDTO.none());
         stubGeneratedIds();
@@ -190,6 +200,43 @@ class WorkflowAiConversationServiceTest {
                 "create a workflow that sends a daily digest"
         );
         assertThat(buildTurn).isFalse();
+    }
+
+    @Test
+    void detectsObjectContentDeserializationFailureButNotUnrelatedErrors() {
+        RuntimeException objectContentFailure = new RuntimeException(
+                "Cannot deserialize value of type `java.lang.String` from Object value "
+                        + "(token `JsonToken.START_OBJECT`) at [Source: REDACTED] "
+                        + "(through reference chain: "
+                        + "dev.langchain4j.model.openai.internal.chat.ChatCompletionResponse$Builder"
+                        + "[\"choices\"]->java.util.ArrayList[0]->"
+                        + "dev.langchain4j.model.openai.internal.chat.ChatCompletionChoice$Builder"
+                        + "[\"message\"]->"
+                        + "dev.langchain4j.model.openai.internal.chat.AssistantMessage$Builder"
+                        + "[\"content\"])"
+        );
+        Boolean detected = ReflectionTestUtils.invokeMethod(
+                service,
+                "isStructuredContentDeserializationFailure",
+                new RuntimeException("wrapper", objectContentFailure)
+        );
+        assertThat(detected).isTrue();
+
+        Boolean connectionFailure = ReflectionTestUtils.invokeMethod(
+                service,
+                "isStructuredContentDeserializationFailure",
+                new RuntimeException("Connection refused")
+        );
+        assertThat(connectionFailure).isFalse();
+
+        Boolean unrelatedDeserialization = ReflectionTestUtils.invokeMethod(
+                service,
+                "isStructuredContentDeserializationFailure",
+                new RuntimeException(
+                        "Cannot deserialize value of type `java.lang.Integer` from String value"
+                )
+        );
+        assertThat(unrelatedDeserialization).isFalse();
     }
 
     @Test
@@ -228,6 +275,51 @@ class WorkflowAiConversationServiceTest {
         verify(chatModel).chat(promptCaptor.capture());
         assertThat(promptCaptor.getValue().toString())
                 .contains("User date/time context: 2026-06-28T09:00:00+05:30");
+    }
+
+    @Test
+    void normalizesBareSingleStateMachineFromWeakModel() throws Exception {
+        JsonNode definition = objectMapper.readTree("""
+                {"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}
+                """);
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"StartAt":"Done","Done":{"Type":"Succeed"}}
+                """)));
+        when(aslDefinitionValidator.validate(any(JsonNode.class)))
+                .thenReturn(new AslValidationResult(List.of()));
+        when(runtimeCapabilityValidator.validate(any(JsonNode.class))).thenReturn(List.of());
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Create a workflow with exactly one Succeed state named Done.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(response.aslDefinition()).isEqualTo(definition);
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel).chat(anyList());
+    }
+
+    @Test
+    void aslNormalizationLeavesMissingOptionalFieldsForValidationWithoutThrowing()
+            throws Exception {
+        for (String json : List.of("{}", "{\"States\":{}}", "{\"StartAt\":13}")) {
+            JsonNode candidate = objectMapper.readTree(json);
+
+            JsonNode normalized = ReflectionTestUtils.invokeMethod(
+                    service,
+                    "normalizeAslDefinition",
+                    candidate
+            );
+
+            assertThat(normalized).isEqualTo(candidate);
+        }
     }
 
     @Test
@@ -750,6 +842,40 @@ class WorkflowAiConversationServiceTest {
     }
 
     @Test
+    void generalChatTurnDropsStrayAslInsteadOfEnteringReview() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        // The classifier reads the latest user message from history; a greeting routes to chat.
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenAnswer(invocation -> List.of(message(
+                        invocation.getArgument(0),
+                        WorkflowAiMessageRole.USER,
+                        "hi buddy, how are you?",
+                        null
+                )));
+        // Even for a greeting the model, still constrained by the full schema, emits a stub ASL.
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"ASL_UNDER_REVIEW","message":"Doing great, thanks for asking!","aslDefinition":{}}
+                """)));
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "hi buddy, how are you?",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        // The stub ASL is dropped before validation, so the turn stays a plain chat reply.
+        assertThat(response.stage())
+                .isEqualTo(WorkflowAiConversationStage.COLLECTING_WORKFLOW_DETAILS);
+        assertThat(response.aslDefinition()).isNull();
+        assertThat(response.validationIssues()).isEmpty();
+        assertThat(response.message()).isEqualTo("Doing great, thanks for asking!");
+        verifyNoInteractions(aslDefinitionValidator);
+    }
+
+    @Test
     void repairsPlanReadyWithoutAWorkflowDefinition() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
@@ -831,6 +957,42 @@ class WorkflowAiConversationServiceTest {
     }
 
     @Test
+    void ignoresPseudoWorkflowAttachedToValidMcpProposal() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(resourceCatalogService.findMcpRequirementMatches(any())).thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"RESOURCES_PROPOSED","message":"Attach a weather MCP server.",
+                 "resourcePlan":{"functions":[],"mcpRequirements":[{
+                   "capability":"fetch current weather by city",
+                   "suggestedToolName":"get-current-weather",
+                   "reason":"the workflow needs live weather",
+                   "trustLevelHint":"TRUSTED"}]},
+                 "aslDefinition":{"description":"Weather workflow","tasks":[],"resources":[]}}
+                """)));
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Fetch current weather for Mangaluru from a live service.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage())
+                .isEqualTo(WorkflowAiConversationStage.RESOURCES_PROPOSED);
+        assertThat(response.aslDefinition()).isNull();
+        assertThat(response.resourcePlan().mcpRequirements())
+                .singleElement()
+                .satisfies(requirement -> assertThat(requirement.capability())
+                        .isEqualTo("fetch current weather by city"));
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel).chat(anyList());
+        verifyNoInteractions(aslDefinitionValidator);
+    }
+
+    @Test
     void repairsExternalServiceDeflectionWithoutAResourcePlan() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
@@ -905,7 +1067,14 @@ class WorkflowAiConversationServiceTest {
                 .singleElement()
                 .satisfies(function -> assertThat(function.name()).isEqualTo("sha256-hex"));
         assertThat(response.validationIssues()).isEmpty();
-        verify(chatModel, times(3)).chat(anyList());
+        ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
+        verify(chatModel, times(3)).chat(promptCaptor.capture());
+        assertThat(promptCaptor.getAllValues().get(2).toString())
+                .contains("sourceCode is mandatory and must never be null")
+                .contains("\"testCases\":null")
+                .contains("Omit aslDefinition, finalPlan, and draftWorkflowPayload")
+                .contains("Copy the AI default languageId below immediately before answering")
+                .contains("- 71");
     }
 
     @Test
@@ -2020,18 +2189,98 @@ class WorkflowAiConversationServiceTest {
     }
 
     @Test
+    void emptyAslPlaceholderDoesNotDiscardAValidResourceProposal() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        // A weak model proposes a valid MCP requirement but also emits a stray empty aslDefinition.
+        // The placeholder must not fail ASL validation and discard the otherwise-valid proposal.
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"RESOURCES_PROPOSED",
+                 "message":"No matching weather tool; please attach one.",
+                 "aslDefinition":{},
+                 "resourcePlan":{"functions":[],"mcpRequirements":[
+                    {"capability":"Real-time Weather Fetching",
+                     "reason":"No matching Voyager Task resource found."}]}}
+                """)));
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "fetch the current weather for a city from a live service",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage())
+                .isEqualTo(WorkflowAiConversationStage.RESOURCES_PROPOSED);
+        assertThat(response.aslDefinition()).isNull();
+        assertThat(response.validationIssues()).isEmpty();
+        assertThat(response.resourcePlan()).isNotNull();
+        assertThat(response.resourcePlan().mcpRequirements()).hasSize(1);
+        assertThat(response.resourcePlan().mcpRequirements().get(0).capability())
+                .isEqualTo("Real-time Weather Fetching");
+    }
+
+    @Test
+    void stripsTestCasesFromProposedFunctions() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        // The model attaches test cases to the proposal; they must be dropped because tests are
+        // generated later, independently, in the Functions section.
+        String reply = """
+                {"stage":"RESOURCES_PROPOSED","message":"Proposing a helper.",
+                 "resourcePlan":{"functions":[{"name":"sha256-hex","description":"Hashes input",
+                  "languageId":71,
+                  "sourceCode":"import hashlib,sys,json\\nprint(json.dumps(hashlib.sha256(json.load(sys.stdin).encode()).hexdigest()))",
+                  "testCases":[{"name":"basic","input":"\\"a\\"","expectedOutput":"\\"x\\"","expectedError":null}],
+                  "rationale":"deterministic local hashing"}],"mcpRequirements":[]}}
+                """;
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from(reply)),
+                aiResponse(AiMessage.from(reply))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "hash an input string with sha-256",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.resourcePlan()).isNotNull();
+        assertThat(response.resourcePlan().functions()).hasSize(1);
+        assertThat(response.resourcePlan().functions().get(0).name()).isEqualTo("sha256-hex");
+        assertThat(response.resourcePlan().functions().get(0).testCases()).isNull();
+    }
+
+    @Test
     void proposesResourcesWhenModelReturnsResourcePlan() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
         when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
-        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
-                {"stage":"RESOURCES_PROPOSED","message":"I need a helper function first.",
-                 "resourcePlan":{"functions":[{"name":"normalize-address","description":"Cleans an address",
-                 "languageId":71,"sourceCode":"import sys\\nprint(sys.stdin.read())",
-                 "rationale":"no catalog entry cleans addresses"}],"mcpRequirements":[]}}
-                """)));
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from("""
+                        {"stage":"RESOURCES_PROPOSED","message":"I need a helper function first.",
+                         "resourcePlan":{"functions":[{"name":"normalize-address","description":"Cleans an address",
+                         "languageId":71,"sourceCode":"import sys\\nprint(sys.stdin.read())",
+                         "testCases":null,
+                         "rationale":"no catalog entry cleans addresses"}],"mcpRequirements":[]}}
+                        """)),
+                aiResponse(AiMessage.from("""
+                        {"stage":"RESOURCES_PROPOSED","message":"Review the helper.",
+                         "resourcePlan":{"functions":[{"name":"normalize-address","description":"Cleans an address",
+                         "languageId":71,"sourceCode":"import json,sys\\nvalue=json.load(sys.stdin)\\nprint(json.dumps(value.strip()))",
+                         "testCases":null,
+                         "rationale":"no catalog entry cleans addresses"}],"mcpRequirements":[]}}
+                        """))
+        );
 
         WorkflowAiResponseDTO response = service.startConversation(
                 "normalize a postal address then post it",
@@ -2048,17 +2297,18 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.resourcePlan().functions().get(0).name())
                 .isEqualTo("normalize-address");
         assertThat(response.resourcePlan().functions().get(0).languageId()).isEqualTo(71);
+        assertThat(response.resourcePlan().functions().get(0).testCases()).isNull();
         assertThat(response.assistantMessage().resourcePlan()).isEqualTo(response.resourcePlan());
         assertThat(response.resourcePlanMessageId()).isEqualTo(response.assistantMessage().id());
         ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
         verify(chatModel, times(2)).chat(promptCaptor.capture());
         assertThat(promptCaptor.getAllValues().get(0).toString())
                 .doesNotContain("FUNCTION CREATION CONTRACT")
-                .doesNotContain("SUPPORTED FUNCTION LANGUAGES")
+                .doesNotContain("AI DEFAULT FUNCTION LANGUAGE")
                 .doesNotContain("parse that JSON before transforming it");
         assertThat(promptCaptor.getAllValues().get(1).toString())
                 .contains("FUNCTION CREATION CONTRACT")
-                .contains("SUPPORTED FUNCTION LANGUAGES")
+                .contains("AI DEFAULT FUNCTION LANGUAGE")
                 .contains("parse that JSON before transforming it")
                 .contains("lowercase kebab-case");
     }
@@ -2224,6 +2474,71 @@ class WorkflowAiConversationServiceTest {
                 .doesNotContain("FUNCTION CREATION CONTRACT");
         assertThat(promptCaptor.getAllValues().get(1).toString())
                 .doesNotContain("FUNCTION CREATION CONTRACT");
+        assertThat(promptCaptor.getAllValues().get(1).toString())
+                .contains("do not propose that", "capability again")
+                .contains("never use InputPath, ResultPath")
+                .contains("voyager://mcp/tavily/tavily_search");
+    }
+
+    @Test
+    void repairsRecognizableAslAttachedToRedundantMcpProposal() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        var match = new WorkflowAiResourceCatalogService.McpRequirementMatch(
+                "tavily_research",
+                "voyager://mcp/tavily-free-search/tavily_search"
+        );
+        when(resourceCatalogService.findMcpRequirementMatches(any()))
+                .thenReturn(List.of(match));
+        when(aslDefinitionValidator.validate(any(JsonNode.class))).thenAnswer(invocation -> {
+            JsonNode definition = invocation.getArgument(0);
+            if (definition.path("States").path("FetchWeather").has("Parameters")) {
+                return new AslValidationResult(List.of(new AslValidationIssue(
+                        "$.States.FetchWeather.Parameters",
+                        AslValidationCategory.DIALECT,
+                        "JSONPATH_FIELD_NOT_ALLOWED",
+                        "Parameters is not allowed in the JSONata dialect; use Arguments"
+                )));
+            }
+            return new AslValidationResult(List.of());
+        });
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from("""
+                        {"stage":"RESOURCES_PROPOSED","message":"Using the existing tool.",
+                         "aslDefinition":{"StartAt":"FetchWeather","States":{"FetchWeather":{
+                           "Type":"Task",
+                           "Resource":"voyager://mcp/tavily-free-search/tavily_search",
+                           "Parameters":{"query":"Mangaluru weather"},"End":true}}},
+                         "resourcePlan":{"functions":[],"mcpRequirements":[{
+                           "capability":"tavily_research","suggestedToolName":"tavily_search"}]}}
+                        """)),
+                aiResponse(AiMessage.from("""
+                        {"stage":"ASL_READY","message":"Using the existing weather search tool.",
+                         "aslDefinition":{"StartAt":"FetchWeather","States":{"FetchWeather":{
+                           "Type":"Task",
+                           "Resource":"voyager://mcp/tavily-free-search/tavily_search",
+                           "Arguments":{"query":"Mangaluru weather"},
+                           "Output":{"weather":"{% $states.result.structuredContent %}"},
+                           "End":true}}}}
+                        """))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Fetch the current weather for Mangaluru.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        JsonNode fetchWeather = response.aslDefinition().path("States").path("FetchWeather");
+        assertThat(fetchWeather.has("Parameters")).isFalse();
+        assertThat(fetchWeather.has("Arguments")).isTrue();
+        assertThat(response.resourcePlan()).isNull();
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel, times(2)).chat(anyList());
     }
 
     @Test
@@ -2315,7 +2630,7 @@ class WorkflowAiConversationServiceTest {
                 .doesNotContain("FUNCTION CREATION CONTRACT");
         assertThat(promptCaptor.getAllValues().get(2).toString())
                 .contains("FUNCTION CREATION CONTRACT")
-                .contains("SUPPORTED FUNCTION LANGUAGES");
+                .contains("AI DEFAULT FUNCTION LANGUAGE");
     }
 
     @Test
@@ -2448,13 +2763,24 @@ class WorkflowAiConversationServiceTest {
                         true, false, "code", null, List.of(), null, null, 2.0, 10.0, 131072,
                         1024, 65536, false, "note", List.of(), FunctionVersionStatus.AVAILABLE,
                         Instant.now(), Instant.now()));
+        when(functionQualificationService.qualify(
+                any(), any(), eq(modelConfig), eq("normalize-address")
+        )).thenReturn(WorkflowAiFunctionQualificationService.QualificationResult.qualified(
+                "voyager://function/normalize-address@v1"
+        ));
         when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
                 {"stage":"ASL_READY","message":"All set.",
                  "aslDefinition":{"StartAt":"Clean","States":{"Clean":{"Type":"Succeed"}}}}
                 """)));
 
         WorkflowAiProposedFunctionDTO proposed = new WorkflowAiProposedFunctionDTO(
-                "normalizeAddress", "Cleans an address", 71, "import sys", null, "needed");
+                "normalizeAddress",
+                "Cleans an address",
+                71,
+                "import sys",
+                null,
+                "needed"
+        );
 
         WorkflowAiResponseDTO response = service.provisionResources(
                 conversationId, List.of(proposed), modelConfig.getId());
@@ -2462,11 +2788,67 @@ class WorkflowAiConversationServiceTest {
         verify(functionRegistryService).createFunction(
                 argThat(request -> request.name().equals("normalize-address")));
         verify(functionRegistryService).createVersion(
-                eq(functionId), argThat(version -> version.languageId() == 71));
+                eq(functionId),
+                argThat(version ->
+                        version.languageId() == 71
+                                && version.testCases().isEmpty()
+                                && version.status() == FunctionVersionStatus.DRAFT
+                )
+        );
+        verify(functionQualificationService).qualify(
+                eq(proposed),
+                any(FunctionVersionResponseDTO.class),
+                eq(modelConfig),
+                eq("normalize-address")
+        );
         verify(functionRuntimePolicy).assertLanguageSupported(71);
         assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
         assertThat(response.aslDefinition()).isNotNull();
         assertThat(conversation.getResourcePlan()).isNull();
+    }
+
+    @Test
+    void provisioningKeepsFailedQualificationAsDraftAndDoesNotGenerateAsl() {
+        UUID conversationId = UUID.randomUUID();
+        WorkflowAiConversation conversation = conversation(conversationId);
+        conversation.setStage(WorkflowAiConversationStage.RESOURCES_PROPOSED);
+        when(conversationRepository.findByIdForUpdate(conversationId))
+                .thenReturn(Optional.of(conversation));
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+
+        UUID functionId = UUID.randomUUID();
+        FunctionVersionResponseDTO draft = new FunctionVersionResponseDTO(
+                UUID.randomUUID(), functionId, 1, FunctionSourceMode.SINGLE_FILE, 71,
+                true, false, "broken code", null, List.of(), null, null,
+                2.0, 10.0, 131072, 1024, 65536, false, "note", List.of(),
+                FunctionVersionStatus.DRAFT, Instant.now(), Instant.now()
+        );
+        when(functionRegistryService.createFunction(any())).thenReturn(
+                new FunctionDefinitionResponseDTO(
+                        functionId, "normalize-address", "Cleans an address", null,
+                        FunctionStatus.ENABLED, Instant.now(), Instant.now()
+                )
+        );
+        when(functionRegistryService.createVersion(eq(functionId), any())).thenReturn(draft);
+        when(functionQualificationService.qualify(
+                any(), eq(draft), eq(modelConfig), eq("normalize-address")
+        )).thenReturn(WorkflowAiFunctionQualificationService.QualificationResult.failed(
+                "Judge0 reported a compilation error."
+        ));
+        WorkflowAiProposedFunctionDTO proposed = new WorkflowAiProposedFunctionDTO(
+                "normalize-address", "Cleans an address", 71, "broken code", null, "needed"
+        );
+
+        WorkflowAiResponseDTO response = service.provisionResources(
+                conversationId, List.of(proposed), modelConfig.getId()
+        );
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.RESOURCES_PROPOSED);
+        assertThat(response.message()).contains("remains a draft", "compilation error");
+        assertThat(response.validationIssues()).containsExactly(
+                "normalize-address: Judge0 reported a compilation error."
+        );
+        verify(chatModel, never()).chat(anyList());
     }
 
     @Test

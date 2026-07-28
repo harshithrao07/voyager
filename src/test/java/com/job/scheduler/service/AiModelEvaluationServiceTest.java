@@ -93,7 +93,8 @@ class AiModelEvaluationServiceTest {
                 null,
                 null,
                 null,
-                null
+                null,
+                "{\"stage\":\"COLLECTING_WORKFLOW_DETAILS\",\"message\":\"All good.\"}"
         );
     }
 
@@ -117,6 +118,8 @@ class AiModelEvaluationServiceTest {
                 () -> service.start(model.getId(), AiModelEvaluationMode.QUICK, null)
         );
 
+        // Staleness applies to a finished result; while RUNNING the stored payload is live progress.
+        model.setEvaluationStatus(AiModelEvaluationStatus.COMPLETED);
         when(conversationService.promptFingerprint()).thenReturn("sha256:current");
         model.setEvaluationResult("{\"promptFingerprint\":\"sha256:old\"}");
         assertTrue(service.latest(model.getId()).stale());
@@ -136,7 +139,9 @@ class AiModelEvaluationServiceTest {
                 model.getId(),
                 started.runId()
         );
-        assertTrue(cancellationRequested.cancelRequested());
+        assertEquals(AiModelEvaluationStatus.CANCELLED, cancellationRequested.status());
+        assertFalse(cancellationRequested.cancelRequested());
+        assertTrue(cancellationRequested.finishedAt() != null);
 
         queuedEvaluation.get().run();
 
@@ -220,6 +225,13 @@ class AiModelEvaluationServiceTest {
         // Advisory only: judge verdicts appear on observations but leave metrics untouched.
         JsonNode firstObservation = completed.result().path("observations").get(0);
         assertTrue(firstObservation.has("judge"));
+        // Each observation carries the exact prompt it was run against so the UI can show it per case.
+        assertEquals("Hi buddy, how are you?", firstObservation.path("instruction").asText());
+        // The raw model reply is captured so a failure can be diagnosed from the UI.
+        assertEquals(
+                "{\"stage\":\"COLLECTING_WORKFLOW_DETAILS\",\"message\":\"All good.\"}",
+                firstObservation.path("response").path("rawModelReply").asText()
+        );
         assertFalse(completed.result().path("qualityGates").has("llm_judge"));
     }
 

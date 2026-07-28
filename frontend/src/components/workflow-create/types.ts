@@ -64,4 +64,4 @@ export type EndpointModelGroup = {
   hasCredential: boolean;
 };
 
-export type ModelSettingsTab = 'add' | 'added';
+export type ModelSettingsTab = 'add' | 'added' | 'ranking';

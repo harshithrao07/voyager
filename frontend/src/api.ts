@@ -134,6 +134,46 @@ export interface AiModelEvaluationJudgeSummary {
   errors: string[];
 }
 
+/** One graded metric within a single case run. */
+export interface AiModelEvaluationObservationMetric {
+  passed: boolean;
+  detail?: string;
+}
+
+/** Summary of what the model returned for a single case run. */
+export interface AiModelEvaluationObservationResponse {
+  stage: string;
+  message: string;
+  hasAsl: boolean;
+  validationIssueCount: number;
+  proposedFunctionCount: number;
+  proposedMcpCount: number;
+  validationIssues: string[];
+  /** The raw model reply (bounded), including an ASL that was rejected in validation. */
+  rawModelReply?: string | null;
+}
+
+/** A single case run: the exact prompt, the graded metrics, and the model's response. */
+export interface AiModelEvaluationObservation {
+  caseId: string;
+  category: string;
+  instruction: string;
+  repetition: number;
+  startedAt: string;
+  latencyMs: number;
+  passed: boolean;
+  metrics: Record<string, AiModelEvaluationObservationMetric>;
+  response?: AiModelEvaluationObservationResponse | null;
+  error?: string | null;
+  judge?: {
+    score?: number;
+    passed?: boolean;
+    rationale?: string;
+    error?: string;
+    latencyMs: number;
+  } | null;
+}
+
 export interface AiModelEvaluationResult {
   suiteId: string;
   suiteDescription: string;
@@ -144,6 +184,7 @@ export interface AiModelEvaluationResult {
   providerType: AiModelConfigDTO['providerType'];
   structuredOutputMode: AiStructuredOutputMode;
   metrics: Record<string, AiModelEvaluationMetric>;
+  observations: AiModelEvaluationObservation[];
   qualityGates: Record<string, {
     minimum: number;
     actual: number;
@@ -180,6 +221,8 @@ export interface AiModelEvaluationDTO {
   cancelRequested: boolean;
   stale?: boolean;
   result?: AiModelEvaluationResult | null;
+  /** Cases finished so far while status is RUNNING; null once the run ends (see result.observations). */
+  progressObservations?: AiModelEvaluationObservation[] | null;
   errorMessage?: string | null;
   startedAt: string;
   finishedAt?: string | null;
@@ -1848,9 +1891,25 @@ export interface PublicMcpServer {
   suggestedTrustLevel: McpTrustLevel;
 }
 
+export interface PublicMcpRegistryPage {
+  servers: PublicMcpServer[];
+  nextCursor: string | null;
+}
+
 /** Searches the public MCP catalog (bundled + external when enabled) for a capability. */
 export function searchMcpRegistry(query: string, limit = 10): Promise<PublicMcpServer[]> {
   return getJson<PublicMcpServer[]>(`/app/v1/mcp/servers/registry/search${buildQuery({ query, limit })}`);
+}
+
+/** Browses a cursor-addressable page of the public MCP catalog. */
+export function browseMcpRegistry(
+  query: string,
+  limit = 50,
+  cursor?: string | null,
+): Promise<PublicMcpRegistryPage> {
+  return getJson<PublicMcpRegistryPage>(
+    `/app/v1/mcp/servers/registry/browse${buildQuery({ query, limit, cursor: cursor || undefined })}`,
+  );
 }
 
 export function listMcpServers(status?: McpServerStatus): Promise<McpServerDTO[]> {

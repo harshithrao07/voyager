@@ -3,6 +3,7 @@ package com.job.scheduler.service;
 import com.job.scheduler.entity.FunctionDefinition;
 import com.job.scheduler.entity.McpServer;
 import com.job.scheduler.entity.McpTool;
+import com.job.scheduler.dto.FunctionLanguageDTO;
 import com.job.scheduler.dto.WorkflowAiMcpRequirementDTO;
 import com.job.scheduler.enums.FunctionStatus;
 import com.job.scheduler.enums.McpServerStatus;
@@ -43,6 +44,8 @@ class WorkflowAiResourceCatalogServiceTest {
         );
         lenient().when(functionRuntimePolicy.supportedSelectableLanguages())
                 .thenReturn(List.of());
+        lenient().when(functionRuntimePolicy.aiDefaultLanguage())
+                .thenReturn(new FunctionLanguageDTO(71, "Python (3.8.1)", true));
     }
 
     @Test
@@ -83,8 +86,8 @@ class WorkflowAiResourceCatalogServiceTest {
                 .doesNotContain("hidden-tool")
                 .doesNotContain("SUPPORTED FUNCTION LANGUAGES");
         assertThat(service.buildFunctionCreationContext())
-                .contains("SUPPORTED FUNCTION LANGUAGES")
-                .contains("Language list unavailable.");
+                .contains("AI DEFAULT FUNCTION LANGUAGE")
+                .contains("71", "Python");
     }
 
     @Test
@@ -115,6 +118,34 @@ class WorkflowAiResourceCatalogServiceTest {
             assertThat(match.resourceUri())
                     .isEqualTo("voyager://mcp/tavily-web-search/tavily_search");
         });
+    }
+
+    @Test
+    void exactResourceUriSelectsTheNamedToolInsteadOfASiblingTool() {
+        McpServer tavily = server(
+                "tavily-free-search",
+                McpServerStatus.ENABLED,
+                McpTrustLevel.READ_ONLY
+        );
+        McpTool crawl = tool(tavily, "tavily_crawl", "Crawl pages from a public website");
+        McpTool research = tool(
+                tavily,
+                "tavily_research",
+                "Research current information using public web search"
+        );
+        when(mcpToolRepository.findByEnabledTrue()).thenReturn(List.of(crawl, research));
+
+        var matches = service.findMcpRequirementMatches(List.of(
+                new WorkflowAiMcpRequirementDTO(
+                        "fetch current weather",
+                        "voyager://mcp/tavily-free-search/tavily_research",
+                        "Retrieve current information for Mangaluru",
+                        "UNTRUSTED"
+                )
+        ));
+
+        assertThat(matches).singleElement().satisfies(match -> assertThat(match.resourceUri())
+                .isEqualTo("voyager://mcp/tavily-free-search/tavily_research"));
     }
 
     @Test

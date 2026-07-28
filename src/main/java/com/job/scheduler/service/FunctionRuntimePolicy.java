@@ -30,12 +30,40 @@ public class FunctionRuntimePolicy {
     @Value("${scheduler.judge0.allowed-language-ids:}")
     private String allowedLanguageIdsProperty;
 
+    @Value("${scheduler.judge0.ai-default-language-id:71}")
+    private Integer aiDefaultLanguageId;
+
     public FunctionRuntimePolicy(Judge0Client judge0Client) {
         this.judge0Client = judge0Client;
     }
 
     public List<FunctionLanguageDTO> supportedSelectableLanguages() {
         return supportedLanguages(judge0Client.listSelectableLanguages());
+    }
+
+    /**
+     * One runtime used for every AI-authored function. A single server-selected choice prevents
+     * smaller models from inventing Judge0 IDs or mixing source code and runtimes.
+     */
+    public FunctionLanguageDTO aiDefaultLanguage() {
+        List<FunctionLanguageDTO> supported = supportedSelectableLanguages();
+        if (supported.isEmpty()) {
+            return null;
+        }
+        if (aiDefaultLanguageId != null) {
+            FunctionLanguageDTO configured = supported.stream()
+                    .filter(language -> language.id() == aiDefaultLanguageId)
+                    .findFirst()
+                    .orElse(null);
+            if (configured != null) {
+                return configured;
+            }
+        }
+        return supported.stream()
+                .filter(language -> language.name() != null
+                        && language.name().toLowerCase(Locale.ROOT).contains("python"))
+                .findFirst()
+                .orElse(supported.get(0));
     }
 
     public List<FunctionLanguageDTO> supportedLanguages(

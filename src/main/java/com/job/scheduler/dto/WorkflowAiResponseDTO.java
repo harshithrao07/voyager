@@ -19,6 +19,12 @@ public record WorkflowAiResponseDTO(
         UUID resourcePlanMessageId,
         UUID workflowId,
         WorkflowResponseDTO workflow,
-        WorkflowAiMessageDTO assistantMessage
+        WorkflowAiMessageDTO assistantMessage,
+        /**
+         * The raw, cleaned model reply for this turn (bounded). Carries the model's exact output —
+         * including an ASL that was rejected in validation — so diagnostics such as the evaluation
+         * harness can show what the model produced. Null for turns that do not capture it.
+         */
+        String rawAssistantReply
 ) {
 }

@@ -8,6 +8,7 @@ import { CreateWorkflowPage } from './pages/CreateWorkflowPage';
 import { FunctionsPage } from './pages/FunctionsPage';
 import { McpServersPage } from './pages/McpServersPage';
 import { DocsPage } from './pages/DocsPage';
+import { AiSettingsPage } from './pages/AiSettingsPage';
 import { WorkflowDetailPage, type WorkflowRevision } from './pages/WorkflowDetailPage';
 import {
   activateWorkflowRevision,
@@ -140,18 +141,6 @@ function getStartState(definition: any) {
   return definition?.StartAt || Object.keys(definition?.States || {})[0] || '';
 }
 
-function buildGeneratedRevision(definition: any): WorkflowRevision {
-  return {
-    id: 'generated',
-    label: 'Generated',
-    timestamp: 'Unsaved',
-    active: false,
-    note: 'Generated locally from the prompt. Save it as a backend revision when ready.',
-    definition,
-    canvasLayout: {},
-  };
-}
-
 type AppRoute =
   | { page: 'workflows' }
   | { page: 'create' }
@@ -161,6 +150,7 @@ type AppRoute =
   | { page: 'workflow-edit'; workflowId: string; revision: number }
   | { page: 'functions' }
   | { page: 'mcp' }
+  | { page: 'ai-settings' }
   | { page: 'docs'; slug?: string };
 
 type WorkspaceDeleteTarget =
@@ -183,6 +173,7 @@ function parseRoute(pathname: string): AppRoute {
   if (normalized === '/workflows') return { page: 'workflows' };
   if (normalized === '/functions') return { page: 'functions' };
   if (normalized === '/mcp') return { page: 'mcp' };
+  if (normalized === '/ai-settings') return { page: 'ai-settings' };
   if (normalized === '/docs') return { page: 'docs' };
 
   const chatMatch = normalized.match(/^\/c\/([^/]+)$/);
@@ -529,16 +520,6 @@ function App() {
       cancelled = true;
     };
   }, [selectedWorkflowId, route]);
-
-  const handleWorkflowGenerated = (definition: any) => {
-    setWorkflowDef(definition);
-    const generatedRevision = buildGeneratedRevision(definition);
-    setWorkflowRevisions((current) => [generatedRevision, ...current.filter((revision) => revision.id !== generatedRevision.id)]);
-    setSelectedRevisionId(generatedRevision.id);
-    setSelectedStateName(getStartState(definition));
-    setDetailsPanelOpen(false);
-    setRevisionPanelOpen(false);
-  };
 
   const handleWorkflowSelected = (workflow: WorkflowSummary) => {
     setSelectedWorkflow(workflow);
@@ -1507,6 +1488,8 @@ function App() {
                 <FunctionsPage onWorkbenchModeChange={setFunctionsWorkbenchActive} />
               ) : route.page === 'mcp' ? (
                 <McpServersPage />
+              ) : route.page === 'ai-settings' ? (
+                <AiSettingsPage />
               ) : route.page === 'docs' ? (
                 <DocsPage slug={route.slug} onNavigate={navigate} />
               ) : workflowListLoading ? (
@@ -1543,7 +1526,6 @@ function App() {
             onCloseDetails={() => setDetailsPanelOpen(false)}
             onRevisionSelected={handleRevisionIdSelected}
             onCloseRevisionPanel={() => setRevisionPanelOpen(false)}
-            onWorkflowGenerated={handleWorkflowGenerated}
             onCanvasLayoutChange={handleCanvasLayoutChange}
             onNavigate={navigate}
           />

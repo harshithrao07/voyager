@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -38,7 +38,7 @@ import {
   listMcpLiveTools,
   listMcpServers,
   registerMcpServer,
-  searchMcpRegistry,
+  browseMcpRegistry,
   syncMcpTools,
   updateMcpServer,
   updateMcpServerStatus,
@@ -1900,22 +1900,6 @@ function ServerList({
   );
 }
 
-function RegistrySourceBadge({ source }: { source: PublicMcpServer['source'] }) {
-  const external = source === 'EXTERNAL';
-  return (
-    <span
-      className={`shrink-0 rounded border px-1.5 py-0.5 font-mono-sm text-[9px] uppercase tracking-[0.06em] ${
-        external
-          ? 'border-primary/30 bg-primary/10 text-primary'
-          : 'border-secondary/30 bg-secondary/10 text-secondary'
-      }`}
-      title={external ? 'From the external MCP registry' : 'From the bundled catalog'}
-    >
-      {external ? 'Registry' : 'Bundled'}
-    </span>
-  );
-}
-
 /**
  * Searches the public MCP catalog and lets the user pick an install option, which
  * seeds the register form. Nothing is created here — it is a discovery + prefill step.
@@ -1932,27 +1916,95 @@ function RegistryBrowserModal({
   const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<PublicMcpServer[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [transportFilter, setTransportFilter] = useState<'ALL' | 'HTTP' | 'STDIO'>('ALL');
+  const searchRequest = useRef(0);
+  const resultKeys = useRef(new Set<string>());
 
-  const runSearch = useCallback((value: string) => {
-    setLoading(true);
+  const runSearch = useCallback(async (value: string, cursor?: string | null) => {
+    const request = ++searchRequest.current;
+    const append = Boolean(cursor);
+    if (append) setLoadingMore(true);
+    else setLoading(true);
     setError(null);
-    searchMcpRegistry(value, 20)
-      .then((found) => {
-        setResults(found);
-        setSearched(true);
-      })
-      .catch((searchError) => {
-        setError(searchError instanceof Error ? searchError.message : 'Registry search failed.');
+
+    try {
+      let pageCursor = cursor;
+      let nextPageCursor: string | null = cursor ?? null;
+      let additions: PublicMcpServer[] = [];
+      const visitedCursors = new Set<string>();
+
+      // Registry pages may contain only older versions, duplicates, or entries with no
+      // usable install method. Keep walking during this single click instead of making
+      // the user repeatedly press "Load more" while the visible count stays unchanged.
+      for (let skipped = 0; skipped < 20; skipped += 1) {
+        const page = await browseMcpRegistry(value, 50, pageCursor);
+        if (request !== searchRequest.current) return;
+
+        additions = append
+          ? page.servers.filter(
+              (server) => !resultKeys.current.has(`${server.source}:${server.sourceId}`),
+            )
+          : page.servers;
+        nextPageCursor = page.nextCursor;
+
+        if (!append || additions.length > 0 || !nextPageCursor) break;
+        if (visitedCursors.has(nextPageCursor) || nextPageCursor === pageCursor) {
+          nextPageCursor = null;
+          break;
+        }
+        visitedCursors.add(nextPageCursor);
+        pageCursor = nextPageCursor;
+      }
+
+      if (!append) {
+        resultKeys.current = new Set(
+          additions.map((server) => `${server.source}:${server.sourceId}`),
+        );
+        setResults(additions);
+      } else if (additions.length > 0) {
+        additions.forEach((server) =>
+          resultKeys.current.add(`${server.source}:${server.sourceId}`));
+        setResults((current) => [...current, ...additions]);
+      } else {
+        // We scanned 100 underlying registry pages without finding another usable,
+        // distinct server. Treat this as the practical end instead of leaving a button
+        // that appears to do nothing.
+        nextPageCursor = null;
+      }
+
+      setNextCursor(nextPageCursor);
+      setSearched(true);
+    } catch (searchError) {
+      if (request !== searchRequest.current) return;
+      setError(searchError instanceof Error ? searchError.message : 'Registry search failed.');
+      if (!append) {
+        resultKeys.current.clear();
         setResults([]);
-      })
-      .finally(() => setLoading(false));
+        setNextCursor(null);
+      }
+    } finally {
+      if (request === searchRequest.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    }
   }, []);
 
   useEffect(() => {
-    runSearch(initialQuery);
-  }, [initialQuery, runSearch]);
+    const timer = window.setTimeout(() => runSearch(query), 300);
+    return () => window.clearTimeout(timer);
+  }, [query, runSearch]);
+
+  const visibleResults = useMemo(() => results.filter((server) => (
+    transportFilter === 'ALL' || server.installs.some((install) => install.transport === transportFilter)
+  )), [results, transportFilter]);
+
+  const transportCount = (transport: 'HTTP' | 'STDIO') =>
+    results.filter((server) => server.installs.some((install) => install.transport === transport)).length;
 
   return (
     <div
@@ -1963,7 +2015,7 @@ function RegistryBrowserModal({
       onClick={onClose}
     >
       <div
-        className="flex max-h-full w-full max-w-[720px] flex-col overflow-hidden rounded-xl border border-border-subtle bg-surface-container-lowest shadow-[0_30px_80px_rgba(0,0,0,0.5)]"
+        className="flex h-[min(860px,calc(100vh-2rem))] w-full max-w-[1040px] flex-col overflow-hidden rounded-xl border border-border-subtle bg-surface-container-lowest shadow-[0_30px_80px_rgba(0,0,0,0.5)]"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex shrink-0 items-start gap-3 border-b border-border-subtle p-5 pb-4">
@@ -1971,10 +2023,10 @@ function RegistryBrowserModal({
             <Library size={18} />
           </div>
           <div className="min-w-0 flex-1">
-            <h3 className="text-[15px] font-semibold text-on-surface">Browse public MCP registry</h3>
+            <div className="font-mono-sm text-[9px] uppercase tracking-[0.14em] text-secondary">Integration catalog</div>
+            <h3 className="mt-0.5 text-[17px] font-semibold text-on-surface">Browse MCP servers</h3>
             <p className="mt-1 text-[12px] leading-5 text-on-surface-variant">
-              Find a server that provides the capability you need, then register it — you review the
-              trust level and enter any secrets before it is created.
+              Find an integration, choose how to connect it, then review trust and secrets before registration.
             </p>
           </div>
           <button
@@ -2015,33 +2067,66 @@ function RegistryBrowserModal({
           </button>
         </form>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          {error && <ErrorNote message={error} />}
-          {!error && loading && (
-            <div className="flex items-center justify-center gap-2 rounded-lg border border-border-subtle px-3 py-12 text-[12px] text-on-surface-variant">
-              <Loader2 size={14} className="animate-spin" /> Searching the catalog...
-            </div>
-          )}
-          {!error && !loading && searched && results.length === 0 && (
-            <div className="rounded-lg border border-dashed border-border-subtle px-3 py-12 text-center text-[12px] text-on-surface-variant">
-              No servers matched. Try a broader term, or register one manually if you know its address.
-            </div>
-          )}
-          {!error && !loading && results.length > 0 && (
-            <div className="flex flex-col gap-3">
-              {results.map((server) => (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-5 py-3">
+            <span className="mr-1 text-[10px] font-medium text-on-surface-variant">Connection</span>
+            {([
+              ['ALL', 'All', results.length],
+              ['STDIO', 'Local · STDIO', transportCount('STDIO')],
+              ['HTTP', 'Remote · HTTP', transportCount('HTTP')],
+            ] as const).map(([value, label, count]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setTransportFilter(value)}
+                className={`rounded-full border px-2.5 py-1.5 text-[10px] transition-colors ${
+                  transportFilter === value
+                    ? 'border-primary/45 bg-primary/12 text-primary'
+                    : 'border-border-subtle bg-surface-container-low text-on-surface-variant hover:text-on-surface'
+                }`}
+              >
+                {label} <span className="ml-1 font-mono-sm opacity-65">{count}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="min-w-0 flex-1 overflow-y-auto p-5">
+            {!loading && !error && results.length > 0 && (
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <span className="text-[13px] font-medium text-on-surface">{visibleResults.length}</span>
+                  <span className="ml-1.5 text-[11px] text-on-surface-variant">{visibleResults.length === 1 ? 'server' : 'servers'}</span>
+                </div>
+                <span className="font-mono-sm text-[9px] uppercase tracking-[0.08em] text-on-surface-variant">Updates as you type</span>
+              </div>
+            )}
+            {error && <ErrorNote message={error} />}
+            {!error && loading && (
+              <div className="flex items-center justify-center gap-2 rounded-lg border border-border-subtle px-3 py-12 text-[12px] text-on-surface-variant">
+                <Loader2 size={14} className="animate-spin" /> Searching the catalog...
+              </div>
+            )}
+            {!error && !loading && searched && results.length === 0 && (
+              <div className="rounded-lg border border-dashed border-border-subtle px-3 py-12 text-center text-[12px] text-on-surface-variant">
+                No servers matched. Try a broader term, or register one manually if you know its address.
+              </div>
+            )}
+            {!error && !loading && results.length > 0 && visibleResults.length === 0 && (
+              <div className="rounded-lg border border-dashed border-border-subtle px-3 py-12 text-center text-[12px] text-on-surface-variant">
+                No servers match these filters. Clear a filter to see more options.
+              </div>
+            )}
+            {!error && !loading && visibleResults.length > 0 && (
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              {visibleResults.map((server) => (
                 <div
                   key={`${server.source}:${server.sourceId}`}
                   data-testid={`mcp-registry-result-${server.sourceId}`}
-                  className="rounded-lg border border-border-subtle bg-surface-container-low/40 p-3.5"
+                  className="flex flex-col rounded-lg border border-border-subtle bg-surface-container-low/40 p-3.5 transition-colors hover:border-primary/35 hover:bg-surface-container-low"
                 >
                   <div className="flex items-center gap-2">
                     <Boxes size={14} className="shrink-0 text-secondary" />
-                    <span className="min-w-0 truncate text-[13px] font-semibold text-on-surface">{server.name}</span>
-                    <RegistrySourceBadge source={server.source} />
-                    {server.version && (
-                      <span className="shrink-0 font-mono-sm text-[10px] text-on-surface-variant/70">v{server.version}</span>
-                    )}
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-on-surface">{server.name}</span>
                     {server.repositoryUrl && (
                       <a
                         href={server.repositoryUrl}
@@ -2054,10 +2139,13 @@ function RegistryBrowserModal({
                       </a>
                     )}
                   </div>
-                  {server.description && (
-                    <p className="mt-1.5 text-[12px] leading-5 text-on-surface-variant">{server.description}</p>
+                  {server.version && (
+                    <div className="mt-2 font-mono-sm text-[10px] text-on-surface-variant/70">v{server.version}</div>
                   )}
-                  <div className="mt-2.5 flex flex-col gap-1.5">
+                  {server.description && (
+                    <p className="mt-1.5 line-clamp-3 text-[12px] leading-5 text-on-surface-variant">{server.description}</p>
+                  )}
+                  <div className="mt-auto flex flex-col gap-1.5 pt-3">
                     {server.installs.map((option, index) => (
                       <div
                         key={index}
@@ -2085,8 +2173,22 @@ function RegistryBrowserModal({
                   </div>
                 </div>
               ))}
-            </div>
-          )}
+              </div>
+            )}
+            {!error && !loading && nextCursor && (
+              <div className="mt-5 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => runSearch(query, nextCursor)}
+                  disabled={loadingMore}
+                  className="flex h-9 items-center gap-2 rounded-lg border border-primary/45 bg-primary/10 px-4 text-[11px] font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
+                >
+                  {loadingMore && <Loader2 size={13} className="animate-spin" />}
+                  {loadingMore ? 'Loading more…' : 'Load more servers'}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

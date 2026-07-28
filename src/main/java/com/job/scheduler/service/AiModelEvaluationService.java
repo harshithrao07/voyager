@@ -32,6 +32,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executor;
 import java.util.regex.Pattern;
 
@@ -63,6 +65,7 @@ public class AiModelEvaluationService {
     private final ObjectMapper objectMapper;
     private final Executor executor;
     private final JsonNode suite;
+    private final ConcurrentMap<UUID, Thread> activeEvaluationThreads = new ConcurrentHashMap<>();
 
     public AiModelEvaluationService(
             AiModelConfigRepository modelRepository,
@@ -149,8 +152,18 @@ public class AiModelEvaluationService {
             throw new IllegalArgumentException("Evaluation run does not belong to this model");
         }
         if (model.getEvaluationStatus() == AiModelEvaluationStatus.RUNNING) {
-            model.setEvaluationCancelRequested(true);
+            // Cancellation is terminal from the user's perspective. Do not leave the UI displaying
+            // "Stopping" for the duration of a slow or wedged local-model HTTP request.
+            model.setEvaluationStatus(AiModelEvaluationStatus.CANCELLED);
+            model.setEvaluationCancelRequested(false);
+            model.setEvaluationFinishedAt(Instant.now());
+            model.setEvaluationResult(null);
+            model.setEvaluationError(null);
             modelRepository.saveAndFlush(model);
+            Thread worker = activeEvaluationThreads.get(runId);
+            if (worker != null) {
+                worker.interrupt();
+            }
         }
         return toDto(model);
     }
@@ -162,6 +175,7 @@ public class AiModelEvaluationService {
             JudgeContext judgeContext
     ) {
         List<Observation> observations = new ArrayList<>();
+        activeEvaluationThreads.put(runId, Thread.currentThread());
         try {
             for (int repetition = 1; repetition <= mode.repetitions(); repetition++) {
                 for (JsonNode testCase : suite.path("cases")) {
@@ -178,7 +192,19 @@ public class AiModelEvaluationService {
                         return;
                     }
                     observations.add(runCase(testCase, modelConfigId, repetition, judgeContext));
-                    updateProgress(modelConfigId, runId, observations.size());
+                    if (cancelRequested(modelConfigId, runId)) {
+                        finishRun(
+                                modelConfigId,
+                                runId,
+                                AiModelEvaluationStatus.CANCELLED,
+                                observations,
+                                mode,
+                                null,
+                                judgeContext
+                        );
+                        return;
+                    }
+                    updateProgress(modelConfigId, runId, observations);
                 }
             }
             finishRun(
@@ -191,16 +217,32 @@ public class AiModelEvaluationService {
                     judgeContext
             );
         } catch (RuntimeException exception) {
-            log.warn("AI model evaluation {} failed", runId, exception);
-            finishRun(
-                    modelConfigId,
-                    runId,
-                    AiModelEvaluationStatus.FAILED,
-                    observations,
-                    mode,
-                    rootMessage(exception),
-                    judgeContext
-            );
+            if (cancelRequested(modelConfigId, runId)) {
+                // Clear the interrupt before persisting final state through JDBC.
+                Thread.interrupted();
+                finishRun(
+                        modelConfigId,
+                        runId,
+                        AiModelEvaluationStatus.CANCELLED,
+                        observations,
+                        mode,
+                        null,
+                        judgeContext
+                );
+            } else {
+                log.warn("AI model evaluation {} failed", runId, exception);
+                finishRun(
+                        modelConfigId,
+                        runId,
+                        AiModelEvaluationStatus.FAILED,
+                        observations,
+                        mode,
+                        rootMessage(exception),
+                        judgeContext
+                );
+            }
+        } finally {
+            activeEvaluationThreads.remove(runId, Thread.currentThread());
         }
     }
 
@@ -267,6 +309,7 @@ public class AiModelEvaluationService {
             return new Observation(
                     testCase.path("id").asText(),
                     testCase.path("category").asText(),
+                    testCase.path("instruction").asText(),
                     repetition,
                     startedAt,
                     latencyMs,
@@ -283,6 +326,7 @@ public class AiModelEvaluationService {
             return new Observation(
                     testCase.path("id").asText(),
                     testCase.path("category").asText(),
+                    testCase.path("instruction").asText(),
                     repetition,
                     startedAt,
                     Duration.between(startedAt, Instant.now()).toMillis(),
@@ -532,6 +576,9 @@ public class AiModelEvaluationService {
         ObjectNode summary = objectMapper.createObjectNode();
         summary.put("stage", response.stage().name());
         summary.put("message", bounded(response.message(), 600));
+        // The raw model reply (including an ASL that was rejected in validation) so a failure can be
+        // diagnosed from the UI without re-running the model.
+        summary.put("rawModelReply", bounded(response.rawAssistantReply(), 4000));
         summary.put(
                 "validationIssueCount",
                 response.validationIssues() == null ? -1 : response.validationIssues().size()
@@ -570,6 +617,10 @@ public class AiModelEvaluationService {
             JudgeContext judgeContext
     ) {
         AiModelConfig model = requireCurrentRun(modelConfigId, runId);
+        if (model.getEvaluationStatus() == AiModelEvaluationStatus.CANCELLED
+                && status != AiModelEvaluationStatus.CANCELLED) {
+            return;
+        }
         model.setEvaluationStatus(status);
         model.setEvaluationCompletedCases(observations.size());
         model.setEvaluationFinishedAt(Instant.now());
@@ -664,14 +715,34 @@ public class AiModelEvaluationService {
         summary.put("latencyP50Ms", percentile(latencies, 0.5));
         summary.put("latencyP95Ms", percentile(latencies, 0.95));
 
-        ArrayNode observationNodes = result.putArray("observations");
-        observations.forEach(observation -> observationNodes.add(
-                observation.toJson(objectMapper)
-        ));
+        result.set("observations", observationsJson(observations));
         try {
             return objectMapper.writeValueAsString(result);
         } catch (Exception exception) {
             throw new IllegalStateException("Could not serialize model evaluation", exception);
+        }
+    }
+
+    private ArrayNode observationsJson(List<Observation> observations) {
+        ArrayNode observationNodes = objectMapper.createArrayNode();
+        observations.forEach(observation -> observationNodes.add(
+                observation.toJson(objectMapper)
+        ));
+        return observationNodes;
+    }
+
+    /**
+     * Persists the cases finished so far as a partial {@code {"observations":[...]}} payload while the
+     * run is still going, so the polling UI can show each case (prompt, metrics, response) live instead
+     * of waiting for the whole run to complete. {@link #finishRun} overwrites it with the full result.
+     */
+    private String serializeProgress(List<Observation> observations) {
+        ObjectNode progress = objectMapper.createObjectNode();
+        progress.set("observations", observationsJson(observations));
+        try {
+            return objectMapper.writeValueAsString(progress);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Could not serialize evaluation progress", exception);
         }
     }
 
@@ -828,15 +899,21 @@ public class AiModelEvaluationService {
         return selected;
     }
 
-    private void updateProgress(UUID modelConfigId, UUID runId, int completedCases) {
+    private void updateProgress(
+            UUID modelConfigId,
+            UUID runId,
+            List<Observation> observations
+    ) {
         AiModelConfig model = requireCurrentRun(modelConfigId, runId);
-        model.setEvaluationCompletedCases(completedCases);
+        model.setEvaluationCompletedCases(observations.size());
+        model.setEvaluationResult(serializeProgress(observations));
         modelRepository.saveAndFlush(model);
     }
 
     private boolean cancelRequested(UUID modelConfigId, UUID runId) {
         AiModelConfig model = requireCurrentRun(modelConfigId, runId);
-        return model.isEvaluationCancelRequested();
+        return model.getEvaluationStatus() == AiModelEvaluationStatus.CANCELLED
+                || model.isEvaluationCancelRequested();
     }
 
     private void failRun(UUID modelConfigId, UUID runId, RuntimeException exception) {
@@ -863,10 +940,10 @@ public class AiModelEvaluationService {
     }
 
     private AiModelEvaluationDTO toDto(AiModelConfig model) {
-        JsonNode result = null;
+        JsonNode stored = null;
         if (model.getEvaluationResult() != null) {
             try {
-                result = objectMapper.readTree(model.getEvaluationResult());
+                stored = objectMapper.readTree(model.getEvaluationResult());
             } catch (Exception exception) {
                 log.warn(
                         "Could not read evaluation result for model {}",
@@ -875,6 +952,13 @@ public class AiModelEvaluationService {
                 );
             }
         }
+        // While a run is in progress the stored payload is a partial {observations:[...]} snapshot, not
+        // a full result. Surface those live for the polling UI and keep result null until the run ends.
+        boolean running = model.getEvaluationStatus() == AiModelEvaluationStatus.RUNNING;
+        JsonNode result = running ? null : stored;
+        JsonNode progressObservations = running && stored != null
+                ? stored.get("observations")
+                : null;
         return new AiModelEvaluationDTO(
                 model.getEvaluationRunId(),
                 model.getId(),
@@ -893,6 +977,7 @@ public class AiModelEvaluationService {
                 model.isEvaluationCancelRequested(),
                 isStale(result),
                 result,
+                progressObservations,
                 model.getEvaluationError(),
                 model.getEvaluationStartedAt(),
                 model.getEvaluationFinishedAt()
@@ -953,6 +1038,7 @@ public class AiModelEvaluationService {
     private record Observation(
             String caseId,
             String category,
+            String instruction,
             int repetition,
             Instant startedAt,
             long latencyMs,
@@ -969,6 +1055,7 @@ public class AiModelEvaluationService {
             ObjectNode node = objectMapper.createObjectNode();
             node.put("caseId", caseId);
             node.put("category", category);
+            node.put("instruction", instruction);
             node.put("repetition", repetition);
             node.put("startedAt", startedAt.toString());
             node.put("latencyMs", latencyMs);

@@ -81,6 +81,33 @@ class WorkflowAiProposedFunctionSafetyValidatorTest {
                 );
     }
 
+    @Test
+    void acceptsMissingProposalTimeTests() {
+        assertThat(validator.validate(function("print('{}')", List.of()))).isEmpty();
+    }
+
+    @Test
+    void requiresOneExpectedOutcomePerTestCase() {
+        WorkflowAiProposedFunctionDTO missingOutcome = function(
+                "print('{}')",
+                List.of(new FunctionTestCaseDTO("missing", "{}", null, null))
+        );
+        WorkflowAiProposedFunctionDTO conflictingOutcome = function(
+                "print('{}')",
+                List.of(new FunctionTestCaseDTO(
+                        "conflicting",
+                        "{}",
+                        "{}",
+                        "should fail"
+                ))
+        );
+
+        assertThat(validator.validate(missingOutcome))
+                .contains("Test case 'missing' must define exactly one of expectedOutput or expectedError.");
+        assertThat(validator.validate(conflictingOutcome))
+                .contains("Test case 'conflicting' must define exactly one of expectedOutput or expectedError.");
+    }
+
     private WorkflowAiProposedFunctionDTO function(
             String sourceCode,
             List<FunctionTestCaseDTO> testCases

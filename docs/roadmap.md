@@ -26,19 +26,22 @@ functions via [`FunctionRegistryService`](../src/main/java/com/job/scheduler/ser
   cause plus an optional validated ASL patch; **Apply patch** opens the revision editor pre-loaded
   with the fix (so it still passes ASL validation + the trust gate on save). `WorkflowAiFailureTriageService`
   reuses the model resolver and the authoring validators; endpoint `POST /workflows/{id}/executions/{execId}/triage`.
-  - [ ] **Pending:** live verification of the *patch-generation* branch. Endpoint guards (400/404) and
-    the *no-patch* branch are verified live; the model-returns-a-validated-patch path is covered by unit
-    tests only. Reproduce end-to-end with a genuinely fixable failure (e.g. a Task with a broken JSONata
-    path) and confirm the model returns a patch that validates and applies in the editor.
+  - [x] **Live patch-generation verification:** reproduced `States.QueryEvaluationError` from an
+    unsupported JSONata function, confirmed two registered models returned validated ASL patches,
+    and verified **Apply patch** opens the revision editor with the corrected definition. The live
+    check also fixed a React Strict Mode handoff bug that could consume the one-shot patch before the
+    committed editor mounted.
 - [ ] **AI JSONata expression assistant** — in the state inspector, "describe what you want" →
   validated JSONata `{% … %}` from the state's input shape + desired output. Removes the biggest
   authoring pain point.
 - [x] **Placeholder-secret guard on provisioning** — reject creating any AI-proposed function whose
   code carries placeholder credentials (`YOUR_API_KEY`, bearer tokens) or won't serialize. Small;
   closes a real hole in the resource-provisioning flow.
-- [ ] **Auto-generate function test cases** — have the model propose input/expected-output cases so
-  provisioned functions ship with a smoke test instead of `testCases: []`
-  (`FunctionVersion.testCases` already exists).
+- [x] **Post-creation function qualification and test generation** — AI resource proposals contain
+  code without test cases. Approval creates a draft, then generates independent successful examples
+  from the intended behavior and runs the draft through Judge0. Only drafts that compile, obey the
+  stdin/stdout JSON contract, and match every expected result have their tests persisted and version
+  published into the catalog; failures remain drafts with no generated tests.
 
 ### Authoring & editing
 
@@ -52,7 +55,7 @@ functions via [`FunctionRegistryService`](../src/main/java/com/job/scheduler/ser
 
 - [x] **MCP registry recommendation** — a "Find a server" deep-link on each `RESOURCES_PROPOSED` MCP
   requirement opens a public-catalog browser (`PublicMcpRegistryService`: bundled JSON always, external
-  `registry.modelcontextprotocol.io` opt-in via `scheduler.mcp.registry.external.*`); picking an install
+  `registry.modelcontextprotocol.io` enabled by default and configurable via `scheduler.mcp.registry.external.*`); picking an install
   option prefills the register form for the user to review trust + secrets before creating.
 - [ ] **Embeddings / RAG catalog matching** — embed functions + MCP tools and retrieve only relevant
   ones per prompt instead of injecting the whole catalog. Scales the catalog and cuts token/

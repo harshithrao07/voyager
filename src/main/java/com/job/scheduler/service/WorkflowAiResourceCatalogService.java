@@ -71,10 +71,13 @@ public class WorkflowAiResourceCatalogService {
      * supplied to the workflow model only after that model has chosen to propose a function.
      */
     public String buildFunctionCreationContext() {
-        return """
-                SUPPORTED FUNCTION LANGUAGES (languageId — name):
-                %s
-                """.formatted(buildLanguagesDocumentation());
+        FunctionLanguageDTO language = functionRuntimePolicy.aiDefaultLanguage();
+        return language == null
+                ? "AI DEFAULT FUNCTION LANGUAGE: unavailable. Do not propose a function."
+                : """
+                  AI DEFAULT FUNCTION LANGUAGE (always use this exact languageId and language):
+                  - %d — %s
+                  """.formatted(language.id(), language.name()).trim();
     }
 
     String buildLanguagesDocumentation() {
@@ -184,6 +187,11 @@ public class WorkflowAiResourceCatalogService {
         int bestScore = 0;
         for (McpTool tool : enabledTools) {
             McpServer server = tool.getMcpServer();
+            String resourceUri = mcpResourceUri(tool);
+            if (requirement.suggestedToolName() != null
+                    && requirement.suggestedToolName().trim().equalsIgnoreCase(resourceUri)) {
+                return new McpRequirementMatch(requirement.capability(), resourceUri);
+            }
             String serverId = normalize(server.getServerId());
             String toolName = normalize(tool.getToolName());
             String title = normalize(tool.getTitle());

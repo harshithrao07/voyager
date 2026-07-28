@@ -10,12 +10,15 @@ export function setPendingTriagePatch(workflowId: string, definition: unknown) {
   pendingPatches.set(workflowId, definition);
 }
 
-/** Consume and clear the pending patch for a workflow, or null if none was stashed. */
-export function takePendingTriagePatch(workflowId: string): unknown | null {
-  if (!pendingPatches.has(workflowId)) {
-    return null;
-  }
-  const definition = pendingPatches.get(workflowId);
+/**
+ * Read the pending patch without clearing it. React Strict Mode may invoke a state initializer twice,
+ * so consuming it inside the initializer can discard the patch before the committed editor mounts.
+ */
+export function getPendingTriagePatch(workflowId: string): unknown | null {
+  return pendingPatches.get(workflowId) ?? null;
+}
+
+/** Clear a patch after the revision editor has committed its initial state. */
+export function clearPendingTriagePatch(workflowId: string) {
   pendingPatches.delete(workflowId);
-  return definition ?? null;
 }

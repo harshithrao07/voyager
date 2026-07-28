@@ -205,11 +205,12 @@ Because Voyager cannot create MCP servers itself (they are external endpoints wi
 and credentials), each MCP requirement carries a **Find a server** link that deep-links to the MCP
 Servers page pre-searched for that capability (`/mcp?discover=<capability>`). That page's registry
 browser queries `PublicMcpRegistryService` — a JSON catalog bundled in-repo (always available, works
-offline) plus, when `scheduler.mcp.registry.external.enabled` is set, the external MCP registry at
-`scheduler.mcp.registry.external.url`. Picking an install option (an npm/PyPI/Docker package or a
+offline) plus, by default, the external MCP registry at `scheduler.mcp.registry.external.url`.
+Set `scheduler.mcp.registry.external.enabled=false` to keep discovery offline-only. Picking an install option (an npm/PyPI/Docker package or a
 remote HTTP endpoint) prefills the register form — transport, command/args or URL, and env vars with
 secret ones left blank — so the user reviews the trust level and enters credentials before the server
-is created. Nothing is auto-registered.
+is created. The browser follows the registry's opaque cursor through **Load more servers**, so the
+catalog is not limited to its first page. Nothing is auto-registered.
 
 Saving a generated workflow that grants elevated MCP trust is gated. An MCP Task opts into mutation
 via the resource's `?trust=WRITE` or `?trust=DESTRUCTIVE` query (READ_ONLY is the default), so
@@ -246,6 +247,12 @@ only if the first response actually proposes a function, Voyager makes a functio
 those rules and the live supported-language list before validating or showing the proposal. The
 same conditional review runs when an automatic repair introduces a function. This prevents
 function-only guidance from distracting ASL-only and MCP-only workflow turns.
+
+The function-review pass must also supply at least one named smoke test. Test inputs and successful
+expected outputs are validated as JSON, while intentional failure cases use `expectedError`;
+defining both or neither is rejected. Missing or malformed cases enter the normal response-repair
+loop, and approved cases are saved on the generated function version for the workbench and Tests
+tab.
 
 The conversation moves through these durable stages:
 

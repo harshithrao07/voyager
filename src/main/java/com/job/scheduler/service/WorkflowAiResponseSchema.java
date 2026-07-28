@@ -51,25 +51,6 @@ final class WorkflowAiResponseSchema {
                               "description": {"type": ["string", "null"]},
                               "languageId": {"type": ["integer", "null"]},
                               "sourceCode": {"type": ["string", "null"]},
-                              "testCases": {
-                                "anyOf": [
-                                  {
-                                    "type": "array",
-                                    "items": {
-                                      "type": "object",
-                                      "additionalProperties": false,
-                                      "properties": {
-                                        "name": {"type": ["string", "null"]},
-                                        "input": {"type": ["string", "null"]},
-                                        "expectedOutput": {"type": ["string", "null"]},
-                                        "expectedError": {"type": ["string", "null"]}
-                                      },
-                                      "required": ["name", "input", "expectedOutput", "expectedError"]
-                                    }
-                                  },
-                                  {"type": "null"}
-                                ]
-                              },
                               "rationale": {"type": ["string", "null"]}
                             },
                             "required": [
@@ -77,7 +58,6 @@ final class WorkflowAiResponseSchema {
                               "description",
                               "languageId",
                               "sourceCode",
-                              "testCases",
                               "rationale"
                             ]
                           }

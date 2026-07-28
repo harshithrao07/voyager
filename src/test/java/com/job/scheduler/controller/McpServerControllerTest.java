@@ -8,6 +8,7 @@ import com.job.scheduler.dto.McpToolSyncResultDTO;
 import com.job.scheduler.dto.PublicMcpEnvVarDTO;
 import com.job.scheduler.dto.PublicMcpInstallOptionDTO;
 import com.job.scheduler.dto.PublicMcpServerDTO;
+import com.job.scheduler.dto.PublicMcpRegistryPageDTO;
 import com.job.scheduler.enums.McpAuthType;
 import com.job.scheduler.enums.PublicMcpSource;
 import com.job.scheduler.enums.McpServerStatus;
@@ -131,6 +132,23 @@ class McpServerControllerTest {
                 .andExpect(jsonPath("$[0].source").value("BUNDLED"))
                 .andExpect(jsonPath("$[0].installs[0].command").value("npx"))
                 .andExpect(jsonPath("$[0].installs[0].env[0].secret").value(true));
+    }
+
+    @Test
+    void browseRegistryReturnsNextCursor() throws Exception {
+        PublicMcpRegistryPageDTO page = new PublicMcpRegistryPageDTO(
+                List.of(),
+                "opaque/next:cursor");
+        when(publicMcpRegistryService.browse(eq("database"), eq(50), eq("current")))
+                .thenReturn(page);
+
+        mockMvc.perform(get("/app/v1/mcp/servers/registry/browse")
+                        .param("query", "database")
+                        .param("limit", "50")
+                        .param("cursor", "current"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.servers").isArray())
+                .andExpect(jsonPath("$.nextCursor").value("opaque/next:cursor"));
     }
 
     @Test

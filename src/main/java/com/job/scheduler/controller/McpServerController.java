@@ -8,6 +8,7 @@ import com.job.scheduler.dto.McpToolExecutionResponseDTO;
 import com.job.scheduler.dto.McpToolResponseDTO;
 import com.job.scheduler.dto.McpToolSyncResultDTO;
 import com.job.scheduler.dto.PublicMcpServerDTO;
+import com.job.scheduler.dto.PublicMcpRegistryPageDTO;
 import com.job.scheduler.enums.McpServerStatus;
 import com.job.scheduler.service.McpClientService;
 import com.job.scheduler.service.McpServerRegistryService;
@@ -60,6 +61,15 @@ public class McpServerController {
             @RequestParam(defaultValue = "10") int limit
     ) {
         return ResponseEntity.ok(publicMcpRegistryService.search(query, limit));
+    }
+
+    @GetMapping("/registry/browse")
+    public ResponseEntity<PublicMcpRegistryPageDTO> browseRegistry(
+            @RequestParam(required = false) String query,
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(required = false) String cursor
+    ) {
+        return ResponseEntity.ok(publicMcpRegistryService.browse(query, limit, cursor));
     }
 
     @GetMapping

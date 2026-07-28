@@ -14,13 +14,17 @@ import java.util.regex.Pattern;
  * Safety boundary for AI-proposed function code.
  *
  * <p>Generated functions are persisted and published after approval, so prompt instructions alone
- * are not sufficient. This validator rejects credential placeholders and likely embedded secrets,
- * and verifies test-case JSON before any function row is created.
+ * are not sufficient. This validator rejects credential placeholders and likely embedded secrets.
+ * If test cases are supplied by an older client, their JSON is also validated, but proposal-time
+ * tests are optional because qualified tests are generated after the draft is created.
  */
 @Component
 @RequiredArgsConstructor
 public class WorkflowAiProposedFunctionSafetyValidator {
 
+    private static final int MAX_TEST_CASES = 100;
+    private static final int MAX_TEST_CASE_NAME_CHARS = 200;
+    private static final int MAX_TEST_CASE_VALUE_CHARS = 65_536;
     private static final Pattern PLACEHOLDER_CREDENTIAL = Pattern.compile(
             """
             (?ix)
@@ -99,22 +103,68 @@ public class WorkflowAiProposedFunctionSafetyValidator {
         if (testCases == null || testCases.isEmpty()) {
             return;
         }
+        if (testCases.size() > MAX_TEST_CASES) {
+            issues.add("A function can have at most " + MAX_TEST_CASES + " test cases.");
+        }
         for (int index = 0; index < testCases.size(); index++) {
             FunctionTestCaseDTO testCase = testCases.get(index);
             if (testCase == null) {
                 issues.add("Test case " + (index + 1) + " cannot be null.");
                 continue;
             }
-            String label = testCase.name() == null || testCase.name().isBlank()
+            String name = testCase.name() == null ? "" : testCase.name().trim();
+            String label = name.isBlank()
                     ? "Test case " + (index + 1)
-                    : "Test case '" + testCase.name().trim() + "'";
+                    : "Test case '" + name + "'";
+            if (name.isBlank()) {
+                issues.add("Test case " + (index + 1) + " must have a name.");
+            } else if (name.length() > MAX_TEST_CASE_NAME_CHARS) {
+                issues.add(label + " name must be at most " + MAX_TEST_CASE_NAME_CHARS + " characters.");
+            }
+            validateLength(label, "input", testCase.input(), issues);
+            validateLength(label, "expectedOutput", testCase.expectedOutput(), issues);
+            validateLength(label, "expectedError", testCase.expectedError(), issues);
             requireJson(label, "input", testCase.input(), false, issues);
-            requireJson(label, "expectedOutput", testCase.expectedOutput(), true, issues);
+            validateExpectedResult(testCase, label, issues);
         }
         try {
             objectMapper.writeValueAsString(testCases);
         } catch (Exception exception) {
             issues.add("testCases could not be serialized.");
+        }
+    }
+
+    private void validateExpectedResult(
+            FunctionTestCaseDTO testCase,
+            String label,
+            List<String> issues
+    ) {
+        boolean hasExpectedOutput =
+                testCase.expectedOutput() != null && !testCase.expectedOutput().isBlank();
+        boolean hasExpectedError =
+                testCase.expectedError() != null && !testCase.expectedError().isBlank();
+        if (hasExpectedOutput == hasExpectedError) {
+            issues.add(
+                    label + " must define exactly one of expectedOutput or expectedError."
+            );
+            return;
+        }
+        if (hasExpectedOutput) {
+            requireJson(label, "expectedOutput", testCase.expectedOutput(), false, issues);
+        }
+    }
+
+    private void validateLength(
+            String label,
+            String field,
+            String value,
+            List<String> issues
+    ) {
+        if (value != null && value.length() > MAX_TEST_CASE_VALUE_CHARS) {
+            issues.add(
+                    label + " " + field + " must be at most "
+                            + MAX_TEST_CASE_VALUE_CHARS + " characters."
+            );
         }
     }
 

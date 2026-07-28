@@ -176,4 +176,28 @@ class PublicMcpRegistryServiceTest {
     void parseExternalHandlesMalformedJson() {
         assertThat(service.parseExternal("not json")).isEmpty();
     }
+
+    @Test
+    void parseExternalPagePreservesOpaqueNextCursor() {
+        String body = """
+                {
+                  "metadata": { "count": 1, "nextCursor": "io.example/server:1.2.3" },
+                  "servers": [
+                    {
+                      "server": {
+                        "name": "io.example/server",
+                        "packages": [
+                          { "registryType": "npm", "identifier": "@example/server" }
+                        ]
+                      }
+                    }
+                  ]
+                }
+                """;
+
+        PublicMcpRegistryService.ExternalPage page = service.parseExternalPage(body);
+
+        assertThat(page.servers()).hasSize(1);
+        assertThat(page.nextCursor()).isEqualTo("io.example/server:1.2.3");
+    }
 }

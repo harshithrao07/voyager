@@ -1,5 +1,4 @@
 import { PanelRightOpen } from 'lucide-react';
-import { WorkflowGeneratorPanel } from '../components/WorkflowGeneratorPanel';
 import { AslCodeViewer } from '../components/AslCodeViewer';
 import { AslGraphViewer } from '../components/AslGraphViewer';
 import { StateDetailsPanel } from '../components/StateDetailsPanel';
@@ -36,7 +35,6 @@ type Props = {
   onCloseDetails: () => void;
   onRevisionSelected: (revisionId: string) => void;
   onCloseRevisionPanel: () => void;
-  onWorkflowGenerated: (definition: any) => void;
   onCanvasLayoutChange: (positions: CanvasNodePositions) => void;
   onNavigate?: (path: string) => void;
 };
@@ -58,7 +56,6 @@ export function WorkflowDetailPage({
   onCloseDetails,
   onRevisionSelected,
   onCloseRevisionPanel,
-  onWorkflowGenerated,
   onCanvasLayoutChange,
   onNavigate,
 }: Props) {
@@ -105,7 +102,7 @@ export function WorkflowDetailPage({
         )}
       </div>
 
-      {(revisionPanelOpen || activeTab === 'definition' || (activeTab === 'visualizer' && detailsPanelOpen)) && (
+      {(revisionPanelOpen || (activeTab === 'visualizer' && detailsPanelOpen)) && (
         <div
           id={revisionPanelOpen ? 'revision-history-panel' : undefined}
           className="glass-panel z-20 hidden w-[360px] flex-col border-l border-border-subtle bg-surface-base shadow-[-8px_0_24px_rgba(0,0,0,0.2)] lg:flex"
@@ -123,14 +120,12 @@ export function WorkflowDetailPage({
                 onClose={onCloseRevisionPanel}
               />
             )
-          ) : activeTab === 'visualizer' ? (
+          ) : (
             <StateDetailsPanel
               definition={currentDefinition}
               selectedStateName={selectedStateName}
               onClose={onCloseDetails}
             />
-          ) : (
-            <WorkflowGeneratorPanel onWorkflowGenerated={onWorkflowGenerated} />
           )}
         </div>
       )}

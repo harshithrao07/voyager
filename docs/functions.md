@@ -326,6 +326,7 @@ Base path: `/app/v1/functions`
 | `scheduler.judge0.base-url` | `JUDGE0_BASE_URL` | Runner endpoint (compose default `http://judge0-server:2358`, private to the Docker network). |
 | `scheduler.judge0.auth-token` | `JUDGE0_AUTH_TOKEN` | Optional `X-Auth-Token` for secured runners. |
 | `scheduler.judge0.allowed-language-ids` | `JUDGE0_ALLOWED_LANGUAGE_IDS` | Comma-separated Judge0 ids. Blank = all real program runtimes except SQL and pseudo-runtimes (`executable`, `multi-file program`, `plain text`). |
+| `scheduler.judge0.ai-default-language-id` | `JUDGE0_AI_DEFAULT_LANGUAGE_ID` | Runtime used for every AI-generated function. Defaults to Judge0 Python id `71`; falls back to an available Python runtime, then the first allowed runtime. |
 | `scheduler.judge0.default-*` | — | Platform defaults for the per-version limits listed above. |
 | `ALLOW_ENABLE_NETWORK` (judge0.conf) | — | Master gate for the per-version `enableNetwork` flag. |
 

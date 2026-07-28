@@ -387,7 +387,7 @@ class WorkflowAiConversationControllerTest {
     private WorkflowAiResponseDTO response(String conversationName) {
         return new WorkflowAiResponseDTO(
                 conversationId, conversationName, null, "ok",
-                null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null
         );
     }
 

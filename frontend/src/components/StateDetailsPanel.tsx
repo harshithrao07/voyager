@@ -9,17 +9,6 @@ type Props = {
 
 const RETRY_CAPABLE_TYPES = new Set(['Task', 'Parallel', 'Map']);
 
-const STATE_DESCRIPTIONS: Record<string, string> = {
-  Task: 'Calls a resource and forwards its result.',
-  Pass: 'Transforms data or passes its input to the next state.',
-  Choice: 'Selects the first matching condition and follows that branch.',
-  Wait: 'Pauses execution until its configured duration or timestamp.',
-  Succeed: 'Ends this workflow path successfully.',
-  Fail: 'Ends this workflow path with an error.',
-  Parallel: 'Runs each branch concurrently and collects their outputs.',
-  Map: 'Runs an item processor for every value in an input array.',
-};
-
 function getSelectedState(definition: any, selectedStateName?: string) {
   if (!definition?.States) return { name: undefined, state: undefined };
   const fallbackName = selectedStateName || definition.StartAt || Object.keys(definition.States)[0];
@@ -32,51 +21,6 @@ function hasValue(value: unknown) {
 
 function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2);
-}
-
-function transitionTargets(state: any) {
-  const targets: string[] = [];
-  if (typeof state?.Next === 'string') targets.push(state.Next);
-  if (typeof state?.Default === 'string') targets.push(state.Default);
-  if (Array.isArray(state?.Choices)) {
-    for (const choice of state.Choices) {
-      if (typeof choice?.Next === 'string') targets.push(choice.Next);
-    }
-  }
-  if (Array.isArray(state?.Catch)) {
-    for (const catcher of state.Catch) {
-      if (typeof catcher?.Next === 'string') targets.push(catcher.Next);
-    }
-  }
-  return targets;
-}
-
-function incomingStateNames(definition: any, stateName?: string) {
-  if (!stateName) return [];
-  return Object.entries<any>(definition?.States || {})
-    .filter(([, candidate]) => transitionTargets(candidate).includes(stateName))
-    .map(([candidateName]) => candidateName);
-}
-
-function stateInputReferences(state: any) {
-  const references = new Set<string>();
-  const visit = (value: unknown) => {
-    if (typeof value === 'string') {
-      for (const match of value.matchAll(/\$states\.input(?:\.[A-Za-z_][A-Za-z0-9_]*)*/g)) {
-        references.add(match[0]);
-      }
-      return;
-    }
-    if (Array.isArray(value)) {
-      value.forEach(visit);
-      return;
-    }
-    if (value && typeof value === 'object') {
-      Object.values(value).forEach(visit);
-    }
-  };
-  visit(state);
-  return [...references];
 }
 
 function DetailSection({
@@ -120,73 +64,6 @@ function JsonValue({ label, value }: { label: string; value: unknown }) {
         <code>{formatJson(value)}</code>
       </pre>
     </div>
-  );
-}
-
-function TransitionDetails({ state }: { state: any }) {
-  if (typeof state?.Next === 'string') {
-    return <ValueCard label="Next state" value={`→ ${state.Next}`} />;
-  }
-  if (state?.End === true) {
-    return <ValueCard label="Transition" value="Ends after this state" />;
-  }
-  return null;
-}
-
-function StateInputDetails({
-  definition,
-  stateName,
-  state,
-}: {
-  definition: any;
-  stateName?: string;
-  state: any;
-}) {
-  const incoming = incomingStateNames(definition, stateName);
-  const references = stateInputReferences(state);
-  const isStartState = definition?.StartAt === stateName;
-  const source = isStartState
-    ? incoming.length > 0
-      ? `Workflow input initially; state output on re-entry`
-      : 'Workflow execution input'
-    : incoming.length === 1
-      ? `Output from ${incoming[0]}`
-      : incoming.length > 1
-        ? `Output from ${incoming.length} incoming states`
-        : 'No incoming transition found';
-
-  return (
-    <DetailSection eyebrow="Input" title={`Data entering ${stateName || 'this state'}`}>
-      <ValueCard label="Source" value={source} />
-      {incoming.length > 1 && (
-        <div className="flex flex-wrap gap-1.5">
-          {incoming.map((incomingName) => (
-            <span key={incomingName} className="rounded border border-border-subtle bg-surface-container-low px-2 py-1 font-mono-sm text-[9px] text-on-surface-variant">
-              {incomingName}
-            </span>
-          ))}
-        </div>
-      )}
-      {references.length > 0 ? (
-        <div>
-          <div className="mb-1.5 font-mono-sm text-[9px] uppercase tracking-[0.08em] text-on-surface-variant">Referenced by this state</div>
-          <div className="flex flex-wrap gap-1.5">
-            {references.map((reference) => (
-              <code key={reference} className="rounded border border-status-info/20 bg-status-info/10 px-2 py-1.5 font-mono-sm text-[10px] text-status-info">
-                {reference}
-              </code>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="text-body-sm text-on-surface-variant">This state does not explicitly read from <code className="font-mono-sm text-[10px] text-on-surface">$states.input</code>.</div>
-      )}
-      {isStartState && (
-        <div className="border-l-2 border-status-info/40 pl-3 text-body-sm leading-relaxed text-on-surface-variant">
-          Supply the concrete values when starting the workflow; they are not stored in the ASL definition.
-        </div>
-      )}
-    </DetailSection>
   );
 }
 
@@ -291,33 +168,12 @@ function TypeSpecificDetails({ state, type }: { state: any; type: string }) {
   if (type === 'Choice') return <ChoiceDetails state={state} />;
 
   if (type === 'Fail') {
+    if (!hasValue(state?.Error) && !hasValue(state?.Cause)) return null;
     return (
       <DetailSection eyebrow="Outcome" title="Failure details">
         <div className="grid grid-cols-2 gap-2">
-          <ValueCard label="Error" value={state?.Error || 'Not specified'} />
-          <ValueCard label="Cause" value={state?.Cause || 'Not specified'} />
-        </div>
-      </DetailSection>
-    );
-  }
-
-  if (type === 'Succeed') {
-    return (
-      <DetailSection eyebrow="Outcome" title="Successful completion">
-        <div className="rounded-DEFAULT border border-secondary/25 bg-secondary-container/20 p-3 text-body-sm text-secondary-fixed">
-          This state ends the current workflow path successfully.
-        </div>
-      </DetailSection>
-    );
-  }
-
-  if (type === 'Pass') {
-    return (
-      <DetailSection eyebrow="Pass" title="Data behavior">
-        <div className="rounded-DEFAULT border border-border-subtle bg-surface-container-low p-3 text-body-sm text-on-surface-variant">
-          {hasValue(state?.Assign) || hasValue(state?.Output)
-            ? 'Applies the configured assignment or output transformation.'
-            : 'Forwards its input unchanged.'}
+          {hasValue(state?.Error) && <ValueCard label="Error" value={state.Error} />}
+          {hasValue(state?.Cause) && <ValueCard label="Cause" value={state.Cause} />}
         </div>
       </DetailSection>
     );
@@ -347,8 +203,7 @@ function TypeSpecificDetails({ state, type }: { state: any; type: string }) {
         <div className="grid grid-cols-2 gap-2">
           <ValueCard label="Processor start" value={processor?.StartAt || 'Not configured'} />
           <ValueCard label="Processor states" value={Object.keys(processor?.States || {}).length} />
-          <ValueCard label="Concurrency" value={hasValue(state?.MaxConcurrency) ? state.MaxConcurrency : 'Runtime default'} />
-          <ValueCard label="Items" value={hasValue(state?.Items) ? 'Configured below' : 'State input'} />
+          {hasValue(state?.MaxConcurrency) && <ValueCard label="Concurrency" value={state.MaxConcurrency} />}
         </div>
         {hasValue(state?.Items) && <JsonValue label="Items" value={state.Items} />}
         {hasValue(state?.ItemSelector) && <JsonValue label="Item selector" value={state.ItemSelector} />}
@@ -365,14 +220,17 @@ export function StateDetailsPanel({ definition, selectedStateName, onClose }: Pr
   const visual = getStateVisual(type);
   const isStartState = Boolean(name && definition?.StartAt === name);
   const supportsRetry = RETRY_CAPABLE_TYPES.has(type);
+  const hasFailurePolicy =
+    (Array.isArray(state?.Retry) && state.Retry.length > 0)
+    || (Array.isArray(state?.Catch) && state.Catch.length > 0);
   const hasDataFields = hasValue(state?.Arguments) || hasValue(state?.Assign) || hasValue(state?.Output);
 
   return (
     <>
       <div className="glass-shell flex items-center justify-between border-b border-border-subtle bg-surface-elevated/50 px-5 py-4 backdrop-blur-md">
-        <div>
-          <div className="font-mono-sm text-[9px] uppercase tracking-[0.12em] text-on-surface-variant">Workflow state</div>
-          <h2 className="mt-0.5 text-headline-md font-medium text-primary">State Details</h2>
+        <div className="min-w-0">
+          <div className="font-mono-sm text-[9px] uppercase tracking-[0.12em] text-on-surface-variant">State details</div>
+          <h2 className="mt-0.5 truncate text-headline-md font-medium text-primary">{name || 'No state selected'}</h2>
         </div>
         <button
           type="button"
@@ -396,13 +254,9 @@ export function StateDetailsPanel({ definition, selectedStateName, onClose }: Pr
                   <span className="rounded-full border border-status-info/30 bg-status-info/10 px-2 py-0.5 font-mono-sm text-[8px] uppercase tracking-[0.08em] text-status-info">Start</span>
                 )}
               </div>
-              <div className="mt-1 truncate text-headline-md font-medium text-primary">{name || 'No state selected'}</div>
             </div>
             <span className={`material-symbols-outlined text-[22px] ${visual.textClass}`}>{visual.iconName}</span>
           </div>
-          <p className="mt-3 pl-2 text-body-sm leading-relaxed text-on-surface-variant">
-            {STATE_DESCRIPTIONS[type] || 'Represents a state in this workflow.'}
-          </p>
         </section>
 
         {state && (
@@ -415,18 +269,10 @@ export function StateDetailsPanel({ definition, selectedStateName, onClose }: Pr
               </DetailSection>
             )}
 
-            <StateInputDetails definition={definition} stateName={name} state={state} />
-
             <TypeSpecificDetails state={state} type={type} />
 
-            {['Task', 'Pass', 'Wait', 'Parallel', 'Map'].includes(type) && (
-              <DetailSection eyebrow="Flow" title="Transition">
-                <TransitionDetails state={state} />
-              </DetailSection>
-            )}
-
             {hasDataFields && (
-              <DetailSection eyebrow="Data" title="Input, variables, and output">
+              <DetailSection eyebrow="Configuration" title="Data transformation">
                 <div className="space-y-3">
                   <JsonValue label="Arguments" value={state.Arguments} />
                   <JsonValue label="Assign" value={state.Assign} />
@@ -435,7 +281,19 @@ export function StateDetailsPanel({ definition, selectedStateName, onClose }: Pr
               </DetailSection>
             )}
 
-            {supportsRetry && <RetryDetails state={state} />}
+            {typeof state.Next === 'string' && (
+              <DetailSection eyebrow="Transition" title="Next state">
+                <ValueCard label="Next" value={`→ ${state.Next}`} />
+              </DetailSection>
+            )}
+
+            {state.End === true && (
+              <DetailSection eyebrow="Transition" title="End">
+                <ValueCard label="End" value="true" />
+              </DetailSection>
+            )}
+
+            {supportsRetry && hasFailurePolicy && <RetryDetails state={state} />}
           </>
         )}
       </div>

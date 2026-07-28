@@ -3,6 +3,7 @@ package com.job.scheduler.service;
 import com.job.scheduler.dto.PublicMcpEnvVarDTO;
 import com.job.scheduler.dto.PublicMcpInstallOptionDTO;
 import com.job.scheduler.dto.PublicMcpServerDTO;
+import com.job.scheduler.dto.PublicMcpRegistryPageDTO;
 import com.job.scheduler.enums.McpTransport;
 import com.job.scheduler.enums.McpTrustLevel;
 import com.job.scheduler.enums.PublicMcpSource;
@@ -44,6 +45,7 @@ public class PublicMcpRegistryService {
 
     private static final Logger log = LoggerFactory.getLogger(PublicMcpRegistryService.class);
     private static final int MAX_LIMIT = 50;
+    private static final int MAX_BROWSE_PAGE_HOPS = 5;
 
     private final ResourceLoader resourceLoader;
     private final ObjectMapper objectMapper;
@@ -127,6 +129,49 @@ public class PublicMcpRegistryService {
                 .toList();
     }
 
+    /**
+     * Cursor-based browsing for the store UI. The first page includes matching bundled
+     * recommendations; subsequent pages follow the official registry's opaque cursor.
+     */
+    public PublicMcpRegistryPageDTO browse(String query, int limit, String cursor) {
+        int cappedLimit = limit <= 0 ? 50 : Math.min(limit, MAX_LIMIT);
+        String normalizedQuery = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+
+        if (!externalEnabled) {
+            List<PublicMcpServerDTO> offline = cursor == null || cursor.isBlank()
+                    ? search(normalizedQuery, cappedLimit)
+                    : List.of();
+            return new PublicMcpRegistryPageDTO(offline, null);
+        }
+
+        Map<String, PublicMcpServerDTO> externalByName = new LinkedHashMap<>();
+        String pageCursor = cursor;
+        String nextCursor = cursor;
+        for (int hop = 0; hop < MAX_BROWSE_PAGE_HOPS; hop++) {
+            ExternalPage page = fetchExternalPage(normalizedQuery, cappedLimit, pageCursor);
+            page.servers().forEach(server ->
+                    externalByName.putIfAbsent(dedupeKey(server), server));
+            nextCursor = page.nextCursor();
+            if (nextCursor == null
+                    || nextCursor.isBlank()
+                    || Objects.equals(nextCursor, pageCursor)
+                    || externalByName.size() >= cappedLimit) {
+                break;
+            }
+            pageCursor = nextCursor;
+        }
+
+        Map<String, PublicMcpServerDTO> merged = new LinkedHashMap<>();
+        if (cursor == null || cursor.isBlank()) {
+            bundledCatalog.stream()
+                    .filter(server -> normalizedQuery.isEmpty() || score(server, normalizedQuery) > 0)
+                    .forEach(server -> merged.put(dedupeKey(server), server));
+        }
+        externalByName.values().forEach(server ->
+                merged.putIfAbsent(dedupeKey(server), server));
+        return new PublicMcpRegistryPageDTO(List.copyOf(merged.values()), nextCursor);
+    }
+
     private record Scored(PublicMcpServerDTO server, double score) {
     }
 
@@ -199,13 +244,20 @@ public class PublicMcpRegistryService {
     // ---- External registry (official MCP registry schema) ----
 
     private List<PublicMcpServerDTO> fetchExternal(String query, int limit) {
+        return fetchExternalPage(query, limit, null).servers();
+    }
+
+    private ExternalPage fetchExternalPage(String query, int limit, String cursor) {
         try {
             String base = externalUrl.endsWith("/")
                     ? externalUrl.substring(0, externalUrl.length() - 1)
                     : externalUrl;
-            StringBuilder uri = new StringBuilder(base).append("/v0/servers?limit=").append(limit);
+            StringBuilder uri = new StringBuilder(base).append("/v0.1/servers?limit=").append(limit);
             if (!query.isBlank()) {
                 uri.append("&search=").append(URLEncoder.encode(query, StandardCharsets.UTF_8));
+            }
+            if (cursor != null && !cursor.isBlank()) {
+                uri.append("&cursor=").append(URLEncoder.encode(cursor, StandardCharsets.UTF_8));
             }
             HttpRequest request = HttpRequest.newBuilder(URI.create(uri.toString()))
                     .timeout(Duration.ofMillis(externalTimeoutMs))
@@ -215,22 +267,26 @@ public class PublicMcpRegistryService {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
                 log.warn("External MCP registry returned HTTP {} for query '{}'", response.statusCode(), query);
-                return List.of();
+                return ExternalPage.empty();
             }
-            return parseExternal(response.body());
+            return parseExternalPage(response.body());
         } catch (Exception e) {
             log.warn("External MCP registry lookup failed ({}); using bundled catalog only", e.toString());
-            return List.of();
+            return ExternalPage.empty();
         }
     }
 
     List<PublicMcpServerDTO> parseExternal(String body) {
+        return parseExternalPage(body).servers();
+    }
+
+    ExternalPage parseExternalPage(String body) {
         List<PublicMcpServerDTO> results = new ArrayList<>();
         try {
             JsonNode root = objectMapper.readTree(body);
             JsonNode servers = root.path("servers");
             if (!servers.isArray()) {
-                return results;
+                return ExternalPage.empty();
             }
             for (JsonNode entry : servers) {
                 // Newer registry responses nest the server document under "server".
@@ -240,10 +296,19 @@ public class PublicMcpRegistryService {
                     results.add(mapped);
                 }
             }
+            JsonNode metadata = root.path("metadata");
+            String nextCursor = firstText(metadata, "nextCursor", "next_cursor");
+            return new ExternalPage(List.copyOf(results), nextCursor);
         } catch (Exception e) {
             log.warn("Could not parse external MCP registry response: {}", e.getMessage());
         }
-        return results;
+        return ExternalPage.empty();
+    }
+
+    record ExternalPage(List<PublicMcpServerDTO> servers, String nextCursor) {
+        static ExternalPage empty() {
+            return new ExternalPage(List.of(), null);
+        }
     }
 
     private PublicMcpServerDTO mapExternalServer(JsonNode server) {

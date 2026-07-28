@@ -45,7 +45,10 @@ import { ModelSettingsModal } from './workflow-create/ModelSettingsModal';
 import { cloudProviderPreset } from './workflow-create/modelProviders';
 import { SidebarAiChat } from './workflow-create/SidebarAiChat';
 import { ResourcePlanCard } from './workflow-create/ResourcePlanCard';
-import { takePendingTriagePatch } from './workflow-create/triagePatchStore';
+import {
+  clearPendingTriagePatch,
+  getPendingTriagePatch,
+} from './workflow-create/triagePatchStore';
 import { TrustConfirmationModal } from './workflow-create/TrustConfirmationModal';
 import { WorkflowAiEmptyState } from './workflow-create/WorkflowAiEmptyState';
 import type { TaskResourceOption } from './workflow-create/StateEditorForm';
@@ -340,11 +343,13 @@ export function CreateWorkflowView({
   const [discoverEndpoint, setDiscoverEndpoint] = useState('');
   const [expandedEndpoint, setExpandedEndpoint] = useState<string | null>(null);
   const [managingModels, setManagingModels] = useState(false);
+  const pendingTriagePatch = revisionEdit
+    ? getPendingTriagePatch(revisionEdit.workflow.id)
+    : null;
   const [definitionText, setDefinitionText] = useState(() => {
     // Failure triage may have stashed a proposed fix for this workflow; seed the editor with it
-    // (consumed once) instead of the base revision so "Apply patch" opens the corrected ASL.
-    const patch = revisionEdit ? takePendingTriagePatch(revisionEdit.workflow.id) : null;
-    return formatJson(patch ?? revisionEdit?.baseRevision.definition ?? starterDefinition);
+    // instead of the base revision so "Apply patch" opens the corrected ASL.
+    return formatJson(pendingTriagePatch ?? revisionEdit?.baseRevision.definition ?? starterDefinition);
   });
   const [canvasNodePositions, setCanvasNodePositions] = useState<CanvasNodePositions>(
     revisionEdit?.baseRevision.canvasLayout || {},
@@ -385,11 +390,24 @@ export function CreateWorkflowView({
   const messagesRef = useRef<ChatMessage[]>(messages);
   messagesRef.current = messages;
 
-  // The in-flight websocket turn is keyed by the conversation it belongs to (or a sentinel for a
-  // brand-new one) so it can be re-adopted after the view unmounts and remounts. Revision edits
-  // never run the assistant, so they must not adopt an unrelated new-conversation turn.
+  useEffect(() => {
+    if (!revisionEdit || pendingTriagePatch == null) return;
+
+    // Defer consumption past React Strict Mode's development-only mount/unmount/remount probe.
+    // The probe cancels this first timer, allowing the committed mount to read the same patch.
+    const clearTimer = window.setTimeout(
+      () => clearPendingTriagePatch(revisionEdit.workflow.id),
+      0,
+    );
+    return () => window.clearTimeout(clearTimer);
+  }, [pendingTriagePatch, revisionEdit?.workflow.id]);
+
+  // The in-flight websocket turn is keyed by the conversation it belongs to (or a scoped sentinel
+  // before the first response). Revision edits get their own sentinel so they can use the same AI
+  // sidebar without adopting an unrelated new-workflow turn.
   const generationKey = revisionEdit
-    ? null
+    ? (conversationId
+      ?? `revision:${revisionEdit.workflow.id}:${revisionEdit.baseRevision.revision}`)
     : (conversationId ?? routeChatId ?? routeDraftId ?? NEW_CONVERSATION_KEY);
   const generation = useAiGeneration(generationKey);
   const socketGenerating = generation?.status === 'active';
@@ -1090,11 +1108,15 @@ export function CreateWorkflowView({
     }
 
     if (response.draftWorkflowPayload) {
-      setName(response.draftWorkflowPayload.name || response.conversationName || name);
-      setCronExpression(response.draftWorkflowPayload.cronExpression || '');
-      setTimezone(response.draftWorkflowPayload.timezone || 'UTC');
-      setMaxAttempts(response.draftWorkflowPayload.maxAttempts ?? 3);
-      setIdempotencyKey(response.draftWorkflowPayload.idempotencyKey || idempotencyKey);
+      // Revision editing may use the generated ASL, but workflow-level settings are not part of
+      // an immutable definition revision and must remain unchanged.
+      if (!revisionEdit) {
+        setName(response.draftWorkflowPayload.name || response.conversationName || name);
+        setCronExpression(response.draftWorkflowPayload.cronExpression || '');
+        setTimezone(response.draftWorkflowPayload.timezone || 'UTC');
+        setMaxAttempts(response.draftWorkflowPayload.maxAttempts ?? 3);
+        setIdempotencyKey(response.draftWorkflowPayload.idempotencyKey || idempotencyKey);
+      }
       if (response.draftWorkflowPayload.definition) {
         setDefinitionText(formatJson(response.draftWorkflowPayload.definition));
       }
@@ -1231,7 +1253,7 @@ export function CreateWorkflowView({
           modelDisplayName: selectedModelForSend.label || null,
         }
       : {
-          key: NEW_CONVERSATION_KEY,
+          key: generationKey ?? NEW_CONVERSATION_KEY,
           kind: 'start',
           request: {
             instruction: currentInstruction,
@@ -1876,9 +1898,7 @@ export function CreateWorkflowView({
     ? [...messages, generation.userMessage, generation.assistantMessage]
     : messages;
 
-  // Revision edits stay out of the assistant: starting a conversation routes to /c/<id>, which would
-  // navigate away from the revision being edited, and accepting a plan creates a separate workflow.
-  const sidebarAiChatNode = revisionEdit ? undefined : (
+  const sidebarAiChatNode = (
     <SidebarAiChat
       messages={displayedMessages}
       generating={generating}

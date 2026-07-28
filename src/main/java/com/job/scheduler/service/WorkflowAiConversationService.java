@@ -3,6 +3,7 @@ package com.job.scheduler.service;
 import com.job.scheduler.dto.CreateWorkflowRequestDTO;
 import com.job.scheduler.dto.FunctionDefinitionRequestDTO;
 import com.job.scheduler.dto.FunctionDefinitionResponseDTO;
+import com.job.scheduler.dto.FunctionLanguageDTO;
 import com.job.scheduler.dto.FunctionVersionRequestDTO;
 import com.job.scheduler.dto.FunctionVersionResponseDTO;
 import com.job.scheduler.dto.WorkflowAiProposedFunctionDTO;
@@ -30,6 +31,7 @@ import com.job.scheduler.enums.WorkflowAiConversationStage;
 import com.job.scheduler.enums.WorkflowAiMessageRole;
 import com.job.scheduler.enums.WorkflowAiWorkspaceKind;
 import com.job.scheduler.enums.FunctionStatus;
+import com.job.scheduler.enums.FunctionVersionStatus;
 import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.enums.AiStructuredOutputMode;
 import com.job.scheduler.repository.WorkflowAiConversationRepository;
@@ -60,6 +62,7 @@ import org.springframework.stereotype.Service;
 import tools.jackson.core.json.JsonReadFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
@@ -290,16 +293,19 @@ public class WorkflowAiConversationService {
               Anything external must be an mcpRequirement instead.
             - Function names must be unique lowercase kebab-case matching ^[a-z0-9][a-z0-9-]*$, for example
               "shorten-and-title-case". Never use camelCase, PascalCase, snake_case, spaces, or underscores.
-            - languageId must be selected from the supported function-language list supplied below.
+            - Always use the single AI default languageId and language supplied below. Write sourceCode in that
+              language even if the user names another language, unless they explicitly ask to create it manually.
             - sourceCode must be complete, valid single-file code for that language. It must read exactly one valid
               JSON value from stdin, parse that JSON before transforming it, and write exactly one valid JSON value
               to stdout. Do not print logs or other text to stdout. Never transform or truncate the serialized JSON
               text itself; transform the parsed value, then JSON-serialize the result.
+            - sourceCode is mandatory and must never be null, blank, pseudocode, or moved into finalPlan.
+            - Copy the numeric AI default languageId exactly. Never guess an ID or use a different runtime. If the
+              default is unavailable, do not fabricate a function proposal.
             - Keep sourceCode short, but handle the declared input shape and normal boundary cases. Do not provide
               pseudocode, an incomplete fragment, or code that only prints a hard-coded value.
-            - Include meaningful testCases. Each test case has name, input, expectedOutput, and expectedError; input
-              and expectedOutput are JSON strings. Use expectedError only for an intentional failure case. Cover at
-              least normal and boundary behavior.
+            - Set testCases to null. Tests are generated only after the user approves the function and Voyager creates
+              a draft; Judge0 must validate that draft before the generated tests are saved or the version is published.
             - Include a clear description and a one-line rationale explaining why local deterministic code is the
               correct resource type.
             - Return the complete workflow response contract as one strict JSON object, with no Markdown, comments,
@@ -333,6 +339,7 @@ public class WorkflowAiConversationService {
     private final FunctionRegistryService functionRegistryService;
     private final FunctionRuntimePolicy functionRuntimePolicy;
     private final WorkflowAiProposedFunctionSafetyValidator proposedFunctionSafetyValidator;
+    private final WorkflowAiFunctionQualificationService functionQualificationService;
     private final WorkflowAiTrustReviewService trustReviewService;
     private final ObjectMapper objectMapper;
 
@@ -961,10 +968,42 @@ public class WorkflowAiConversationService {
         conversation.setModelConfig(selectedModel);
 
         List<String> createdResources = new ArrayList<>();
+        List<String> qualificationFailures = new ArrayList<>();
         if (approvedFunctions != null) {
             for (WorkflowAiProposedFunctionDTO function : approvedFunctions) {
-                createdResources.add(provisionFunction(function));
+                WorkflowAiFunctionQualificationService.QualificationResult result =
+                        provisionFunction(function, selectedModel);
+                if (result.qualified()) {
+                    createdResources.add(result.resourceUri());
+                } else {
+                    qualificationFailures.add(
+                            normalizeFunctionName(function.name()) + ": " + result.reason()
+                    );
+                }
             }
+        }
+
+        if (!qualificationFailures.isEmpty()) {
+            String failureMessage = "Function validation failed. The function remains a draft and "
+                    + "no generated tests were saved: " + String.join(" ", qualificationFailures);
+            appendMessage(
+                    conversation,
+                    WorkflowAiMessageRole.SYSTEM,
+                    failureMessage,
+                    null,
+                    selectedModel
+            );
+            conversation.setStage(WorkflowAiConversationStage.RESOURCES_PROPOSED);
+            return response(
+                    conversation,
+                    failureMessage,
+                    readJson(conversation.getDraftAsl()),
+                    qualificationFailures,
+                    readJson(conversation.getFinalPlan()),
+                    readDraftPayload(conversation),
+                    null,
+                    null
+            );
         }
 
         String created = createdResources.isEmpty()
@@ -996,7 +1035,10 @@ public class WorkflowAiConversationService {
         return callAssistant(conversation, task);
     }
 
-    private String provisionFunction(WorkflowAiProposedFunctionDTO function) {
+    private WorkflowAiFunctionQualificationService.QualificationResult provisionFunction(
+            WorkflowAiProposedFunctionDTO function,
+            AiModelConfig modelConfig
+    ) {
         proposedFunctionSafetyValidator.assertSafe(function);
         String requestedName = requireText(function.name(), "Function name");
         String name = normalizeFunctionName(requestedName);
@@ -1022,8 +1064,8 @@ public class WorkflowAiConversationService {
                         FunctionStatus.ENABLED
                 )
         );
-        // Default version status is AVAILABLE, which both publishes the version and activates it as
-        // the function's first active version, so it immediately enters the catalog.
+        // Qualification owns publication. A broken or incomplete generated function must never
+        // become active merely because the user approved its proposal card.
         FunctionVersionResponseDTO version = functionRegistryService.createVersion(
                 created.id(),
                 new FunctionVersionRequestDTO(
@@ -1040,11 +1082,16 @@ public class WorkflowAiConversationService {
                         null,
                         null,
                         "Generated by the Voyager AI workflow builder.",
-                        function.testCases(),
-                        null
+                        List.of(),
+                        FunctionVersionStatus.DRAFT
                 )
         );
-        return "voyager://function/" + name + "@v" + version.version();
+        return functionQualificationService.qualify(
+                function,
+                version,
+                modelConfig,
+                name
+        );
     }
 
     private WorkflowAiResponseDTO callAssistant(
@@ -1089,7 +1136,19 @@ public class WorkflowAiConversationService {
                 prompt.generalTurn() ? "Thinking" : "Designing the workflow",
                 messages
         );
-        if (attempt.hasFunctionProposalSignal()) {
+        // A plain-chat turn must stay chat-only. Small models, still constrained by the full response
+        // schema, often emit a stub aslDefinition ({} or a blank StartAt) even for a greeting; promoting
+        // or validating it wrongly drags the turn into ASL_UNDER_REVIEW. Drop any stray artifact here so
+        // the reply is graded and shown as the conversation it actually is.
+        if (prompt.generalTurn() && attempt.parsed().structured()) {
+            attempt = new AssistantAttempt(
+                    attempt.modelResponse(),
+                    attempt.cleaned(),
+                    attempt.thinkingExtraction(),
+                    chatOnly(attempt.parsed())
+            );
+        }
+        if (!prompt.generalTurn() && attempt.hasFunctionProposalSignal()) {
             attempt = generateAssistantAttempt(
                     model,
                     modelConfig,
@@ -1224,19 +1283,22 @@ public class WorkflowAiConversationService {
             assistantMessage = messageRepository.saveAndFlush(assistantMessage);
         }
 
-        return response(
-                conversation,
-                assistantContent,
-                readJson(conversation.getDraftAsl()),
-                validationIssues,
-                parsed.finalPlan() == null
-                        ? readJson(conversation.getFinalPlan())
-                        : parsed.finalPlan(),
-                parsed.draftWorkflowPayload() == null
-                        ? readDraftPayload(conversation)
-                        : parsed.draftWorkflowPayload(),
-                null,
-                message(assistantMessage)
+        return withRawReply(
+                response(
+                        conversation,
+                        assistantContent,
+                        readJson(conversation.getDraftAsl()),
+                        validationIssues,
+                        parsed.finalPlan() == null
+                                ? readJson(conversation.getFinalPlan())
+                                : parsed.finalPlan(),
+                        parsed.draftWorkflowPayload() == null
+                                ? readDraftPayload(conversation)
+                                : parsed.draftWorkflowPayload(),
+                        null,
+                        message(assistantMessage)
+                ),
+                boundedExcerpt(attempt.cleaned(), 4000)
         );
     }
 
@@ -1339,9 +1401,11 @@ public class WorkflowAiConversationService {
                 modelResolver.recordStructuredOutputMode(modelConfig, mode);
                 return response;
             } catch (RuntimeException exception) {
+                boolean recoverableStructuredOutput = isStructuredOutputRejection(exception)
+                        || isStructuredContentDeserializationFailure(exception);
                 if (isUnrecoverableProviderError(exception)
                         || isConnectionFailure(exception)
-                        || !isStructuredOutputRejection(exception)) {
+                        || !recoverableStructuredOutput) {
                     throw exception;
                 }
                 AiStructuredOutputMode fallback = weakerStructuredOutputMode(mode);
@@ -1349,7 +1413,7 @@ public class WorkflowAiConversationService {
                     throw exception;
                 }
                 log.info(
-                        "AI endpoint {} rejected structured output mode {} ({}); retrying with {}",
+                        "AI endpoint {} could not use structured output mode {} ({}); retrying with {}",
                         modelConfig.getBaseUrl(),
                         mode,
                         exception.getMessage(),
@@ -1414,6 +1478,34 @@ public class WorkflowAiConversationService {
                     || lowered.contains("unrecognized")
                     || lowered.contains("couldn't be met")
                     || lowered.contains("could not be met"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * True when the provider accepted the request but returned {@code message.content} as a JSON object
+     * instead of a string, so the OpenAI client cannot deserialize the response.
+     *
+     * <p>Some OpenAI-compatible endpoints (observed on Cloudflare Workers AI for certain models) inline
+     * the parsed structured output as an object under {@code content} in schema/JSON modes. The client
+     * types that field as a {@code String} and throws before any content reaches Voyager. This is an
+     * HTTP-200 body-shape mismatch, not a request rejection, so it must trigger the same downgrade
+     * ladder — falling back to a mode where the provider returns {@code content} as plain text.
+     */
+    private boolean isStructuredContentDeserializationFailure(Throwable failure) {
+        for (Throwable current = failure; current != null;
+             current = current.getCause() == current ? null : current.getCause()) {
+            String message = current.getMessage();
+            if (message == null) {
+                continue;
+            }
+            String lowered = message.toLowerCase(Locale.ROOT);
+            if (lowered.contains("cannot deserialize value of type")
+                    && lowered.contains("java.lang.string")
+                    && lowered.contains("from object value")
+                    && lowered.contains("content")) {
                 return true;
             }
         }
@@ -1805,7 +1897,7 @@ public class WorkflowAiConversationService {
             );
         }
         repairMessages.add(AiMessage.aiMessage(rejectedResponse));
-        repairMessages.add(UserMessage.userMessage("""
+        String repairInstruction = """
                 Your previous response was rejected, often because the JSON was truncated or incomplete.
                 Return exactly one COMPLETE strict JSON object matching the workflow response contract; keep it small
                 enough to finish in full, with brief reasoning.
@@ -1822,6 +1914,10 @@ public class WorkflowAiConversationService {
                 math, hashing, validation, or formatting. Scheduling is opt-in: do not ask about frequency, cron, or
                 timezone unless the user explicitly requested a schedule.
                 Re-read the available Voyager Task catalog in the system context and keep every matching exact URI.
+                If a rejection says an MCP capability already exists as voyager://mcp/..., do not propose that
+                capability again. Remove it from resourcePlan and generate an aslDefinition whose Task Resource is
+                that exact URI. The Task must use JSONata Arguments and Output; never use InputPath, ResultPath,
+                ResultSelector, OutputPath, or a draft payload with $StartAt.
                 In Task Arguments use $states.input or $states.context only, never $states.result. Use $states.result
                 only inside that same Task's Output. State output becomes the next state's $states.input, so preserve
                 each result under a named Output property and read it later from $states.input.<property>.
@@ -1833,8 +1929,19 @@ public class WorkflowAiConversationService {
                 guessing a nested wrapper property.
                 End the last requested Task with End:true instead of adding a terminal Pass. Pass uses Output,
                 never the JSONPath-only Result field.
+                When repairing a function proposal, return only the small RESOURCES_PROPOSED response needed now:
+                stage, message, and resourcePlan. Omit aslDefinition, finalPlan, and draftWorkflowPayload. Every
+                proposed function must contain name, description, the AI default languageId, non-null complete
+                sourceCode, testCases:null, and rationale.
                 Rejection reasons:
-                """ + String.join("\n", validationIssues)));
+                """ + String.join("\n", validationIssues);
+        if (includeFunctionCreationContract) {
+            // Repeat the short dynamic list at the very end. Small models often replace an earlier
+            // catalog value with a memorized Judge0 ID (for example 13 for JavaScript).
+            repairInstruction += "\n\nCopy the AI default languageId exactly:\n"
+                    + resourceCatalogService.buildFunctionCreationContext();
+        }
+        repairMessages.add(UserMessage.userMessage(repairInstruction));
         return repairMessages;
     }
 
@@ -1851,10 +1958,17 @@ public class WorkflowAiConversationService {
         reviewMessages.add(UserMessage.userMessage("""
                 You chose to propose one or more functions. Re-review the complete proposal against the
                 function creation contract. Correct the function names, language IDs, source code, JSON I/O,
-                test cases, descriptions, and rationales. If a proposed function actually needs a network,
+                descriptions, and rationales. If a proposed function actually needs a network,
                 external service, or credential, replace it with an mcpRequirement. Return the complete corrected
-                workflow response as strict JSON only.
-                """));
+                response as strict JSON only, using this minimal shape:
+                {"stage":"RESOURCES_PROPOSED","message":"<brief>","resourcePlan":{"functions":[{
+                "name":"<kebab-case>","description":"<brief>","languageId":<exact AI default numeric ID>,
+                "sourceCode":"<complete escaped single-file program>","testCases":null,
+                "rationale":"<brief>"}],"mcpRequirements":[]}}
+                Omit aslDefinition, finalPlan, and draftWorkflowPayload. sourceCode must not be null.
+                
+                Copy the AI default languageId below immediately before answering:
+                """ + resourceCatalogService.buildFunctionCreationContext()));
         return reviewMessages;
     }
 
@@ -1862,6 +1976,25 @@ public class WorkflowAiConversationService {
         return FUNCTION_CREATION_PROMPT
                 + "\n\n"
                 + resourceCatalogService.buildFunctionCreationContext();
+    }
+
+    /**
+     * Strips every workflow artifact from a parsed reply, keeping only the stage and message, so a
+     * general-chat turn is treated as pure conversation. The stage is pinned to
+     * COLLECTING_WORKFLOW_DETAILS because a chat turn never advances the build.
+     */
+    private ParsedAssistantResponse chatOnly(ParsedAssistantResponse parsed) {
+        return new ParsedAssistantResponse(
+                WorkflowAiConversationStage.COLLECTING_WORKFLOW_DETAILS,
+                parsed.message(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                true,
+                null
+        );
     }
 
     private List<String> validateAssistantAttempt(
@@ -1902,6 +2035,7 @@ public class WorkflowAiConversationService {
         if (parsed.hasResourcePlan()) {
             if (parsed.resourcePlan().functions() != null) {
                 Set<String> proposedFunctionNames = new HashSet<>();
+                FunctionLanguageDTO defaultLanguage = functionRuntimePolicy.aiDefaultLanguage();
                 for (WorkflowAiProposedFunctionDTO function :
                         parsed.resourcePlan().functions()) {
                     if (function == null) {
@@ -1919,21 +2053,23 @@ public class WorkflowAiConversationService {
                                         + functionName
                         );
                     }
-                    if (function.languageId() == null) {
+                    if (defaultLanguage == null) {
+                        issues.add(
+                                "[AI_RESOURCE_PLAN] No AI default function language is available."
+                        );
+                    } else if (function.languageId() == null) {
                         issues.add(
                                 "[AI_RESOURCE_PLAN] Function '" + functionName
-                                        + "' is missing a languageId."
+                                        + "' is missing languageId. Always use "
+                                        + defaultLanguage.id() + " (" + defaultLanguage.name() + ")."
                         );
-                    } else {
-                        try {
-                            functionRuntimePolicy.assertLanguageSupported(function.languageId());
-                        } catch (IllegalArgumentException exception) {
-                            issues.add(
-                                    "[AI_RESOURCE_PLAN] Function '" + functionName
-                                            + "' uses an unsupported languageId: "
-                                            + function.languageId()
-                            );
-                        }
+                    } else if (function.languageId() != defaultLanguage.id()) {
+                        issues.add(
+                                "[AI_RESOURCE_PLAN] Function '" + functionName
+                                        + "' must use the AI default languageId "
+                                        + defaultLanguage.id() + " (" + defaultLanguage.name()
+                                        + "), not " + function.languageId() + "."
+                        );
                     }
                     if (optionalText(function.sourceCode()) == null) {
                         issues.add(
@@ -2610,7 +2746,7 @@ public class WorkflowAiConversationService {
 
     private ParsedAssistantResponse parseAssistantResponse(String value) {
         try {
-            JsonNode root = LENIENT_MODEL_MAPPER.readTree(value);
+            JsonNode root = normalizeAslDefinition(LENIENT_MODEL_MAPPER.readTree(value));
             if (root == null || !root.isObject()) {
                 throw new IllegalArgumentException("Response root must be a JSON object");
             }
@@ -2628,8 +2764,9 @@ public class WorkflowAiConversationService {
                 );
             }
             WorkflowAiConversationStage stage = parseStage(root.path("stage"));
-            String message = root.path("message").isString()
-                    ? root.path("message").stringValue()
+            JsonNode messageNode = root.get("message");
+            String message = messageNode != null && messageNode.isTextual()
+                    ? messageNode.textValue()
                     : null;
             JsonNode resourcePlanNode = root.get("resourcePlan");
             WorkflowAiResourcePlanDTO resourcePlan = resourcePlanNode == null
@@ -2649,9 +2786,34 @@ public class WorkflowAiConversationService {
                         "Response must include a recognized stage"
                 );
             }
-            JsonNode asl = root.get("aslDefinition");
+            JsonNode asl = normalizeAslDefinition(root.get("aslDefinition"));
+            if (asl != null && asl.isObject() && asl.isEmpty()) {
+                // A model that emits an empty aslDefinition ({}) alongside a resource proposal or plan
+                // means "no ASL yet", not a malformed one. Treat it as absent so the stray placeholder
+                // does not fail ASL validation and discard an otherwise-valid response (e.g. a genuine
+                // mcpRequirement). A partially-filled ASL is still kept and reported as invalid.
+                asl = null;
+            }
             JsonNode finalPlan = root.get("finalPlan");
             JsonNode draftPayloadNode = root.get("draftWorkflowPayload");
+            if (draftPayloadNode != null
+                    && draftPayloadNode.isObject()
+                    && draftPayloadNode.has("definition")) {
+                ((ObjectNode) draftPayloadNode).set(
+                        "definition",
+                        normalizeAslDefinition(draftPayloadNode.get("definition"))
+                );
+            }
+            if (stage == WorkflowAiConversationStage.RESOURCES_PROPOSED
+                    && hasResourcePlan
+                    && !looksLikeAsl(asl)) {
+                // Resource discovery precedes workflow generation. Some weaker models append a
+                // pseudo-workflow or an illustrative, non-ASL object to an otherwise valid resource
+                // proposal. It is not an executable candidate and must not invalidate the proposal.
+                asl = null;
+                finalPlan = null;
+                draftPayloadNode = null;
+            }
             CreateWorkflowRequestDTO draftPayload = draftPayloadNode == null
                     || draftPayloadNode.isNull()
                     ? null
@@ -2831,7 +2993,31 @@ public class WorkflowAiConversationService {
                 inferredResourcePlanMessageId(conversation),
                 workflow == null ? null : workflow.id(),
                 workflow,
-                assistantMessage
+                assistantMessage,
+                null
+        );
+    }
+
+    /** Returns a copy of the response carrying the raw model reply for diagnostics. */
+    private WorkflowAiResponseDTO withRawReply(
+            WorkflowAiResponseDTO response,
+            String rawAssistantReply
+    ) {
+        return new WorkflowAiResponseDTO(
+                response.conversationId(),
+                response.conversationName(),
+                response.stage(),
+                response.message(),
+                response.aslDefinition(),
+                response.validationIssues(),
+                response.finalPlan(),
+                response.draftWorkflowPayload(),
+                response.resourcePlan(),
+                response.resourcePlanMessageId(),
+                response.workflowId(),
+                response.workflow(),
+                response.assistantMessage(),
+                rawAssistantReply
         );
     }
 
@@ -3002,7 +3188,12 @@ public class WorkflowAiConversationService {
                                 function.description(),
                                 function.languageId(),
                                 function.sourceCode(),
-                                function.testCases(),
+                                // Tests are never carried on an AI proposal — they are generated later,
+                                // independently, in the Functions section after the user approves the
+                                // draft. Drop whatever the model emitted so a stray or hallucinated test
+                                // case (models routinely ignore the "set testCases to null" instruction)
+                                // never rides along with the proposal.
+                                null,
                                 function.rationale()
                         ))
                 .toList();
@@ -3133,12 +3324,12 @@ public class WorkflowAiConversationService {
     }
 
     private WorkflowAiConversationStage parseStage(JsonNode node) {
-        if (node == null || !node.isString()) {
+        if (node == null || !node.isTextual()) {
             return null;
         }
         try {
             return WorkflowAiConversationStage.valueOf(
-                    node.stringValue().trim().toUpperCase(Locale.ROOT)
+                    node.textValue().trim().toUpperCase(Locale.ROOT)
             );
         } catch (IllegalArgumentException exception) {
             return null;
@@ -3147,6 +3338,70 @@ public class WorkflowAiConversationService {
 
     private boolean looksLikeAsl(JsonNode root) {
         return root != null && root.isObject() && root.has("StartAt") && root.has("States");
+    }
+
+    /**
+     * Repairs only unambiguous structural/casing mistakes made by weaker models. Semantic
+     * conversions (for example JSONPath fields to JSONata) remain the model repair loop's job.
+     */
+    private JsonNode normalizeAslDefinition(JsonNode candidate) {
+        if (candidate == null || !candidate.isObject()) {
+            return candidate;
+        }
+        ObjectNode normalized = (ObjectNode) candidate.deepCopy();
+        JsonNode lowerStartAt = normalized.get("startAt");
+        if (!normalized.has("StartAt")
+                && lowerStartAt != null
+                && lowerStartAt.isTextual()) {
+            normalized.set("StartAt", lowerStartAt);
+            normalized.remove("startAt");
+        }
+        if (!normalized.has("States") && normalized.path("states").isObject()) {
+            normalized.set("States", normalized.get("states"));
+            normalized.remove("states");
+        }
+        JsonNode startAtNode = normalized.get("StartAt");
+        if (normalized.has("States")
+                || startAtNode == null
+                || !startAtNode.isTextual()) {
+            return normalized;
+        }
+
+        String startAt = startAtNode.textValue();
+        JsonNode startState = normalized.get(startAt);
+        JsonNode startType = startState == null ? null : startState.get("Type");
+        if (startState == null
+                || !startState.isObject()
+                || startType == null
+                || !startType.isTextual()) {
+            return normalized;
+        }
+
+        ObjectNode states = objectMapper.createObjectNode();
+        normalized.properties().forEach(entry -> {
+            JsonNode value = entry.getValue();
+            if (!Set.of("StartAt", "Comment", "TimeoutSeconds", "QueryLanguage", "Version")
+                    .contains(entry.getKey())
+                    && value.isObject()
+                    && value.get("Type") != null
+                    && value.get("Type").isTextual()) {
+                states.set(entry.getKey(), value);
+            }
+        });
+        if (!states.has(startAt)) {
+            return normalized;
+        }
+
+        ObjectNode machine = objectMapper.createObjectNode();
+        for (String field : List.of(
+                "Comment", "StartAt", "TimeoutSeconds", "QueryLanguage", "Version"
+        )) {
+            if (normalized.has(field)) {
+                machine.set(field, normalized.get(field));
+            }
+        }
+        machine.set("States", states);
+        return machine;
     }
 
     private String stripMarkdown(String rawOutput) {

@@ -274,6 +274,7 @@ class AiModelControllerTest {
                 false,
                 null,
                 null,
+                null,
                 Instant.parse("2026-07-26T00:00:00Z"),
                 status == AiModelEvaluationStatus.COMPLETED
                         ? Instant.parse("2026-07-26T00:01:00Z")

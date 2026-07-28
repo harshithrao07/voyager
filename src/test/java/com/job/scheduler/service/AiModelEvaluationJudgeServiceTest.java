@@ -76,6 +76,7 @@ class AiModelEvaluationJudgeServiceTest {
                 null,
                 null,
                 null,
+                null,
                 null
         );
     }
