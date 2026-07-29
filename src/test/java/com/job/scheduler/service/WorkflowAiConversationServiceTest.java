@@ -323,6 +323,181 @@ class WorkflowAiConversationServiceTest {
     }
 
     @Test
+    void normalizesTerminalSucceedAndEmbeddedDraftDefinition() throws Exception {
+        JsonNode expected = objectMapper.readTree("""
+                {"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}
+                """);
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"ASL_READY","message":"Created the Succeed workflow.",
+                 "aslDefinition":{"StartAt":"Done","States":{"Done":{
+                   "Type":"Succeed","End":true}}},
+                 "draftWorkflowPayload":{"name":"DoneWorkflow",
+                   "definition":"{\\"StartAt\\":\\"Done\\",\\"States\\":{\\"Done\\":{\\"Type\\":\\"Succeed\\",\\"End\\":true}}}",
+                   "idempotencyKey":"done-workflow-1"},
+                 "resourcePlan":{"functions":[],"mcpRequirements":[]}}
+                """)));
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Create a workflow with exactly one Succeed state named Done. It is not scheduled.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(response.aslDefinition()).isEqualTo(expected);
+        assertThat(response.draftWorkflowPayload().definition()).isEqualTo(expected);
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel).chat(anyList());
+    }
+
+    @Test
+    void recoversExplicitSingleSucceedStateFromArrayDraft() throws Exception {
+        JsonNode expected = objectMapper.readTree("""
+                {"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}
+                """);
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"COLLECTING_WORKFLOW_DETAILS",
+                 "message":"The workflow has one Succeed state named Done.",
+                 "aslDefinition":{},
+                 "finalPlan":{},
+                 "draftWorkflowPayload":{
+                   "name":"Unscheduled Workflow",
+                   "cronExpression":null,
+                   "definition":[{"Type":"Succeed","Result":{},"Next":"Done"}]
+                 },
+                 "resourcePlan":null}
+                """)));
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Create a workflow with exactly one Succeed state named Done. It is not scheduled.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(response.aslDefinition()).isEqualTo(expected);
+        assertThat(response.draftWorkflowPayload()).isNull();
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel).chat(anyList());
+    }
+
+    @Test
+    void promotesValidDraftAslAfterRemovingMisplacedMachineEnd() throws Exception {
+        JsonNode expected = objectMapper.readTree("""
+                {"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}
+                """);
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"COLLECTING_WORKFLOW_DETAILS",
+                 "message":"Correcting the final state.",
+                 "aslDefinition":{},
+                 "finalPlan":{},
+                 "draftWorkflowPayload":{
+                   "name":"","cronExpression":null,"timezone":null,
+                   "maxAttempts":0,"idempotencyKey":"",
+                   "definition":{"StartAt":"Done","States":{
+                     "Done":{"Type":"Succeed"}},"End":true}
+                 },
+                 "resourcePlan":null}
+                """)));
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Create a workflow with exactly one Succeed state named Done. It is not scheduled.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(response.aslDefinition()).isEqualTo(expected);
+        assertThat(response.draftWorkflowPayload()).isNull();
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel).chat(anyList());
+    }
+
+    @Test
+    void recoversAslHiddenInPrematureFinalPlan() throws Exception {
+        JsonNode expected = objectMapper.readTree("""
+                {"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}
+                """);
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"PLAN_READY","message":"","aslDefinition":{},
+                 "finalPlan":{"name":"My Workflow","maxAttempts":1,
+                   "definition":{"StartAt":"Done","States":{"Done":{
+                     "Type":"Succeed","End":true}}}},
+                 "draftWorkflowPayload":{},"resourcePlan":null}
+                """)));
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Create a workflow with exactly one Succeed state named Done. It is not scheduled.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(response.aslDefinition()).isEqualTo(expected);
+        assertThat(response.finalPlan()).isNull();
+        assertThat(response.draftWorkflowPayload()).isNull();
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel).chat(anyList());
+    }
+
+    @Test
+    void rejectsFunctionProposedForBuiltInSucceedState() {
+        String unnecessaryFunction = """
+                {"stage":"RESOURCES_PROPOSED","message":"Proposing Succeed logic.",
+                 "resourcePlan":{"functions":[{
+                   "name":"succeed-state-logic","description":"Ends successfully",
+                   "languageId":71,"sourceCode":"import json,sys\\njson.dump({},sys.stdout)",
+                   "rationale":"Required to end the workflow"}],"mcpRequirements":[]}}
+                """;
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from(unnecessaryFunction)),
+                aiResponse(AiMessage.from(unnecessaryFunction)),
+                aiResponse(AiMessage.from("""
+                        {"stage":"ASL_READY","message":"Created the Succeed workflow.",
+                         "aslDefinition":{"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}}
+                        """))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Create a workflow with exactly one Succeed state named Done. It is not scheduled.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(response.aslDefinition().path("States").path("Done").path("Type").asText())
+                .isEqualTo("Succeed");
+        assertThat(response.resourcePlan()).isNull();
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel, times(3)).chat(anyList());
+    }
+
+    @Test
     void startConversationIncludesLiveFunctionAndMcpCatalog() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
@@ -855,7 +1030,7 @@ class WorkflowAiConversationServiceTest {
                         null
                 )));
         // Even for a greeting the model, still constrained by the full schema, emits a stub ASL.
-        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(aiResponse(AiMessage.from("""
                 {"stage":"ASL_UNDER_REVIEW","message":"Doing great, thanks for asking!","aslDefinition":{}}
                 """)));
 
@@ -872,6 +1047,96 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.aslDefinition()).isNull();
         assertThat(response.validationIssues()).isEmpty();
         assertThat(response.message()).isEqualTo("Doing great, thanks for asking!");
+        verifyNoInteractions(aslDefinitionValidator);
+    }
+
+    @Test
+    void malformedGeneralChatUsesChatOnlyRepairAndDropsInventedFunction() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId()))
+                .thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenAnswer(invocation -> List.of(message(
+                        invocation.getArgument(0),
+                        WorkflowAiMessageRole.USER,
+                        "Hi buddy, how are you?",
+                        null
+                )));
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(
+                aiResponse(AiMessage.from("""
+                        {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"Doing great!"
+                        """)),
+                aiResponse(AiMessage.from("""
+                        {"stage":"RESOURCES_PROPOSED",
+                         "message":"Doing great, thanks for asking!",
+                         "resourcePlan":{"functions":[{
+                           "name":"process-test-key","description":"Processes a key",
+                           "languageId":71,"sourceCode":"print(1)",
+                           "rationale":"Invented by the model"}],"mcpRequirements":[]}}
+                        """))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Hi buddy, how are you?",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage())
+                .isEqualTo(WorkflowAiConversationStage.COLLECTING_WORKFLOW_DETAILS);
+        assertThat(response.message()).isEqualTo("Doing great, thanks for asking!");
+        assertThat(response.resourcePlan()).isNull();
+        assertThat(response.aslDefinition()).isNull();
+        assertThat(response.validationIssues()).isEmpty();
+        ArgumentCaptor<ChatRequest> promptCaptor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModel, times(2)).chat(promptCaptor.capture());
+        assertThat(promptCaptor.getAllValues().get(1).messages().toString())
+                .contains("Answer the user's conversational message again")
+                .doesNotContain("FUNCTION CREATION CONTRACT")
+                .doesNotContain("AI DEFAULT FUNCTION LANGUAGE");
+        assertThat(promptCaptor.getAllValues())
+                .allSatisfy(request -> assertThat(request.maxOutputTokens())
+                        .isEqualTo(512));
+        verifyNoInteractions(aslDefinitionValidator);
+    }
+
+    @Test
+    void initialGeneralQuestionUsesInstructionWhenSavedHistoryIsNotYetVisible() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"COLLECTING_WORKFLOW_DETAILS",
+                 "message":"A cron expression schedules recurring work using time fields.",
+                 "aslDefinition":{},
+                 "finalPlan":{"kind":"INFO"},
+                 "draftWorkflowPayload":{"name":"Cron explainer"},
+                 "resourcePlan":{"functions":[{
+                   "name":"explain-cron","description":"Explains cron","languageId":71,
+                   "sourceCode":"print(1)","rationale":"explanation"}],"mcpRequirements":[]}}
+                """)));
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Explain what a cron expression is in one short paragraph.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage())
+                .isEqualTo(WorkflowAiConversationStage.COLLECTING_WORKFLOW_DETAILS);
+        assertThat(response.message()).contains("cron expression");
+        assertThat(response.aslDefinition()).isNull();
+        assertThat(response.resourcePlan()).isNull();
+        assertThat(response.finalPlan()).isNull();
+        assertThat(response.draftWorkflowPayload()).isNull();
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel).chat(argThat(
+                (ChatRequest request) ->
+                        Integer.valueOf(512).equals(request.maxOutputTokens())
+        ));
         verifyNoInteractions(aslDefinitionValidator);
     }
 
@@ -989,6 +1254,38 @@ class WorkflowAiConversationServiceTest {
                         .isEqualTo("fetch current weather by city"));
         assertThat(response.validationIssues()).isEmpty();
         verify(chatModel).chat(anyList());
+        verifyNoInteractions(aslDefinitionValidator);
+    }
+
+    @Test
+    void ignoresPrematureAslWhileMcpCapabilityIsStillMissing() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(resourceCatalogService.findMcpRequirementMatches(any())).thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"RESOURCES_PROPOSED","message":"Attach a weather service.",
+                 "aslDefinition":{"StartAt":"FetchWeather","States":{"FetchWeather":{
+                   "Type":"Task","Resource":"voyager://system/webhook",
+                   "Arguments":{"url":"https://example.invalid/weather"},"Next":"End"}},"End":true},
+                 "resourcePlan":{"functions":[],"mcpRequirements":[{
+                   "capability":"fetch current weather by city",
+                   "reason":"live weather requires an external service"}]}}
+                """)));
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Fetch current weather for Mangaluru from a live service.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage())
+                .isEqualTo(WorkflowAiConversationStage.RESOURCES_PROPOSED);
+        assertThat(response.aslDefinition()).isNull();
+        assertThat(response.resourcePlan().mcpRequirements()).hasSize(1);
+        assertThat(response.validationIssues()).isEmpty();
         verifyNoInteractions(aslDefinitionValidator);
     }
 
@@ -2631,6 +2928,100 @@ class WorkflowAiConversationServiceTest {
         assertThat(promptCaptor.getAllValues().get(2).toString())
                 .contains("FUNCTION CREATION CONTRACT")
                 .contains("AI DEFAULT FUNCTION LANGUAGE");
+    }
+
+    @Test
+    void repairsExplicitLocalFunctionMisclassifiedAsMcp() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(resourceCatalogService.findMcpRequirementMatches(any())).thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from("""
+                        {"stage":"RESOURCES_PROPOSED","message":"Use a crypto service.",
+                         "resourcePlan":{"functions":[],"mcpRequirements":[{
+                           "capability":"Hashing","suggestedToolName":"crypto library",
+                           "reason":"Compute a SHA-256 digest"}]}}
+                        """)),
+                aiResponse(AiMessage.from("""
+                        {"stage":"RESOURCES_PROPOSED","message":"Review the local hash function.",
+                         "resourcePlan":{"functions":[{
+                           "name":"sha256-hex","description":"Computes a SHA-256 hexadecimal digest",
+                           "languageId":71,
+                           "sourceCode":"import hashlib,json,sys\\nvalue=json.load(sys.stdin)\\njson.dump(hashlib.sha256(value.encode()).hexdigest(),sys.stdout)",
+                           "testCases":null,
+                           "rationale":"hashing is deterministic local computation"}],
+                           "mcpRequirements":[]}}
+                        """))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Create a workflow that computes SHA-256. If needed, propose a deterministic local function.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage())
+                .isEqualTo(WorkflowAiConversationStage.RESOURCES_PROPOSED);
+        assertThat(response.resourcePlan().functions())
+                .singleElement()
+                .satisfies(function -> assertThat(function.name()).isEqualTo("sha256-hex"));
+        assertThat(response.resourcePlan().mcpRequirements()).isEmpty();
+        assertThat(response.validationIssues()).isEmpty();
+        ArgumentCaptor<List<ChatMessage>> promptCaptor = ArgumentCaptor.forClass(List.class);
+        verify(chatModel, times(2)).chat(promptCaptor.capture());
+        assertThat(promptCaptor.getAllValues().get(1).toString())
+                .contains("FUNCTION CREATION CONTRACT")
+                .contains("explicitly requested a deterministic local function")
+                .contains("AI DEFAULT FUNCTION LANGUAGE");
+    }
+
+    @Test
+    void repairsInventedTaskResourceForExplicitLocalFunction() {
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
+                .thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(
+                aiResponse(AiMessage.from("""
+                        {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"Building the hash workflow.",
+                         "aslDefinition":{"StartAt":"Hash","States":{"Hash":{
+                           "Type":"Task","Resource":"voyager://system/hash-callback@v3.10.2",
+                           "Arguments":{"input":"{% $states.input %}"},"End":true}},"Version":""},
+                         "draftWorkflowPayload":{"name":"Compute SHA-256",
+                           "idempotencyKey":"compute-sha256",
+                           "definition":{"StartAt":"Hash","States":{"Hash":{
+                             "Type":"Task","Resource":"voyager://system/hash-callback@v3.10.2",
+                             "Arguments":{"input":"{% $states.input %}"},"End":true}},"Version":""}}}
+                        """)),
+                aiResponse(AiMessage.from("""
+                        {"stage":"RESOURCES_PROPOSED","message":"Review the local hash function.",
+                         "resourcePlan":{"functions":[{
+                           "name":"sha256-hex","description":"Computes a SHA-256 hexadecimal digest",
+                           "languageId":71,
+                           "sourceCode":"import hashlib,json,sys\\nvalue=json.load(sys.stdin)\\njson.dump(hashlib.sha256(value.encode()).hexdigest(),sys.stdout)",
+                           "testCases":null,
+                           "rationale":"hashing is deterministic local computation"}],
+                           "mcpRequirements":[]}}
+                        """))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "Create SHA-256 digest workflow; propose a deterministic local function if missing.",
+                modelConfig.getId(),
+                null,
+                null
+        );
+
+        assertThat(response.stage())
+                .isEqualTo(WorkflowAiConversationStage.RESOURCES_PROPOSED);
+        assertThat(response.resourcePlan().functions())
+                .singleElement()
+                .satisfies(function -> assertThat(function.name()).isEqualTo("sha256-hex"));
+        assertThat(response.validationIssues()).isEmpty();
+        verify(chatModel, times(2)).chat(anyList());
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.job.scheduler.controller;
 
 import com.job.scheduler.dto.AiModelConfigDTO;
 import com.job.scheduler.dto.AiModelEvaluationDTO;
+import com.job.scheduler.dto.AiModelEvaluationHistoryDTO;
 import com.job.scheduler.dto.AiModelTestResponseDTO;
 import com.job.scheduler.enums.AiModelEvaluationMode;
 import com.job.scheduler.enums.AiModelEvaluationStatus;
@@ -222,6 +223,24 @@ class AiModelControllerTest {
                 .andExpect(jsonPath("$.status").value("RUNNING"));
 
         verify(aiModelEvaluationService).start(modelId, AiModelEvaluationMode.RELIABILITY, null);
+    }
+
+    @Test
+    void listsPaginatedEvaluationHistoryForAModel() throws Exception {
+        UUID modelId = UUID.randomUUID();
+        AiModelEvaluationDTO evaluation = evaluation(AiModelEvaluationStatus.COMPLETED);
+        when(aiModelEvaluationService.history(modelId, 1, 5)).thenReturn(
+                new AiModelEvaluationHistoryDTO(List.of(evaluation), 1, 5, 8, 2)
+        );
+
+        mockMvc.perform(get("/app/v1/ai/models/{modelId}/evaluations", modelId)
+                        .queryParam("page", "1")
+                        .queryParam("size", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.runs[0].runId").value(evaluation.runId().toString()))
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.totalElements").value(8))
+                .andExpect(jsonPath("$.totalPages").value(2));
     }
 
     @Test

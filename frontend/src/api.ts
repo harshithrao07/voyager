@@ -228,6 +228,14 @@ export interface AiModelEvaluationDTO {
   finishedAt?: string | null;
 }
 
+export interface AiModelEvaluationHistoryDTO {
+  runs: AiModelEvaluationDTO[];
+  page: number;
+  size: number;
+  totalElements: number;
+  totalPages: number;
+}
+
 export interface CreateWorkflowRequest {
   name: string;
   cronExpression?: string | null;
@@ -1082,6 +1090,20 @@ export function listAllAiModels(): Promise<AiModelConfigDTO[]> {
 
 export function listLatestAiModelEvaluations(): Promise<AiModelEvaluationDTO[]> {
   return getJson<AiModelEvaluationDTO[]>('/app/v1/ai/models/evaluations/latest');
+}
+
+export function listAiModelEvaluationHistory(
+  modelId: string,
+  page = 0,
+  size = 10,
+): Promise<AiModelEvaluationHistoryDTO> {
+  const query = new URLSearchParams({
+    page: String(page),
+    size: String(size),
+  });
+  return getJson<AiModelEvaluationHistoryDTO>(
+    `/app/v1/ai/models/${encodeURIComponent(modelId)}/evaluations?${query.toString()}`,
+  );
 }
 
 export function startAiModelEvaluation(

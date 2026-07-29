@@ -58,6 +58,63 @@ CREATE INDEX IF NOT EXISTS idx_ai_model_configs_enabled
 CREATE INDEX IF NOT EXISTS idx_ai_model_configs_default
     ON ai_model_configs (default_model);
 
+CREATE TABLE IF NOT EXISTS ai_model_evaluation_runs (
+    id UUID PRIMARY KEY,
+    model_config_id UUID NOT NULL
+        REFERENCES ai_model_configs (id) ON DELETE CASCADE,
+    model_display_name VARCHAR(255) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    mode VARCHAR(32) NOT NULL,
+    repetitions INTEGER NOT NULL,
+    completed_cases INTEGER NOT NULL,
+    total_cases INTEGER NOT NULL,
+    cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    result JSONB,
+    error TEXT,
+    started_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    finished_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_model_evaluation_runs_model_started
+    ON ai_model_evaluation_runs (model_config_id, started_at DESC);
+
+-- Preserve the latest result from installations that predate the run ledger.
+INSERT INTO ai_model_evaluation_runs (
+    id,
+    model_config_id,
+    model_display_name,
+    status,
+    mode,
+    repetitions,
+    completed_cases,
+    total_cases,
+    cancel_requested,
+    result,
+    error,
+    started_at,
+    finished_at
+)
+SELECT
+    evaluation_run_id,
+    id,
+    display_name,
+    evaluation_status,
+    evaluation_mode,
+    COALESCE(evaluation_repetitions, 0),
+    COALESCE(evaluation_completed_cases, 0),
+    COALESCE(evaluation_total_cases, 0),
+    evaluation_cancel_requested,
+    evaluation_result,
+    evaluation_error,
+    evaluation_started_at,
+    evaluation_finished_at
+FROM ai_model_configs
+WHERE evaluation_run_id IS NOT NULL
+  AND evaluation_status IS NOT NULL
+  AND evaluation_mode IS NOT NULL
+  AND evaluation_started_at IS NOT NULL
+ON CONFLICT (id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS workflow_ai_conversations (
     id UUID PRIMARY KEY,
     name VARCHAR(255) NOT NULL,

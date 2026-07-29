@@ -14,6 +14,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 @Component
 @RequiredArgsConstructor
@@ -23,6 +24,26 @@ public class WorkflowAiModelResolver {
     // Reasoning-capable local models emit a <think> block before the JSON; a long proposal
     // (function sourceCode + MCP requirements) can otherwise be cut off.
     static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(150);
+    private final ThreadLocal<Duration> requestTimeoutOverride = new ThreadLocal<>();
+
+    public <T> T withRequestTimeout(Duration timeout, Supplier<T> operation) {
+        Duration previous = requestTimeoutOverride.get();
+        requestTimeoutOverride.set(timeout);
+        try {
+            return operation.get();
+        } finally {
+            if (previous == null) {
+                requestTimeoutOverride.remove();
+            } else {
+                requestTimeoutOverride.set(previous);
+            }
+        }
+    }
+
+    private Duration requestTimeout() {
+        Duration override = requestTimeoutOverride.get();
+        return override == null ? REQUEST_TIMEOUT : override;
+    }
 
     public ChatModel resolve(AiModelConfig config) {
         return resolve(config, true);
@@ -44,7 +65,7 @@ public class WorkflowAiModelResolver {
                 .apiKey(credential(config))
                 .modelName(config.getModelName())
                 .strictJsonSchema(strictJsonSchema)
-                .timeout(REQUEST_TIMEOUT)
+                .timeout(requestTimeout())
                 .maxRetries(0)
                 .logRequests(false)
                 .logResponses(false)
@@ -137,7 +158,7 @@ public class WorkflowAiModelResolver {
                 .baseUrl(config.getBaseUrl())
                 .apiKey(credential(config))
                 .modelName(config.getModelName())
-                .timeout(REQUEST_TIMEOUT)
+                .timeout(requestTimeout())
                 .logRequests(false)
                 .logResponses(false)
                 .build();

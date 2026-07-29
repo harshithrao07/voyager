@@ -5,6 +5,7 @@ import com.job.scheduler.dto.AiModelConfigRequestDTO;
 import com.job.scheduler.dto.AiModelDiscoverRequestDTO;
 import com.job.scheduler.dto.AiModelEnabledRequestDTO;
 import com.job.scheduler.dto.AiModelEvaluationDTO;
+import com.job.scheduler.dto.AiModelEvaluationHistoryDTO;
 import com.job.scheduler.dto.AiModelEvaluationStartRequestDTO;
 import com.job.scheduler.dto.AiModelTestRequestDTO;
 import com.job.scheduler.dto.AiModelTestResponseDTO;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -102,6 +104,15 @@ public class AiModelController {
         return ResponseEntity.accepted().body(
                 aiModelEvaluationService.start(modelId, request.mode(), request.judgeModelConfigId())
         );
+    }
+
+    @GetMapping("/models/{modelId}/evaluations")
+    public ResponseEntity<AiModelEvaluationHistoryDTO> evaluationHistory(
+            @PathVariable UUID modelId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size
+    ) {
+        return ResponseEntity.ok(aiModelEvaluationService.history(modelId, page, size));
     }
 
     @PostMapping("/models/{modelId}/evaluations/{runId}/cancel")

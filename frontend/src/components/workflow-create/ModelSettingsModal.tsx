@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
-import { Activity, BarChart3, Bot, Check, ChevronDown, CircleDollarSign, Code2, Copy, Gauge, Globe2, Info, KeyRound, Link, ListChecks, Loader2, Monitor, Play, Plus, Power, RefreshCw, Scale, ShieldCheck, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { Activity, BarChart3, Bot, Check, ChevronDown, CircleDollarSign, Code2, Copy, Globe2, History as HistoryIcon, Info, KeyRound, Link, ListChecks, Loader2, Monitor, Play, Plus, Power, RefreshCw, Scale, ShieldCheck, Sparkles, Square, Trash2, X } from 'lucide-react';
 import {
   cancelAiModelEvaluation,
+  listAiModelEvaluationHistory,
   listLatestAiModelEvaluations,
   startAiModelEvaluation,
   type AiModelEvaluationDTO,
@@ -45,7 +46,7 @@ type Props = {
   managingModels: boolean;
   onCopyEndpoint: (endpoint: string) => void;
   onUpdateEndpointEnabled: (endpoint: string, enabled: boolean) => void;
-  onDeleteEndpointModels: (endpoint: string) => void;
+  onDeleteSingleModel: (model: AiModel) => void;
   onUpdateSingleModelEnabled: (model: AiModel, enabled: boolean) => void;
   /** Render as an inline page panel (no overlay, no close button) instead of a modal dialog. */
   embedded?: boolean;
@@ -94,7 +95,7 @@ export function ModelSettingsModal({
   managingModels,
   onCopyEndpoint,
   onUpdateEndpointEnabled,
-  onDeleteEndpointModels,
+  onDeleteSingleModel,
   onUpdateSingleModelEnabled,
   embedded = false,
 }: Props) {
@@ -329,7 +330,12 @@ export function ModelSettingsModal({
                 managingModels={managingModels}
                 onCopyEndpoint={onCopyEndpoint}
                 onUpdateEndpointEnabled={onUpdateEndpointEnabled}
-                onDeleteEndpointModels={onDeleteEndpointModels}
+                onDeleteSingleModel={(model) => setConfirmDialog({
+                  title: 'Delete model?',
+                  message: `${model.label} will be removed. Other models using the same endpoint will stay added.`,
+                  confirmLabel: 'Delete model',
+                  onConfirm: () => onDeleteSingleModel(model),
+                })}
                 onUpdateSingleModelEnabled={onUpdateSingleModelEnabled}
               />
             )}
@@ -667,7 +673,7 @@ function AddedModelsSection({
   managingModels,
   onCopyEndpoint,
   onUpdateEndpointEnabled,
-  onDeleteEndpointModels,
+  onDeleteSingleModel,
   onUpdateSingleModelEnabled,
 }: Pick<Props,
   | 'endpointGroups'
@@ -676,7 +682,7 @@ function AddedModelsSection({
   | 'managingModels'
   | 'onCopyEndpoint'
   | 'onUpdateEndpointEnabled'
-  | 'onDeleteEndpointModels'
+  | 'onDeleteSingleModel'
   | 'onUpdateSingleModelEnabled'
 >) {
   return (
@@ -689,7 +695,7 @@ function AddedModelsSection({
               <h3 className="font-headline-md text-headline-md font-semibold text-primary">Added Models</h3>
               <span className="font-mono-sm text-[12px] text-on-surface-variant">(Endpoints)</span>
             </div>
-            <p className="mt-1 text-body-sm text-on-surface-variant">Enable, disable, or remove model endpoints. Benchmark and rank models on the Model Ranking tab.</p>
+            <p className="mt-1 text-body-sm text-on-surface-variant">Enable endpoints or remove individual models. Benchmark and rank models on the Model Ranking tab.</p>
           </div>
         </div>
       </div>
@@ -763,15 +769,6 @@ function AddedModelsSection({
                   </button>
                   <button
                     type="button"
-                    onClick={() => onDeleteEndpointModels(group.endpoint)}
-                    disabled={managingModels}
-                    className="flex h-9 items-center gap-2 rounded-DEFAULT border border-status-error/30 px-3 text-body-sm text-status-error transition-colors hover:bg-status-error/10 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Trash2 size={14} />
-                    Delete
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => setExpandedEndpoint(expanded ? null : group.endpoint)}
                     className="flex h-9 w-9 items-center justify-center rounded-DEFAULT text-primary transition-colors hover:bg-surface-container"
                     aria-label={expanded ? 'Collapse endpoint' : 'Expand endpoint'}
@@ -814,9 +811,21 @@ function AddedModelsSection({
                               {model.label}
                             </span>
                           </button>
-                          <span className="shrink-0 font-mono-sm text-[10px] uppercase text-on-surface-variant">
-                            {enabled ? 'Enabled' : 'Disabled'}
-                          </span>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <span className="font-mono-sm text-[10px] uppercase text-on-surface-variant">
+                              {enabled ? 'Enabled' : 'Disabled'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => onDeleteSingleModel(model)}
+                              disabled={managingModels}
+                              className="flex h-7 w-7 items-center justify-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-status-error/10 hover:text-status-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-error/50 disabled:cursor-not-allowed disabled:opacity-40"
+                              aria-label={`Delete ${model.label}`}
+                              title={`Delete ${model.label}`}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
                         </div>
                       );
                     })}
@@ -951,17 +960,52 @@ function ModelTestDetail({
   const enabled = model.enabled !== false;
   const actionPending = benchmarkAction === model.id;
   const batchPending = batchMode !== null;
+  const [historyRuns, setHistoryRuns] = useState<AiModelEvaluationDTO[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+
+  const loadHistoryPage = useCallback(async (page: number, append: boolean) => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const history = await listAiModelEvaluationHistory(model.id, page, 10);
+      setHistoryRuns((current) => {
+        const candidates = append ? [...current, ...history.runs] : history.runs;
+        return [...new Map(candidates.map((run) => [run.runId, run])).values()];
+      });
+      setHistoryTotal(history.totalElements);
+      setHistoryPage(history.page);
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : 'Could not load test history.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [model.id]);
+
+  useEffect(() => {
+    setSelectedRunId(null);
+    setHistoryRuns([]);
+    setHistoryTotal(0);
+    setHistoryPage(0);
+    void loadHistoryPage(0, false);
+  }, [evaluation?.runId, evaluation?.status, loadHistoryPage, model.id]);
+
+  const displayedEvaluation = selectedRunId
+    ? historyRuns.find((run) => run.runId === selectedRunId) ?? evaluation
+    : evaluation;
+  const viewingPreviousRun = displayedEvaluation?.runId !== evaluation?.runId;
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-[10px] text-on-surface-variant">
-          <Gauge size={12} />
-          <span>Quick: 7 cases</span>
-          <span className="text-border-muted">•</span>
-          <span>Reliability: 21 cases</span>
-          {!enabled && (
-            <span className="ml-1 text-status-warning">· Enable in Added Models to test</span>
-          )}
+        <div className="text-[10px] text-on-surface-variant">
+          {!enabled
+            ? <span className="text-status-warning">Enable this model in Added Models to test it.</span>
+            : evaluation?.result
+              ? 'Run this model again'
+              : 'Test this model'}
         </div>
         <div className="flex items-center gap-1.5">
           {evaluation?.status === 'RUNNING' ? (
@@ -1005,6 +1049,36 @@ function ModelTestDetail({
         </div>
       </div>
 
+      {(evaluation || historyLoading || historyRuns.length > 0) && (
+        <EvaluationHistoryLedger
+          runs={historyRuns}
+          total={historyTotal}
+          currentRunId={evaluation?.runId}
+          selectedRunId={displayedEvaluation?.runId}
+          loading={historyLoading}
+          error={historyError}
+          onSelect={(runId) => setSelectedRunId(
+            runId === evaluation?.runId ? null : runId,
+          )}
+          onLoadMore={() => void loadHistoryPage(historyPage + 1, true)}
+        />
+      )}
+
+      {viewingPreviousRun && displayedEvaluation && (
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-DEFAULT border border-primary/20 bg-primary/5 px-2.5 py-1.5 text-[10px] text-on-surface-variant">
+          <span>
+            Viewing {formatTestedAt(displayedEvaluation.finishedAt || displayedEvaluation.startedAt)}
+          </span>
+          <button
+            type="button"
+            onClick={() => setSelectedRunId(null)}
+            className="font-mono-sm text-[9px] font-semibold uppercase text-primary hover:text-primary-fixed"
+          >
+            Back to latest
+          </button>
+        </div>
+      )}
+
       {evaluation?.status === 'RUNNING' && (
         <EvaluationProgress evaluation={evaluation} />
       )}
@@ -1019,21 +1093,30 @@ function ModelTestDetail({
         />
       )}
 
-      {evaluation?.result && (
-        <CapabilityTape evaluation={evaluation} />
+      {displayedEvaluation?.result && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border-subtle/40 pt-2 font-mono-sm text-[9px] text-on-surface-variant">
+          <span>{formatStructuredOutputMode(displayedEvaluation.result.structuredOutputMode)}</span>
+          <span className="text-border-muted">·</span>
+          <span>{displayedEvaluation.result.suiteId}</span>
+          <span className="text-border-muted">·</span>
+          <span>{displayedEvaluation.mode === 'RELIABILITY' ? '3 passes' : '1 pass'}</span>
+          <span className="text-border-muted">·</span>
+          <span>{formatTestedAt(displayedEvaluation.finishedAt || displayedEvaluation.startedAt)}</span>
+        </div>
       )}
 
-      {evaluation?.result?.judge && (
-        <JudgeSummaryPanel judge={evaluation.result.judge} />
+      {displayedEvaluation?.result?.judge && (
+        <JudgeSummaryPanel judge={displayedEvaluation.result.judge} />
       )}
 
-      {evaluation?.result?.observations && evaluation.result.observations.length > 0 && (
-        <PerCaseResults observations={evaluation.result.observations} />
+      {displayedEvaluation?.result?.observations
+        && displayedEvaluation.result.observations.length > 0 && (
+        <PerCaseResults observations={displayedEvaluation.result.observations} />
       )}
 
-      {evaluation?.status === 'FAILED' && evaluation.errorMessage && (
+      {displayedEvaluation?.status === 'FAILED' && displayedEvaluation.errorMessage && (
         <p className="mt-2 text-[11px] leading-4 text-status-error">
-          {evaluation.errorMessage}
+          {displayedEvaluation.errorMessage}
         </p>
       )}
 
@@ -1043,6 +1126,118 @@ function ModelTestDetail({
         </p>
       )}
     </div>
+  );
+}
+
+function EvaluationHistoryLedger({
+  runs,
+  total,
+  currentRunId,
+  selectedRunId,
+  loading,
+  error,
+  onSelect,
+  onLoadMore,
+}: {
+  runs: AiModelEvaluationDTO[];
+  total: number;
+  currentRunId?: string;
+  selectedRunId?: string;
+  loading: boolean;
+  error: string | null;
+  onSelect: (runId: string) => void;
+  onLoadMore: () => void;
+}) {
+  return (
+    <details className="group/history mt-2 overflow-hidden rounded-DEFAULT border border-border-subtle/60 bg-surface-container-lowest">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 font-mono-sm text-[9px] font-semibold uppercase tracking-wide text-on-surface-variant transition-colors hover:text-primary [&::-webkit-details-marker]:hidden">
+        <HistoryIcon size={12} className="text-primary" />
+        Test history
+        <span className="text-on-surface-variant/60">
+          ({loading && total === 0 ? '…' : total})
+        </span>
+        <ChevronDown size={12} className="ml-auto transition-transform group-open/history:rotate-180" />
+      </summary>
+      <div className="border-t border-border-subtle/50 p-2">
+        {error && (
+          <p className="rounded-DEFAULT border border-status-error/20 bg-status-error/5 px-2 py-1.5 text-[10px] text-status-error">
+            {error}
+          </p>
+        )}
+        {!error && runs.length === 0 && !loading && (
+          <p className="px-1 py-2 text-[10px] text-on-surface-variant">
+            Completed tests will appear here.
+          </p>
+        )}
+        {runs.length > 0 && (
+          <div className="relative space-y-1 before:absolute before:bottom-3 before:left-[7px] before:top-3 before:w-px before:bg-border-subtle">
+            {runs.map((run) => {
+              const selected = run.runId === selectedRunId;
+              const current = run.runId === currentRunId;
+              const summary = run.result?.summary;
+              return (
+                <button
+                  key={run.runId}
+                  type="button"
+                  onClick={() => onSelect(run.runId)}
+                  aria-pressed={selected}
+                  className={`relative grid w-full grid-cols-[16px_minmax(120px,1fr)_70px_70px_90px] items-center gap-2 rounded-DEFAULT px-1.5 py-2 text-left transition-colors ${
+                    selected
+                      ? 'bg-primary/10 text-on-surface'
+                      : 'text-on-surface-variant hover:bg-surface-container/70'
+                  }`}
+                >
+                  <span className={`relative z-[1] h-2 w-2 justify-self-center rounded-full border-2 ${
+                    selected
+                      ? 'border-primary bg-primary'
+                      : 'border-border-muted bg-surface-container-lowest'
+                  }`} />
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1.5 font-mono-sm text-[9px] font-semibold uppercase">
+                      {run.mode === 'RELIABILITY' ? 'Reliability' : 'Quick'}
+                      {current && <span className="text-primary">Latest</span>}
+                    </span>
+                    <span className="mt-0.5 block truncate text-[9px]">
+                      {formatTestedAt(run.finishedAt || run.startedAt)}
+                    </span>
+                  </span>
+                  <span className={`font-mono-sm text-[9px] font-semibold uppercase ${
+                    run.status === 'COMPLETED'
+                      ? 'text-status-success'
+                      : run.status === 'FAILED'
+                        ? 'text-status-error'
+                        : run.status === 'CANCELLED'
+                          ? 'text-status-warning'
+                          : 'text-primary'
+                  }`}>
+                    {run.status.toLowerCase()}
+                  </span>
+                  <span className="font-mono-sm text-[9px]">
+                    {run.completedCases}/{run.totalCases} cases
+                  </span>
+                  <span className="justify-self-end font-mono-sm text-[9px]">
+                    {summary
+                      ? `${summary.recommendation.toLowerCase()} · ${formatLatency(summary.latencyP95Ms)}`
+                      : 'No final score'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {runs.length < total && (
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={loading}
+            className="mt-2 flex h-7 w-full items-center justify-center gap-1.5 rounded-DEFAULT border border-primary/20 font-mono-sm text-[9px] font-semibold uppercase text-primary hover:bg-primary/10 disabled:opacity-50"
+          >
+            {loading && <Loader2 size={10} className="animate-spin" />}
+            Load older runs
+          </button>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -1126,6 +1321,12 @@ function HowRankingWorks() {
           <p className="mt-2">
             The recommendation comes only from these gates — the LLM judge never changes it.
           </p>
+          <p className="mt-2">
+            The optional <span className="text-on-surface">AI quality</span> score checks meaning and
+            completeness. It is grounded in the rule-checks: any deterministic failure keeps the AI
+            score below passing. When all checks pass, the AI can still score an answer lower if it
+            technically validates but misses the user's intent.
+          </p>
         </section>
 
         <section>
@@ -1184,11 +1385,21 @@ function ModelComparisonBoard({
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const enabledModels = models.filter((model) => model.enabled !== false);
-  const rankedModels = [...models].sort((left, right) => compareModels(
-    left,
-    right,
-    evaluations,
-  ));
+  // The leaderboard only holds concluded results. A model that is actively being tested is pulled
+  // out into its own section below so re-testing it never drops it to the bottom of the ranking, and
+  // never-tested models are listed separately — the ranking stays a stable board of real results.
+  const rankedModels = models
+    .filter((model) => {
+      const evaluation = evaluations[model.id];
+      return evaluation && evaluation.status !== 'RUNNING';
+    })
+    .sort((left, right) => compareModels(left, right, evaluations));
+  const runningModels = models.filter(
+    (model) => evaluations[model.id]?.status === 'RUNNING',
+  );
+  const untestedModels = models
+    .filter((model) => !evaluations[model.id])
+    .sort((left, right) => left.label.localeCompare(right.label));
   const controlsDisabled = runAllDisabled || enabledModels.length === 0 || batchMode !== null;
   const gridCols = 'grid-cols-[28px_minmax(150px,1.3fr)_90px_minmax(235px,1.5fr)_58px_58px_24px]';
 
@@ -1200,7 +1411,7 @@ function ModelComparisonBoard({
           <div>
             <div className="font-display text-[13px] font-semibold text-primary">Model ranking</div>
             <div className="mt-0.5 text-[10px] text-on-surface-variant">
-              Ranked by results. Expand a row to test it, watch it live, and read every case.
+              Concluded results, ranked. Running tests and untested models are listed below.
             </div>
           </div>
         </div>
@@ -1235,6 +1446,12 @@ function ModelComparisonBoard({
 
       <div className="overflow-x-auto">
         <div className="min-w-[760px]">
+          {rankedModels.length === 0 && (
+            <div className="px-4 py-5 text-body-sm text-on-surface-variant">
+              No completed results yet. Expand a model under “Not tested” to run it, or use “Quick all”.
+            </div>
+          )}
+          {rankedModels.length > 0 && (
           <div className={`grid ${gridCols} items-center gap-3 border-b border-border-subtle/40 px-3 py-2 font-mono-sm text-[8px] font-semibold uppercase tracking-wide text-on-surface-variant`}>
             <span>#</span>
             <span>Model</span>
@@ -1250,6 +1467,7 @@ function ModelComparisonBoard({
             <span>P95</span>
             <span />
           </div>
+          )}
           {rankedModels.map((model, index) => {
             const evaluation = evaluations[model.id];
             const result = comparableResult(evaluation);
@@ -1293,7 +1511,7 @@ function ModelComparisonBoard({
                     <div className="col-span-3 font-mono-sm text-[9px] uppercase text-on-surface-variant/70">
                       {evaluation?.status === 'RUNNING'
                         ? `${evaluation.completedCases}/${evaluation.totalCases} cases complete`
-                        : 'Expand to test'}
+                        : 'Expand for details'}
                     </div>
                   )}
                   <ChevronDown
@@ -1319,6 +1537,100 @@ function ModelComparisonBoard({
           })}
         </div>
       </div>
+
+      {runningModels.length > 0 && (
+        <div className="border-t border-border-subtle/50">
+          <div className="flex items-center gap-2 px-4 py-2 font-mono-sm text-[9px] font-semibold uppercase tracking-wide text-primary">
+            <Activity size={12} className="animate-pulse" />
+            Currently being tested
+            <span className="text-on-surface-variant/60">({runningModels.length})</span>
+          </div>
+          {runningModels.map((model) => (
+            <div key={model.id} className="border-t border-border-subtle/30 px-4 py-3">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="truncate font-mono-sm text-[11px] font-semibold text-on-surface">
+                  {model.label}
+                </span>
+                <span className="shrink-0 rounded-DEFAULT bg-primary/10 px-1.5 py-0.5 font-mono-sm text-[9px] font-semibold uppercase text-primary">
+                  {model.provider === 'api' ? 'Cloud' : 'Local'}
+                </span>
+                <EvaluationBadge evaluation={evaluations[model.id]} />
+              </div>
+              <ModelTestDetail
+                model={model}
+                evaluation={evaluations[model.id]}
+                benchmarkAction={benchmarkAction}
+                batchMode={batchMode}
+                managingModels={managingModels}
+                onRunEvaluation={onRunEvaluation}
+                onCancelEvaluation={onCancelEvaluation}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {untestedModels.length > 0 && (
+        <div className="border-t border-border-subtle/50">
+          <div className="flex items-center gap-2 px-4 py-2 font-mono-sm text-[9px] font-semibold uppercase tracking-wide text-on-surface-variant">
+            Not tested
+            <span className="text-on-surface-variant/60">({untestedModels.length})</span>
+          </div>
+          {untestedModels.map((model) => {
+            const enabled = model.enabled !== false;
+            const expanded = expandedId === model.id;
+            return (
+              <div key={model.id} className="border-t border-border-subtle/30">
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expanded}
+                  onClick={() => setExpandedId(expanded ? null : model.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setExpandedId(expanded ? null : model.id);
+                    }
+                  }}
+                  className={`flex cursor-pointer items-center justify-between gap-3 px-4 py-2.5 transition-colors hover:bg-surface-container/40 ${expanded ? 'bg-surface-container/40' : ''}`}
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className={`truncate font-mono-sm text-[11px] font-semibold ${enabled ? 'text-on-surface' : 'text-on-surface-variant'}`}>
+                      {model.label}
+                    </span>
+                    <span className="shrink-0 rounded-DEFAULT bg-primary/10 px-1.5 py-0.5 font-mono-sm text-[9px] font-semibold uppercase text-primary">
+                      {model.provider === 'api' ? 'Cloud' : 'Local'}
+                    </span>
+                    {!enabled && (
+                      <span className="shrink-0 font-mono-sm text-[9px] uppercase text-on-surface-variant">Disabled</span>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="font-mono-sm text-[9px] uppercase text-on-surface-variant">Not tested</span>
+                    <ChevronDown
+                      size={14}
+                      className={`text-on-surface-variant transition-transform ${expanded ? 'rotate-180' : ''}`}
+                    />
+                  </div>
+                </div>
+                {expanded && (
+                  <div className="border-t border-border-subtle/30 bg-surface-base/50 px-4 py-3">
+                    <ModelTestDetail
+                      model={model}
+                      evaluation={evaluations[model.id]}
+                      benchmarkAction={benchmarkAction}
+                      batchMode={batchMode}
+                      managingModels={managingModels}
+                      onRunEvaluation={onRunEvaluation}
+                      onCancelEvaluation={onCancelEvaluation}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1396,9 +1708,16 @@ function ComparisonFreshness({
       </div>
     );
   }
+  const status = evaluation?.status === 'COMPLETED'
+    ? 'Current'
+    : evaluation?.status === 'FAILED'
+      ? 'Run failed'
+      : evaluation?.status === 'CANCELLED'
+        ? 'Cancelled'
+        : 'Not tested';
   return (
     <div className="mt-0.5 font-mono-sm text-[8px] uppercase text-on-surface-variant">
-      {evaluation?.status === 'COMPLETED' ? 'Current' : 'Not tested'} · {provider}
+      {status} · {provider}
     </div>
   );
 }
@@ -1504,35 +1823,6 @@ function EvaluationProgress({ evaluation }: { evaluation: AiModelEvaluationDTO }
   );
 }
 
-function CapabilityTape({ evaluation }: { evaluation: AiModelEvaluationDTO }) {
-  const result = evaluation.result;
-  if (!result) return null;
-  const capabilities = [
-    ['Chat', result.capabilities.chat],
-    ['ASL', result.capabilities.asl],
-    ['MCP', result.capabilities.mcp],
-    ['Functions', result.capabilities.functions],
-    ['Safety', result.capabilities.safety],
-  ] as const;
-  const testedAt = evaluation.finishedAt || evaluation.startedAt;
-  return (
-    <div className="mt-3 overflow-hidden rounded-DEFAULT border border-border-subtle/60">
-      <div className="grid grid-cols-5 divide-x divide-border-subtle/50 bg-surface-container">
-        {capabilities.map(([label, score]) => (
-          <div key={label} className={`px-1.5 py-2 text-center ${capabilityTone(score)}`}>
-            <div className="font-mono-sm text-[9px] font-semibold uppercase tracking-wide">{label}</div>
-            <div className="mt-0.5 font-display text-[13px] font-semibold">{Math.round(score * 100)}%</div>
-          </div>
-        ))}
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-2 bg-surface-container-lowest px-2.5 py-1.5 font-mono-sm text-[9px] text-on-surface-variant">
-        <span>{result.summary.passedCases}/{result.summary.totalCases} cases · p95 {formatLatency(result.summary.latencyP95Ms)} · {formatStructuredOutputMode(result.structuredOutputMode)}</span>
-        <span>{result.suiteId} · {evaluation.mode === 'RELIABILITY' ? '3 passes' : '1 pass'} · {formatTestedAt(testedAt)}</span>
-      </div>
-    </div>
-  );
-}
-
 function JudgeSummaryPanel({ judge }: { judge: AiModelEvaluationJudgeSummary }) {
   const tone = judge.verdict === 'STRONG'
     ? 'text-status-success'
@@ -1550,21 +1840,26 @@ function JudgeSummaryPanel({ judge }: { judge: AiModelEvaluationJudgeSummary }) 
       <div className="flex flex-wrap items-center justify-between gap-2 font-mono-sm text-[10px]">
         <span className={`flex items-center gap-1.5 font-semibold uppercase ${tone}`}>
           <Scale size={11} />
-          Judge {judge.verdict.toLowerCase()}
+          AI quality {judge.verdict.toLowerCase()}
         </span>
         <span className="text-on-surface-variant">
           {judge.scoredCases === 0
-            ? `no scored cases (${judge.erroredCases} judge ${judge.erroredCases === 1 ? 'error' : 'errors'})`
+            ? `no scored cases (${judge.erroredCases} AI judge ${judge.erroredCases === 1 ? 'error' : 'errors'})`
             : `${Math.round(judge.passRate * 100)}% pass · mean ${judge.meanScore.toFixed(1)}/5 · by ${judge.displayName}`}
         </span>
       </div>
       {issues.length > 0 && (
-        <ul className="mt-1.5 space-y-1 border-t border-border-subtle/40 pt-1.5 text-[10px] leading-4 text-on-surface-variant">
-          {issues.slice(0, 4).map((issue) => (
-            <li key={issue} className="truncate" title={issue}>{issue}</li>
-          ))}
-          {issues.length > 4 && <li>+{issues.length - 4} more</li>}
-        </ul>
+        <details className="group/review mt-1.5 border-t border-border-subtle/40 pt-1.5">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 font-mono-sm text-[9px] font-semibold uppercase text-on-surface-variant [&::-webkit-details-marker]:hidden">
+            Review details ({issues.length})
+            <ChevronDown size={11} className="ml-auto transition-transform group-open/review:rotate-180" />
+          </summary>
+          <ul className="mt-1.5 max-h-48 space-y-1 overflow-y-auto text-[10px] leading-4 text-on-surface-variant">
+            {issues.map((issue, index) => (
+              <li key={`${index}-${issue}`} className="whitespace-pre-wrap break-words">{issue}</li>
+            ))}
+          </ul>
+        </details>
       )}
     </div>
   );
@@ -1632,7 +1927,14 @@ function CaseResult({
         )}
         <span className="ml-auto font-mono-sm text-[9px] text-on-surface-variant">{formatLatency(latencyMs)}</span>
         {judge?.score != null && (
-          <span className="font-mono-sm text-[9px] text-on-surface-variant">judge {judge.score}/5</span>
+          <span
+            title={judge.rationale || 'AI quality assessment'}
+            className={`font-mono-sm text-[9px] ${
+              judge.passed ? 'text-status-success' : 'text-status-error'
+            }`}
+          >
+            AI quality {judge.score}/5
+          </span>
         )}
       </div>
 
@@ -1661,6 +1963,23 @@ function CaseResult({
             <li key={name} className="truncate" title={metric.detail}>{name}: {metric.detail}</li>
           ))}
         </ul>
+      )}
+
+      {(judge?.rationale || judge?.error) && (
+        <div
+          className={`mt-2 rounded-DEFAULT border px-2 py-1.5 text-[10px] leading-4 ${
+            judge.error || judge.passed === false
+              ? 'border-status-error/20 bg-status-error/5 text-status-error/90'
+              : 'border-border-subtle/40 bg-surface-container-lowest text-on-surface-variant'
+          }`}
+        >
+          <div className="font-mono-sm text-[8px] font-semibold uppercase tracking-wide">
+            {judge.error ? 'AI judge error' : 'AI quality review'}
+          </div>
+          <p className="mt-0.5 whitespace-pre-wrap break-words">
+            {judge.error || judge.rationale}
+          </p>
+        </div>
       )}
 
       {response && (

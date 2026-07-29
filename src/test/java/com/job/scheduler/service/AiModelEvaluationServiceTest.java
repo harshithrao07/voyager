@@ -1,26 +1,36 @@
 package com.job.scheduler.service;
 
 import com.job.scheduler.dto.AiModelEvaluationDTO;
+import com.job.scheduler.dto.WorkflowAiMessageDTO;
 import com.job.scheduler.dto.WorkflowAiResponseDTO;
 import com.job.scheduler.entity.AiModelConfig;
+import com.job.scheduler.entity.AiModelEvaluationRun;
 import com.job.scheduler.enums.AiModelEvaluationMode;
 import com.job.scheduler.enums.AiModelEvaluationStatus;
 import com.job.scheduler.enums.AiModelProviderType;
 import com.job.scheduler.enums.WorkflowAiConversationStage;
+import com.job.scheduler.enums.WorkflowAiMessageRole;
 import com.job.scheduler.repository.AiModelConfigRepository;
+import com.job.scheduler.repository.AiModelEvaluationRunRepository;
 import dev.langchain4j.model.chat.ChatModel;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -29,10 +39,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -40,6 +52,8 @@ import static org.mockito.Mockito.when;
 class AiModelEvaluationServiceTest {
     @Mock
     private AiModelConfigRepository modelRepository;
+    @Mock
+    private AiModelEvaluationRunRepository runRepository;
     @Mock
     private AiModelConfigService modelConfigService;
     @Mock
@@ -63,7 +77,7 @@ class AiModelEvaluationServiceTest {
         model.setModelName("qwen2.5:7b");
         model.setEnabled(true);
 
-        when(modelConfigService.resolveModel(model.getId())).thenReturn(model);
+        lenient().when(modelConfigService.resolveModel(model.getId())).thenReturn(model);
         when(modelRepository.findById(model.getId())).thenReturn(Optional.of(model));
         // The bad-judge test never reaches a save; strict stubbing would flag this as unused there.
         lenient().when(modelRepository.saveAndFlush(model)).thenReturn(model);
@@ -71,6 +85,7 @@ class AiModelEvaluationServiceTest {
         Executor queuedExecutor = queuedEvaluation::set;
         service = new AiModelEvaluationService(
                 modelRepository,
+                runRepository,
                 modelConfigService,
                 conversationService,
                 judgeService,
@@ -98,6 +113,40 @@ class AiModelEvaluationServiceTest {
         );
     }
 
+    private WorkflowAiResponseDTO chatOnlyResponseWithAssistant(UUID messageId) {
+        return new WorkflowAiResponseDTO(
+                UUID.randomUUID(),
+                "Benchmark case",
+                WorkflowAiConversationStage.COLLECTING_WORKFLOW_DETAILS,
+                "All good.",
+                null,
+                List.of(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                new WorkflowAiMessageDTO(
+                        messageId,
+                        WorkflowAiMessageRole.ASSISTANT,
+                        "All good.",
+                        model.getId(),
+                        model.getDisplayName(),
+                        10L,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "STOP",
+                        null,
+                        null,
+                        Instant.now()
+                ),
+                "{\"stage\":\"COLLECTING_WORKFLOW_DETAILS\",\"message\":\"All good.\"}"
+        );
+    }
+
     @Test
     void startPersistsProgressAndRejectsAConcurrentRun() {
         AiModelEvaluationDTO started = service.start(
@@ -112,6 +161,11 @@ class AiModelEvaluationServiceTest {
         assertEquals(0, started.completedCases());
         assertFalse(started.cancelRequested());
         assertTrue(queuedEvaluation.get() != null);
+        ArgumentCaptor<AiModelEvaluationRun> runCaptor =
+                ArgumentCaptor.forClass(AiModelEvaluationRun.class);
+        verify(runRepository).saveAndFlush(runCaptor.capture());
+        assertEquals(started.runId(), runCaptor.getValue().getId());
+        assertEquals(AiModelEvaluationStatus.RUNNING, runCaptor.getValue().getStatus());
 
         assertThrows(
                 IllegalStateException.class,
@@ -150,18 +204,19 @@ class AiModelEvaluationServiceTest {
         assertEquals(0, cancelled.completedCases());
         assertFalse(cancelled.cancelRequested());
         assertTrue(cancelled.finishedAt() != null);
-        verify(conversationService, never()).startConversation(
+        verify(conversationService, never()).startEvaluationConversation(
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any()
         );
     }
 
     @Test
     void runWithoutAJudgeStaysDeterministicOnly() {
-        when(conversationService.startConversation(anyString(), any(), anyString(), any(), any()))
+        when(conversationService.startEvaluationConversation(
+                anyString(), any(), anyString(), any()
+        ))
                 .thenAnswer(invocation -> chatOnlyResponse());
 
         service.start(model.getId(), AiModelEvaluationMode.QUICK, null);
@@ -170,7 +225,77 @@ class AiModelEvaluationServiceTest {
         AiModelEvaluationDTO completed = service.latest(model.getId());
         assertEquals(AiModelEvaluationStatus.COMPLETED, completed.status());
         assertFalse(completed.result().has("judge"));
-        verify(judgeService, never()).judge(any(), any(), any(), any(), anyInt());
+        verify(judgeService, never()).judge(any(), any(), any(), any(), anyList(), anyInt());
+        ArgumentCaptor<Duration> timeoutCaptor = ArgumentCaptor.forClass(Duration.class);
+        verify(conversationService, times(7)).startEvaluationConversation(
+                anyString(), any(), anyString(), timeoutCaptor.capture()
+        );
+        assertEquals(Duration.ofSeconds(120), timeoutCaptor.getAllValues().get(0));
+        assertEquals(Duration.ofSeconds(45), timeoutCaptor.getAllValues().get(1));
+        assertEquals(Duration.ofSeconds(45), timeoutCaptor.getAllValues().get(6));
+    }
+
+    @Test
+    void returnsPersistedRunHistoryNewestFirst() {
+        AiModelEvaluationRun run = new AiModelEvaluationRun();
+        run.setId(UUID.randomUUID());
+        run.setModelConfigId(model.getId());
+        run.setModelDisplayName(model.getDisplayName());
+        run.setStatus(AiModelEvaluationStatus.COMPLETED);
+        run.setMode(AiModelEvaluationMode.QUICK);
+        run.setRepetitions(1);
+        run.setCompletedCases(7);
+        run.setTotalCases(7);
+        run.setResult("""
+                {"promptFingerprint":"sha256:test","summary":{"recommendation":"RECOMMENDED"}}
+                """);
+        run.setStartedAt(Instant.parse("2026-07-28T12:00:00Z"));
+        run.setFinishedAt(Instant.parse("2026-07-28T12:01:00Z"));
+        when(conversationService.promptFingerprint()).thenReturn("sha256:test");
+        when(runRepository.findByModelConfigIdOrderByStartedAtDesc(
+                model.getId(),
+                PageRequest.of(0, 10)
+        )).thenReturn(new PageImpl<>(List.of(run), PageRequest.of(0, 10), 1));
+
+        var history = service.history(model.getId(), 0, 10);
+
+        assertEquals(1, history.totalElements());
+        assertEquals(1, history.runs().size());
+        assertEquals(run.getId(), history.runs().get(0).runId());
+        assertEquals(7, history.runs().get(0).completedCases());
+        assertFalse(history.runs().get(0).stale());
+    }
+
+    @Test
+    void retryTimeoutOnlyFailsSupersessionAndUsesEvaluationLimit() {
+        UUID messageId = UUID.randomUUID();
+        AtomicInteger calls = new AtomicInteger();
+        when(conversationService.startEvaluationConversation(
+                anyString(), any(), anyString(), any()
+        )).thenAnswer(invocation -> calls.incrementAndGet() == 7
+                ? chatOnlyResponseWithAssistant(messageId)
+                : chatOnlyResponse());
+        when(conversationService.regenerateEvaluationMessage(
+                eq(messageId),
+                eq(model.getId()),
+                eq(Duration.ofSeconds(45))
+        )).thenThrow(new IllegalStateException("request timed out"));
+
+        service.start(model.getId(), AiModelEvaluationMode.QUICK, null);
+        queuedEvaluation.get().run();
+
+        JsonNode retryObservation = service.latest(model.getId())
+                .result()
+                .path("observations")
+                .get(6);
+        assertTrue(retryObservation.path("metrics").path("validation_clean").path("passed").asBoolean());
+        assertTrue(retryObservation.path("metrics").path("response_contract").path("passed").asBoolean());
+        assertTrue(retryObservation.path("metrics").path("general_chat_mode").path("passed").asBoolean());
+        assertFalse(retryObservation.path("metrics").path("retry_supersession").path("passed").asBoolean());
+        assertEquals(
+                "Retry model/provider did not respond within the 45s evaluation limit.",
+                retryObservation.path("metrics").path("retry_supersession").path("detail").asText()
+        );
     }
 
     @Test
@@ -183,13 +308,16 @@ class AiModelEvaluationServiceTest {
         judgeConfig.setEnabled(true);
         when(modelConfigService.resolveModel(judgeConfig.getId())).thenReturn(judgeConfig);
         when(judgeService.resolve(judgeConfig)).thenReturn(judgeChatModel);
-        when(conversationService.startConversation(anyString(), any(), anyString(), any(), any()))
+        when(conversationService.startEvaluationConversation(
+                anyString(), any(), anyString(), any()
+        ))
                 .thenAnswer(invocation -> chatOnlyResponse());
         when(judgeService.judge(
                 eq(judgeChatModel),
                 eq(judgeConfig),
                 any(JsonNode.class),
                 any(WorkflowAiResponseDTO.class),
+                anyList(),
                 eq(AiModelEvaluationJudgeService.DEFAULT_PASS_SCORE)
         )).thenAnswer(invocation -> {
             JsonNode testCase = invocation.getArgument(2);

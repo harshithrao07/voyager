@@ -1686,18 +1686,18 @@ export function CreateWorkflowView({
     }
   };
 
-  const deleteEndpointModels = async (endpoint: string) => {
-    const endpointModels = allModels.filter((model) => model.endpoint === endpoint);
-    if (endpointModels.length === 0) return;
-
+  const deleteSingleModel = async (model: AiModel) => {
     setManagingModels(true);
     try {
-      await Promise.all(endpointModels.map((model) => deleteAiModel(model.id)));
+      await deleteAiModel(model.id);
       await refreshModelLists();
-      setExpandedEndpoint((current) => current === endpoint ? null : current);
-      toast.success('Endpoint removed');
+      const siblingCount = allModels.filter((candidate) => candidate.endpoint === model.endpoint).length;
+      if (siblingCount <= 1) {
+        setExpandedEndpoint((current) => current === model.endpoint ? null : current);
+      }
+      toast.success(`${model.label} removed`);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to delete endpoint models.');
+      toast.error(err.message || 'Failed to delete model.');
     } finally {
       setManagingModels(false);
     }
@@ -2029,7 +2029,7 @@ export function CreateWorkflowView({
           managingModels={managingModels}
           onCopyEndpoint={copyEndpoint}
           onUpdateEndpointEnabled={updateEndpointEnabled}
-          onDeleteEndpointModels={deleteEndpointModels}
+          onDeleteSingleModel={deleteSingleModel}
           onUpdateSingleModelEnabled={updateSingleModelEnabled}
         />
       )}

@@ -1,18 +1,23 @@
 package com.job.scheduler.service;
 
 import com.job.scheduler.dto.AiModelEvaluationDTO;
+import com.job.scheduler.dto.AiModelEvaluationHistoryDTO;
 import com.job.scheduler.dto.WorkflowAiMcpRequirementDTO;
 import com.job.scheduler.dto.WorkflowAiProposedFunctionDTO;
 import com.job.scheduler.dto.WorkflowAiResponseDTO;
 import com.job.scheduler.entity.AiModelConfig;
+import com.job.scheduler.entity.AiModelEvaluationRun;
 import com.job.scheduler.enums.AiModelEvaluationMode;
 import com.job.scheduler.enums.AiModelEvaluationStatus;
 import com.job.scheduler.enums.WorkflowAiConversationStage;
 import com.job.scheduler.repository.AiModelConfigRepository;
+import com.job.scheduler.repository.AiModelEvaluationRunRepository;
 import dev.langchain4j.model.chat.ChatModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -40,6 +45,10 @@ import java.util.regex.Pattern;
 @Slf4j
 @Service
 public class AiModelEvaluationService {
+    private static final Duration GENERAL_CHAT_CASE_TIMEOUT = Duration.ofSeconds(45);
+    private static final Duration COLD_START_CASE_TIMEOUT = Duration.ofSeconds(120);
+    private static final Duration WORKFLOW_CASE_TIMEOUT = Duration.ofSeconds(120);
+    private static final Duration RETRY_ATTEMPT_TIMEOUT = Duration.ofSeconds(45);
     private static final String SUITE_RESOURCE = "ai-evals/workflow-ai-v1.json";
     private static final Pattern CHAT_DEFLECTION = Pattern.compile(
             "(?i)\\b(workflow name|name (?:for|of) (?:the|your) workflow|what workflow|"
@@ -59,6 +68,7 @@ public class AiModelEvaluationService {
     );
 
     private final AiModelConfigRepository modelRepository;
+    private final AiModelEvaluationRunRepository runRepository;
     private final AiModelConfigService modelConfigService;
     private final WorkflowAiConversationService conversationService;
     private final AiModelEvaluationJudgeService judgeService;
@@ -69,6 +79,7 @@ public class AiModelEvaluationService {
 
     public AiModelEvaluationService(
             AiModelConfigRepository modelRepository,
+            AiModelEvaluationRunRepository runRepository,
             AiModelConfigService modelConfigService,
             WorkflowAiConversationService conversationService,
             AiModelEvaluationJudgeService judgeService,
@@ -76,6 +87,7 @@ public class AiModelEvaluationService {
             @Qualifier("aiModelEvaluationExecutor") Executor executor
     ) {
         this.modelRepository = modelRepository;
+        this.runRepository = runRepository;
         this.modelConfigService = modelConfigService;
         this.conversationService = conversationService;
         this.judgeService = judgeService;
@@ -125,6 +137,7 @@ public class AiModelEvaluationService {
         model.setEvaluationStartedAt(Instant.now());
         model.setEvaluationFinishedAt(null);
         modelRepository.saveAndFlush(model);
+        syncHistory(model);
 
         try {
             JudgeContext judge = judgeContext;
@@ -146,6 +159,24 @@ public class AiModelEvaluationService {
         return toDto(requireModel(modelConfigId));
     }
 
+    public AiModelEvaluationHistoryDTO history(UUID modelConfigId, int requestedPage, int requestedSize) {
+        requireModel(modelConfigId);
+        int page = Math.max(0, requestedPage);
+        int size = Math.max(1, Math.min(50, requestedSize));
+        Page<AiModelEvaluationRun> history = runRepository
+                .findByModelConfigIdOrderByStartedAtDesc(
+                        modelConfigId,
+                        PageRequest.of(page, size)
+                );
+        return new AiModelEvaluationHistoryDTO(
+                history.getContent().stream().map(this::toDto).toList(),
+                history.getNumber(),
+                history.getSize(),
+                history.getTotalElements(),
+                history.getTotalPages()
+        );
+    }
+
     public AiModelEvaluationDTO cancel(UUID modelConfigId, UUID runId) {
         AiModelConfig model = requireModel(modelConfigId);
         if (!runId.equals(model.getEvaluationRunId())) {
@@ -160,6 +191,7 @@ public class AiModelEvaluationService {
             model.setEvaluationResult(null);
             model.setEvaluationError(null);
             modelRepository.saveAndFlush(model);
+            syncHistory(model);
             Thread worker = activeEvaluationThreads.get(runId);
             if (worker != null) {
                 worker.interrupt();
@@ -256,13 +288,19 @@ public class AiModelEvaluationService {
         UUID conversationId = null;
         Map<String, MetricResult> metrics = new LinkedHashMap<>();
         Set<String> requestedMetrics = requestedMetrics(testCase);
+        Duration caseTimeout = "chat-greeting".equals(testCase.path("id").asText())
+                ? COLD_START_CASE_TIMEOUT
+                : Set.of("general_chat", "retry").contains(
+                        testCase.path("category").asText()
+                )
+                        ? GENERAL_CHAT_CASE_TIMEOUT
+                        : WORKFLOW_CASE_TIMEOUT;
         try {
-            WorkflowAiResponseDTO response = conversationService.startConversation(
+            WorkflowAiResponseDTO response = conversationService.startEvaluationConversation(
                     testCase.path("instruction").asText(),
                     modelConfigId,
                     Instant.now().toString(),
-                    null,
-                    null
+                    caseTimeout
             );
             conversationId = response.conversationId();
             metrics.put("response_contract", responseContract(response));
@@ -297,6 +335,14 @@ public class AiModelEvaluationService {
             // Latency is the evaluated model's time only; the judge call happens after the clock
             // stops so choosing a slow judge cannot skew the candidate's latency percentiles.
             long latencyMs = Duration.between(startedAt, Instant.now()).toMillis();
+            Map<String, MetricResult> evaluatedMetrics = requested(metrics, requestedMetrics);
+            List<String> deterministicFailures = evaluatedMetrics.entrySet().stream()
+                    .filter(entry -> !entry.getValue().passed())
+                    .map(entry -> entry.getKey()
+                            + (entry.getValue().detail() == null
+                                    ? ""
+                                    : ": " + entry.getValue().detail()))
+                    .toList();
             AiModelEvaluationJudgeService.Judgment judgment = judgeContext == null
                     ? null
                     : judgeService.judge(
@@ -304,6 +350,7 @@ public class AiModelEvaluationService {
                             judgeContext.config(),
                             testCase,
                             response,
+                            deterministicFailures,
                             judgeContext.passScore()
                     );
             return new Observation(
@@ -313,15 +360,21 @@ public class AiModelEvaluationService {
                     repetition,
                     startedAt,
                     latencyMs,
-                    requested(metrics, requestedMetrics),
+                    evaluatedMetrics,
                     responseSummary(response),
                     null,
                     judgment
             );
         } catch (RuntimeException exception) {
+            String failure = rootMessage(exception);
+            if (failure != null && failure.toLowerCase(Locale.ROOT).contains("timed out")) {
+                failure = "Model/provider did not respond within the "
+                        + caseTimeout.toSeconds() + "s evaluation limit.";
+            }
+            String metricFailure = failure;
             requestedMetrics.forEach(metric -> metrics.put(
                     metric,
-                    MetricResult.failure(rootMessage(exception))
+                    MetricResult.failure(metricFailure)
             ));
             return new Observation(
                     testCase.path("id").asText(),
@@ -332,7 +385,7 @@ public class AiModelEvaluationService {
                     Duration.between(startedAt, Instant.now()).toMillis(),
                     requested(metrics, requestedMetrics),
                     null,
-                    rootMessage(exception),
+                    metricFailure,
                     null
             );
         } finally {
@@ -488,10 +541,22 @@ public class AiModelEvaluationService {
             );
             return;
         }
-        WorkflowAiResponseDTO retry = conversationService.regenerateMessage(
-                messageId,
-                modelConfigId
-        );
+        WorkflowAiResponseDTO retry;
+        try {
+            retry = conversationService.regenerateEvaluationMessage(
+                    messageId,
+                    modelConfigId,
+                    RETRY_ATTEMPT_TIMEOUT
+            );
+        } catch (RuntimeException exception) {
+            String failure = rootMessage(exception);
+            if (failure != null && failure.toLowerCase(Locale.ROOT).contains("timed out")) {
+                failure = "Retry model/provider did not respond within the "
+                        + RETRY_ATTEMPT_TIMEOUT.toSeconds() + "s evaluation limit.";
+            }
+            metrics.put("retry_supersession", MetricResult.failure(failure));
+            return;
+        }
         metrics.put(
                 "retry_supersession",
                 retry.assistantMessage() != null
@@ -630,6 +695,7 @@ public class AiModelEvaluationService {
             model.setEvaluationResult(serializeResult(observations, model, mode, judgeContext));
         }
         modelRepository.saveAndFlush(model);
+        syncHistory(model);
     }
 
     private String serializeResult(
@@ -908,6 +974,7 @@ public class AiModelEvaluationService {
         model.setEvaluationCompletedCases(observations.size());
         model.setEvaluationResult(serializeProgress(observations));
         modelRepository.saveAndFlush(model);
+        syncHistory(model);
     }
 
     private boolean cancelRequested(UUID modelConfigId, UUID runId) {
@@ -922,6 +989,7 @@ public class AiModelEvaluationService {
         model.setEvaluationError(rootMessage(exception));
         model.setEvaluationFinishedAt(Instant.now());
         modelRepository.saveAndFlush(model);
+        syncHistory(model);
     }
 
     private AiModelConfig requireCurrentRun(UUID modelConfigId, UUID runId) {
@@ -982,6 +1050,77 @@ public class AiModelEvaluationService {
                 model.getEvaluationStartedAt(),
                 model.getEvaluationFinishedAt()
         );
+    }
+
+    private AiModelEvaluationDTO toDto(AiModelEvaluationRun run) {
+        JsonNode stored = parseStoredResult(run.getResult(), run.getModelConfigId());
+        boolean running = run.getStatus() == AiModelEvaluationStatus.RUNNING;
+        JsonNode result = running ? null : stored;
+        JsonNode progressObservations = running && stored != null
+                ? stored.get("observations")
+                : null;
+        return new AiModelEvaluationDTO(
+                run.getId(),
+                run.getModelConfigId(),
+                run.getModelDisplayName(),
+                run.getStatus(),
+                run.getMode(),
+                run.getRepetitions(),
+                run.getCompletedCases(),
+                run.getTotalCases(),
+                run.isCancelRequested(),
+                isStale(result),
+                result,
+                progressObservations,
+                run.getError(),
+                run.getStartedAt(),
+                run.getFinishedAt()
+        );
+    }
+
+    private JsonNode parseStoredResult(String value, UUID modelConfigId) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(value);
+        } catch (Exception exception) {
+            log.warn("Could not read evaluation result for model {}", modelConfigId, exception);
+            return null;
+        }
+    }
+
+    private void syncHistory(AiModelConfig model) {
+        if (model.getEvaluationRunId() == null
+                || model.getEvaluationStatus() == null
+                || model.getEvaluationMode() == null
+                || model.getEvaluationStartedAt() == null) {
+            return;
+        }
+        AiModelEvaluationRun run = runRepository.findById(model.getEvaluationRunId())
+                .orElseGet(AiModelEvaluationRun::new);
+        if (run.getId() == null) {
+            run.setId(model.getEvaluationRunId());
+            run.setModelConfigId(model.getId());
+        }
+        run.setModelDisplayName(model.getDisplayName());
+        run.setStatus(model.getEvaluationStatus());
+        run.setMode(model.getEvaluationMode());
+        run.setRepetitions(model.getEvaluationRepetitions() == null
+                ? 0
+                : model.getEvaluationRepetitions());
+        run.setCompletedCases(model.getEvaluationCompletedCases() == null
+                ? 0
+                : model.getEvaluationCompletedCases());
+        run.setTotalCases(model.getEvaluationTotalCases() == null
+                ? 0
+                : model.getEvaluationTotalCases());
+        run.setCancelRequested(model.isEvaluationCancelRequested());
+        run.setResult(model.getEvaluationResult());
+        run.setError(model.getEvaluationError());
+        run.setStartedAt(model.getEvaluationStartedAt());
+        run.setFinishedAt(model.getEvaluationFinishedAt());
+        runRepository.saveAndFlush(run);
     }
 
     private boolean isStale(JsonNode result) {

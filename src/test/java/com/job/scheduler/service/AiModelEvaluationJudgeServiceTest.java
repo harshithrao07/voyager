@@ -95,7 +95,7 @@ class AiModelEvaluationJudgeServiceTest {
         stubReplies("{\"score\": 5, \"rationale\": \"Exactly the requested state.\"}");
 
         AiModelEvaluationJudgeService.Judgment judgment = service.judge(
-                judgeChatModel, judgeConfig, testCase, chatResponse(), PASS_SCORE
+                judgeChatModel, judgeConfig, testCase, chatResponse(), List.of(), PASS_SCORE
         );
 
         assertTrue(judgment.scoredSuccessfully());
@@ -115,7 +115,7 @@ class AiModelEvaluationJudgeServiceTest {
                 """);
 
         AiModelEvaluationJudgeService.Judgment judgment = service.judge(
-                judgeChatModel, judgeConfig, testCase, chatResponse(), PASS_SCORE
+                judgeChatModel, judgeConfig, testCase, chatResponse(), List.of(), PASS_SCORE
         );
 
         assertEquals(3, judgment.score());
@@ -127,7 +127,7 @@ class AiModelEvaluationJudgeServiceTest {
         stubReplies("{\"score\": 9, \"rationale\": \"Overenthusiastic.\"}");
 
         AiModelEvaluationJudgeService.Judgment judgment = service.judge(
-                judgeChatModel, judgeConfig, testCase, chatResponse(), PASS_SCORE
+                judgeChatModel, judgeConfig, testCase, chatResponse(), List.of(), PASS_SCORE
         );
 
         assertEquals(5, judgment.score());
@@ -141,7 +141,7 @@ class AiModelEvaluationJudgeServiceTest {
         );
 
         AiModelEvaluationJudgeService.Judgment judgment = service.judge(
-                judgeChatModel, judgeConfig, testCase, chatResponse(), PASS_SCORE
+                judgeChatModel, judgeConfig, testCase, chatResponse(), List.of(), PASS_SCORE
         );
 
         assertEquals(4, judgment.score());
@@ -153,7 +153,7 @@ class AiModelEvaluationJudgeServiceTest {
         stubReplies("no json here", "still no json");
 
         AiModelEvaluationJudgeService.Judgment judgment = service.judge(
-                judgeChatModel, judgeConfig, testCase, chatResponse(), PASS_SCORE
+                judgeChatModel, judgeConfig, testCase, chatResponse(), List.of(), PASS_SCORE
         );
 
         assertFalse(judgment.scoredSuccessfully());
@@ -167,7 +167,7 @@ class AiModelEvaluationJudgeServiceTest {
                 .thenThrow(new IllegalStateException("connection refused"));
 
         AiModelEvaluationJudgeService.Judgment judgment = service.judge(
-                judgeChatModel, judgeConfig, testCase, chatResponse(), PASS_SCORE
+                judgeChatModel, judgeConfig, testCase, chatResponse(), List.of(), PASS_SCORE
         );
 
         assertFalse(judgment.scoredSuccessfully());
@@ -183,7 +183,7 @@ class AiModelEvaluationJudgeServiceTest {
                         .build());
 
         AiModelEvaluationJudgeService.Judgment judgment = service.judge(
-                judgeChatModel, judgeConfig, testCase, chatResponse(), PASS_SCORE
+                judgeChatModel, judgeConfig, testCase, chatResponse(), List.of(), PASS_SCORE
         );
 
         assertEquals(4, judgment.score());
@@ -191,6 +191,39 @@ class AiModelEvaluationJudgeServiceTest {
         verify(judgeChatModel, times(2)).chat(requests.capture());
         assertEquals(ResponseFormat.JSON, requests.getAllValues().get(0).responseFormat());
         assertNull(requests.getAllValues().get(1).responseFormat());
+    }
+
+    @Test
+    void deterministicFailureCapsAnOvergenerousJudgeAndExplainsWhy() {
+        stubReplies("{\"score\": 5, \"rationale\": \"Looks semantically correct.\"}");
+
+        AiModelEvaluationJudgeService.Judgment judgment = service.judge(
+                judgeChatModel,
+                judgeConfig,
+                testCase,
+                chatResponse(),
+                List.of("asl_structural_valid: ASL was missing required structure."),
+                PASS_SCORE
+        );
+
+        assertEquals(2, judgment.score());
+        assertEquals(Boolean.FALSE, judgment.passed());
+        assertTrue(judgment.rationale().startsWith(
+                "Deterministic check failed: asl_structural_valid"
+        ));
+    }
+
+    @Test
+    void candidateSummaryOmitsEmptyWorkflowArtifactsAndProtocolStage() {
+        JsonNode summary = objectMapper.readTree(service.candidateSummary(chatResponse()));
+
+        assertEquals("All good.", summary.path("userVisibleMessage").asText());
+        assertFalse(summary.has("stage"));
+        assertFalse(summary.has("aslDefinition"));
+        assertFalse(summary.has("generatedAslDefinition"));
+        assertFalse(summary.has("proposedFunctions"));
+        assertFalse(summary.has("mcpRequirements"));
+        assertFalse(summary.has("validationIssues"));
     }
 
     @Test

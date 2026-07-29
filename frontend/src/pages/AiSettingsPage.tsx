@@ -48,7 +48,7 @@ export function AiSettingsPage() {
           managingModels={management.managingModels}
           onCopyEndpoint={management.copyEndpoint}
           onUpdateEndpointEnabled={management.updateEndpointEnabled}
-          onDeleteEndpointModels={management.deleteEndpointModels}
+          onDeleteSingleModel={management.deleteSingleModel}
           onUpdateSingleModelEnabled={management.updateSingleModelEnabled}
         />
       </div>

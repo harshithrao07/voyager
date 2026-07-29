@@ -42,14 +42,14 @@ class AslRuntimeCapabilityValidatorTest {
     }
 
     @Test
-    void acceptsTaskNowThatKafkaRuntimeExists() {
+    void acceptsRegisteredTaskResource() {
         var issues = validator.validate(objectMapper.readTree("""
                 {
                   "StartAt": "Call",
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "voyager://cleanup",
+                      "Resource": "voyager://system/webhook",
                       "End": true
                     }
                   }
@@ -57,5 +57,28 @@ class AslRuntimeCapabilityValidatorTest {
                 """));
 
         assertThat(issues).isEmpty();
+    }
+
+    @Test
+    void rejectsInventedTaskResource() {
+        var issues = validator.validate(objectMapper.readTree("""
+                {
+                  "StartAt": "Hash",
+                  "States": {
+                    "Hash": {
+                      "Type": "Task",
+                      "Resource": "voyager://system/hash-callback@v3.10.2",
+                      "End": true
+                    }
+                  }
+                }
+                """));
+
+        assertThat(issues)
+                .singleElement()
+                .satisfies(issue -> {
+                    assertThat(issue.code()).isEqualTo("TASK_RESOURCE_UNSUPPORTED");
+                    assertThat(issue.location()).isEqualTo("$.States.Hash.Resource");
+                });
     }
 }

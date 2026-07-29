@@ -113,7 +113,12 @@ public class WorkflowAiConversationService {
      * part-way — costs one noticeable pause rather than the whole request budget.
      */
     private static final long STREAM_IDLE_POLL_SECONDS = 5;
+    private static final int GENERAL_CHAT_MAX_OUTPUT_TOKENS = 512;
     private static final Pattern FUNCTION_NAME_PATTERN = Pattern.compile("^[a-z0-9][a-z0-9-]*$");
+    private static final Pattern EXPLICIT_SINGLE_TERMINAL_STATE = Pattern.compile(
+            "(?is)\\bexactly\\s+one\\s+(Succeed|Fail)\\s+state\\s+named\\s+"
+                    + "[\"']?([A-Za-z][A-Za-z0-9_-]{0,79})[\"']?(?=\\s|[.,;]|$)"
+    );
 
     // Cheap heuristic to tell a "just chatting" turn (a greeting or a general question) from a real
     // build request, so a general turn can skip shipping the whole function/MCP catalog to the model
@@ -161,6 +166,12 @@ public class WorkflowAiConversationService {
             "(?is)\\b(?:schedule|scheduled|cron|daily|weekly|hourly|monthly|"
                     + "every\\s+(?:minute|hour|day|week|month|weekday|morning|evening)|"
                     + "each\\s+(?:minute|hour|day|week|month|weekday|morning|evening))s?\\b"
+    );
+    private static final Pattern EXACT_SINGLE_SUCCEED_REQUEST = Pattern.compile(
+            "(?is).*\\bexactly\\s+one\\s+succeed\\s+state\\b.*"
+    );
+    private static final Pattern EXPLICIT_LOCAL_FUNCTION_REQUEST = Pattern.compile(
+            "(?is).*\\b(?:deterministic\\s+local\\s+function|local\\s+deterministic\\s+function)\\b.*"
     );
 
     // Small local models routinely emit near-JSON: // or # comments, single quotes, trailing commas,
@@ -227,7 +238,12 @@ public class WorkflowAiConversationService {
             own Output property; never guess that structuredContent contains a same-named wrapper object.
             End the final requested Task with End:true. Do not add a terminal Pass solely to end the workflow.
             If a Pass state is genuinely needed, use Output for transformed data; Result is JSONPath-only and invalid.
-            Every state must contain exactly one of Next or End.
+            Pass, Task, Wait, Parallel, and Map states must contain exactly one of Next or End.
+            Choice uses Choices plus optional Default and never End. Succeed and Fail are terminal by
+            their Type and must contain neither Next nor End.
+            Succeed, Fail, Pass, Wait, Choice, Parallel, Map, and Task are built-in ASL states. Never
+            propose a function merely to implement one of these state types. For example, a workflow
+            with exactly one Succeed state needs only StartAt and that state with Type:"Succeed".
             Never return an Adaptive Card, Markdown wrapper, JSON Schema, tool-call envelope, or UI component as aslDefinition.
             aslDefinition must be the ASL machine itself with StartAt and a non-empty States object.
             Keep cron, timezone, approval, and schedule metadata outside ASL.
@@ -683,6 +699,19 @@ public class WorkflowAiConversationService {
     }
 
     @Transactional
+    public WorkflowAiResponseDTO startEvaluationConversation(
+            String instruction,
+            UUID modelConfigId,
+            String userDateTime,
+            Duration timeout
+    ) {
+        return modelResolver.withRequestTimeout(
+                timeout,
+                () -> startConversation(instruction, modelConfigId, userDateTime, null, null)
+        );
+    }
+
+    @Transactional
     public WorkflowAiResponseDTO startConversation(
             String instruction,
             UUID modelConfigId,
@@ -852,6 +881,18 @@ public class WorkflowAiConversationService {
                 selectedModel,
                 targetMessage,
                 history
+        );
+    }
+
+    @Transactional
+    public WorkflowAiResponseDTO regenerateEvaluationMessage(
+            UUID messageId,
+            UUID modelConfigId,
+            Duration timeout
+    ) {
+        return modelResolver.withRequestTimeout(
+                timeout,
+                () -> regenerateMessage(messageId, modelConfigId)
         );
     }
 
@@ -1127,35 +1168,36 @@ public class WorkflowAiConversationService {
         List<ChatMessage> messages = prompt.messages();
         // One turn is several model calls. The pass counter labels each of them for the live UI so a
         // repair or review pass visibly replaces the previous pass's reasoning instead of appending.
-        TurnStream turnStream = openTurnStream(conversation, modelConfig);
+        TurnStream turnStream = openTurnStream(
+                conversation,
+                modelConfig,
+                prompt.generalTurn() ? GENERAL_CHAT_MAX_OUTPUT_TOKENS : null
+        );
         Instant startedAt = Instant.now();
         AssistantAttempt attempt = generateAssistantAttempt(
                 model,
                 modelConfig,
                 turnStream,
                 prompt.generalTurn() ? "Thinking" : "Designing the workflow",
-                messages
+                messages,
+                prompt.generalTurn() ? GENERAL_CHAT_MAX_OUTPUT_TOKENS : null
         );
+        attempt = normalizeExplicitSingleTerminalAttempt(conversation, attempt);
         // A plain-chat turn must stay chat-only. Small models, still constrained by the full response
         // schema, often emit a stub aslDefinition ({} or a blank StartAt) even for a greeting; promoting
         // or validating it wrongly drags the turn into ASL_UNDER_REVIEW. Drop any stray artifact here so
         // the reply is graded and shown as the conversation it actually is.
-        if (prompt.generalTurn() && attempt.parsed().structured()) {
-            attempt = new AssistantAttempt(
-                    attempt.modelResponse(),
-                    attempt.cleaned(),
-                    attempt.thinkingExtraction(),
-                    chatOnly(attempt.parsed())
-            );
-        }
+        attempt = normalizeGeneralChatAttempt(attempt, prompt.generalTurn());
         if (!prompt.generalTurn() && attempt.hasFunctionProposalSignal()) {
             attempt = generateAssistantAttempt(
                     model,
                     modelConfig,
                     turnStream,
                     "Reviewing the proposed function",
-                    functionCreationReviewPrompt(messages, attempt.cleaned())
+                    functionCreationReviewPrompt(messages, attempt.cleaned()),
+                    null
             );
+            attempt = normalizeExplicitSingleTerminalAttempt(conversation, attempt);
         }
         List<String> validationIssues = validateAssistantAttempt(
                 conversation,
@@ -1168,7 +1210,12 @@ public class WorkflowAiConversationService {
              !validationIssues.isEmpty()
                      && generationAttempt < MAX_ASSISTANT_GENERATION_ATTEMPTS;
              generationAttempt++) {
-            boolean repairIncludesFunctionContract = attempt.hasFunctionProposalSignal();
+            boolean repairIncludesFunctionContract = !prompt.generalTurn()
+                    && (attempt.hasFunctionProposalSignal()
+                            || validationIssues.stream().anyMatch(
+                                    issue -> issue.contains("resourcePlan.functions")
+                                            && issue.contains("explicitly requested")
+                            ));
             attempt = generateAssistantAttempt(
                     model,
                     modelConfig,
@@ -1177,21 +1224,30 @@ public class WorkflowAiConversationService {
                             ? "Preparing the reply"
                             : "Repairing the response (attempt " + (generationAttempt + 1)
                                     + " of " + MAX_ASSISTANT_GENERATION_ATTEMPTS + ")",
-                    repairPrompt(
-                            messages,
-                            attempt.cleaned(),
-                            validationIssues,
-                            repairIncludesFunctionContract
-                    )
+                    prompt.generalTurn()
+                            ? generalChatRepairPrompt(messages)
+                            : repairPrompt(
+                                    messages,
+                                    attempt.cleaned(),
+                                    validationIssues,
+                                    repairIncludesFunctionContract
+                            ),
+                    prompt.generalTurn() ? GENERAL_CHAT_MAX_OUTPUT_TOKENS : null
             );
-            if (!repairIncludesFunctionContract && attempt.hasFunctionProposalSignal()) {
+            attempt = normalizeExplicitSingleTerminalAttempt(conversation, attempt);
+            attempt = normalizeGeneralChatAttempt(attempt, prompt.generalTurn());
+            if (!prompt.generalTurn()
+                    && !repairIncludesFunctionContract
+                    && attempt.hasFunctionProposalSignal()) {
                 attempt = generateAssistantAttempt(
                         model,
                         modelConfig,
                         turnStream,
                         "Reviewing the proposed function",
-                        functionCreationReviewPrompt(messages, attempt.cleaned())
+                        functionCreationReviewPrompt(messages, attempt.cleaned()),
+                        null
                 );
+                attempt = normalizeExplicitSingleTerminalAttempt(conversation, attempt);
             }
             validationIssues = validateAssistantAttempt(
                     conversation,
@@ -1327,14 +1383,15 @@ public class WorkflowAiConversationService {
             AiModelConfig modelConfig,
             TurnStream turnStream,
             String stageLabel,
-            List<ChatMessage> messages
+            List<ChatMessage> messages,
+            Integer maxOutputTokens
     ) {
         // Abort before spending another model call if the client cancelled between passes.
         turnRegistry.throwIfCancelled(streamBroker.currentSession());
         ChatResponse modelResponse;
         try {
             modelResponse = turnStream == null
-                    ? blockingChat(model, modelConfig, messages)
+                    ? blockingChat(model, modelConfig, messages, maxOutputTokens)
                     : turnStream.generate(model, stageLabel, messages);
         } catch (WorkflowAiCancelledException exception) {
             // A cancelled turn must stay cancelled, not be reframed as a model-call failure.
@@ -1369,10 +1426,11 @@ public class WorkflowAiConversationService {
     private ChatResponse blockingChat(
             ChatModel model,
             AiModelConfig modelConfig,
-            List<ChatMessage> messages
+            List<ChatMessage> messages,
+            Integer maxOutputTokens
     ) {
         if (modelConfig == null) {
-            return model.chat(messages);
+            return promptOnlyChat(model, messages, maxOutputTokens);
         }
 
         AiStructuredOutputMode mode =
@@ -1390,13 +1448,13 @@ public class WorkflowAiConversationService {
                         : model;
                 ChatResponse response = switch (mode) {
                     case STRICT_JSON_SCHEMA, JSON_SCHEMA -> selectedModel.chat(
-                            structuredRequest(messages)
+                            structuredRequest(messages, maxOutputTokens)
                     );
-                    case JSON_OBJECT -> selectedModel.chat(ChatRequest.builder()
-                            .messages(messages)
-                            .responseFormat(ResponseFormat.JSON)
-                            .build());
-                    case PROMPT_ONLY, UNKNOWN -> selectedModel.chat(messages);
+                    case JSON_OBJECT -> selectedModel.chat(
+                            chatRequest(messages, ResponseFormat.JSON, maxOutputTokens)
+                    );
+                    case PROMPT_ONLY, UNKNOWN ->
+                            promptOnlyChat(selectedModel, messages, maxOutputTokens);
                 };
                 modelResolver.recordStructuredOutputMode(modelConfig, mode);
                 return response;
@@ -1430,11 +1488,40 @@ public class WorkflowAiConversationService {
         return nonStrict == null ? fallback : nonStrict;
     }
 
-    private ChatRequest structuredRequest(List<ChatMessage> messages) {
-        return ChatRequest.builder()
-                .messages(messages)
-                .responseFormat(WorkflowAiResponseSchema.responseFormat())
-                .build();
+    private ChatRequest structuredRequest(
+            List<ChatMessage> messages,
+            Integer maxOutputTokens
+    ) {
+        return chatRequest(
+                messages,
+                WorkflowAiResponseSchema.responseFormat(),
+                maxOutputTokens
+        );
+    }
+
+    private ChatResponse promptOnlyChat(
+            ChatModel model,
+            List<ChatMessage> messages,
+            Integer maxOutputTokens
+    ) {
+        return maxOutputTokens == null
+                ? model.chat(messages)
+                : model.chat(chatRequest(messages, null, maxOutputTokens));
+    }
+
+    private ChatRequest chatRequest(
+            List<ChatMessage> messages,
+            ResponseFormat responseFormat,
+            Integer maxOutputTokens
+    ) {
+        ChatRequest.Builder request = ChatRequest.builder().messages(messages);
+        if (responseFormat != null) {
+            request.responseFormat(responseFormat);
+        }
+        if (maxOutputTokens != null) {
+            request.maxOutputTokens(maxOutputTokens);
+        }
+        return request.build();
     }
 
     private AiStructuredOutputMode weakerStructuredOutputMode(AiStructuredOutputMode mode) {
@@ -1624,7 +1711,8 @@ public class WorkflowAiConversationService {
      */
     private TurnStream openTurnStream(
             WorkflowAiConversation conversation,
-            AiModelConfig modelConfig
+            AiModelConfig modelConfig,
+            Integer maxOutputTokens
     ) {
         String sessionId = streamBroker.currentSession();
         if (sessionId == null) {
@@ -1635,7 +1723,8 @@ public class WorkflowAiConversationService {
                     modelResolver.resolveStreaming(modelConfig),
                     modelConfig,
                     conversation.getId(),
-                    sessionId
+                    sessionId,
+                    maxOutputTokens
             );
         } catch (Exception exception) {
             // Streaming is a presentation nicety. If the endpoint cannot be built for it, still run
@@ -1658,18 +1747,21 @@ public class WorkflowAiConversationService {
          */
         private final String sessionId;
         private final AiModelConfig modelConfig;
+        private final Integer maxOutputTokens;
         private int pass;
 
         private TurnStream(
                 StreamingChatModel model,
                 AiModelConfig modelConfig,
                 UUID conversationId,
-                String sessionId
+                String sessionId,
+                Integer maxOutputTokens
         ) {
             this.model = model;
             this.modelConfig = modelConfig;
             this.conversationId = conversationId;
             this.sessionId = sessionId;
+            this.maxOutputTokens = maxOutputTokens;
         }
 
         private ChatResponse generate(
@@ -1686,14 +1778,24 @@ public class WorkflowAiConversationService {
             // Schema-constrained decoding is not consistently streamable across compatible
             // providers. Preserve the stage event, then use the negotiated blocking path.
             if (isSchemaMode(outputMode)) {
-                return blockingChat(blockingModel, modelConfig, messages);
+                return blockingChat(
+                        blockingModel,
+                        modelConfig,
+                        messages,
+                        maxOutputTokens
+                );
             }
 
             // Re-check per pass, not just when the turn opened. A turn runs up to five model calls,
             // and once one of them proves the endpoint cannot stream, every later pass must skip
             // straight to blocking instead of stalling out the idle budget again.
             if (!modelResolver.supportsStreaming(modelConfig)) {
-                return blockingChat(blockingModel, modelConfig, messages);
+                return blockingChat(
+                        blockingModel,
+                        modelConfig,
+                        messages,
+                        maxOutputTokens
+                );
             }
 
             CompletableFuture<ChatResponse> completion = new CompletableFuture<>();
@@ -1777,6 +1879,9 @@ public class WorkflowAiConversationService {
 
         private ChatRequest streamingRequest(List<ChatMessage> messages) {
             ChatRequest.Builder request = ChatRequest.builder().messages(messages);
+            if (maxOutputTokens != null) {
+                request.maxOutputTokens(maxOutputTokens);
+            }
             if (modelResolver.preferredStructuredOutputMode(modelConfig)
                     == AiStructuredOutputMode.JSON_OBJECT) {
                 request.responseFormat(ResponseFormat.JSON);
@@ -1828,7 +1933,12 @@ public class WorkflowAiConversationService {
                                 modelConfig.getBaseUrl(),
                                 cause
                         );
-                        return blockingChat(blockingModel, modelConfig, messages);
+                        return blockingChat(
+                                blockingModel,
+                                modelConfig,
+                                messages,
+                                maxOutputTokens
+                        );
                     }
                     return fallback(blockingModel, messages, cause.toString());
                 } catch (TimeoutException exception) {
@@ -1879,7 +1989,12 @@ public class WorkflowAiConversationService {
                     reason
             );
             modelResolver.markStreamingUnsupported(modelConfig);
-            return blockingChat(blockingModel, modelConfig, messages);
+            return blockingChat(
+                    blockingModel,
+                    modelConfig,
+                    messages,
+                    maxOutputTokens
+            );
         }
     }
 
@@ -1972,6 +2087,17 @@ public class WorkflowAiConversationService {
         return reviewMessages;
     }
 
+    private List<ChatMessage> generalChatRepairPrompt(List<ChatMessage> originalPrompt) {
+        List<ChatMessage> repairMessages = new ArrayList<>(originalPrompt);
+        repairMessages.add(UserMessage.userMessage("""
+                Your previous reply was not valid JSON. Answer the user's conversational message again.
+                Return only this small strict JSON object, with one natural sentence and nothing else:
+                {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"<friendly reply>"}
+                Do not return workflow fields, ASL, functions, MCP requirements, plans, or Markdown.
+                """));
+        return repairMessages;
+    }
+
     private String functionCreationContext() {
         return FUNCTION_CREATION_PROMPT
                 + "\n\n"
@@ -1983,6 +2109,84 @@ public class WorkflowAiConversationService {
      * general-chat turn is treated as pure conversation. The stage is pinned to
      * COLLECTING_WORKFLOW_DETAILS because a chat turn never advances the build.
      */
+    private AssistantAttempt normalizeExplicitSingleTerminalAttempt(
+            WorkflowAiConversation conversation,
+            AssistantAttempt attempt
+    ) {
+        ParsedAssistantResponse parsed = attempt.parsed();
+        if (!parsed.structured() || parsed.hasResourcePlan()) {
+            return attempt;
+        }
+        Matcher requestedState = EXPLICIT_SINGLE_TERMINAL_STATE.matcher(
+                Objects.toString(conversation.getInitialInstruction(), "")
+        );
+        if (!requestedState.find()) {
+            return attempt;
+        }
+
+        JsonNode candidate = parsed.aslDefinition();
+        if (candidate == null && parsed.draftWorkflowPayload() != null) {
+            candidate = parsed.draftWorkflowPayload().definition();
+        }
+        if (candidate == null || !candidate.isArray() || candidate.size() != 1) {
+            return attempt;
+        }
+        JsonNode stateCandidate = candidate.get(0);
+        String requestedType = requestedState.group(1);
+        if (stateCandidate == null
+                || !stateCandidate.isObject()
+                || !requestedType.equalsIgnoreCase(
+                        stateCandidate.path("Type").asText("")
+                )) {
+            return attempt;
+        }
+
+        String stateName = requestedState.group(2);
+        String canonicalType = "Fail".equalsIgnoreCase(requestedType)
+                ? "Fail"
+                : "Succeed";
+        ObjectNode terminalState = objectMapper.createObjectNode();
+        terminalState.put("Type", canonicalType);
+        ObjectNode states = objectMapper.createObjectNode();
+        states.set(stateName, terminalState);
+        ObjectNode machine = objectMapper.createObjectNode();
+        machine.put("StartAt", stateName);
+        machine.set("States", states);
+
+        ParsedAssistantResponse normalized = new ParsedAssistantResponse(
+                WorkflowAiConversationStage.ASL_READY,
+                parsed.message(),
+                machine,
+                null,
+                null,
+                null,
+                null,
+                true,
+                null
+        );
+        return new AssistantAttempt(
+                attempt.modelResponse(),
+                attempt.cleaned(),
+                attempt.thinkingExtraction(),
+                normalized
+        );
+    }
+
+    private AssistantAttempt normalizeGeneralChatAttempt(
+            AssistantAttempt attempt,
+            boolean generalTurn
+    ) {
+        if (!generalTurn || !attempt.parsed().structured()) {
+            return attempt;
+        }
+        return new AssistantAttempt(
+                attempt.modelResponse(),
+                attempt.cleaned(),
+                attempt.thinkingExtraction(),
+                chatOnly(attempt.parsed())
+        );
+    }
+
     private ParsedAssistantResponse chatOnly(ParsedAssistantResponse parsed) {
         return new ParsedAssistantResponse(
                 WorkflowAiConversationStage.COLLECTING_WORKFLOW_DETAILS,
@@ -2032,10 +2236,37 @@ public class WorkflowAiConversationService {
                     "[AI_RESPONSE] aslDefinition and draftWorkflowPayload.definition must match."
             );
         }
+        boolean explicitLocalFunctionRequested = EXPLICIT_LOCAL_FUNCTION_REQUEST.matcher(
+                Objects.toString(conversation.getInitialInstruction(), "")
+        ).matches();
+        boolean hasFunctionProposal = parsed.resourcePlan() != null
+                && parsed.resourcePlan().functions() != null
+                && parsed.resourcePlan().functions().stream().anyMatch(Objects::nonNull);
+        boolean hasFunctionTask = containsTaskResource(
+                parsed.aslDefinition(),
+                "voyager://function/"
+        ) || containsTaskResource(payloadDefinition, "voyager://function/");
+        if (explicitLocalFunctionRequested && !hasFunctionProposal && !hasFunctionTask) {
+            issues.add(
+                    "[AI_RESOURCE_PLAN] The user explicitly requested a deterministic local "
+                            + "function. Put the implementation in resourcePlan.functions with "
+                            + "the AI default languageId and complete JSON stdin/stdout sourceCode; "
+                            + "do not invent another Task resource or classify it as MCP."
+            );
+        }
         if (parsed.hasResourcePlan()) {
             if (parsed.resourcePlan().functions() != null) {
                 Set<String> proposedFunctionNames = new HashSet<>();
                 FunctionLanguageDTO defaultLanguage = functionRuntimePolicy.aiDefaultLanguage();
+                if (!parsed.resourcePlan().functions().isEmpty()
+                        && EXACT_SINGLE_SUCCEED_REQUEST.matcher(
+                                Objects.toString(conversation.getInitialInstruction(), "")
+                        ).matches()) {
+                    issues.add(
+                            "[AI_RESOURCE_PLAN] Succeed is a built-in ASL state and does not need "
+                                    + "a function. Return the requested one-state Succeed machine."
+                    );
+                }
                 for (WorkflowAiProposedFunctionDTO function :
                         parsed.resourcePlan().functions()) {
                     if (function == null) {
@@ -2129,6 +2360,34 @@ public class WorkflowAiConversationService {
             }
         }
         return List.copyOf(issues);
+    }
+
+    private boolean containsTaskResource(JsonNode node, String resourcePrefix) {
+        if (node == null || resourcePrefix == null) {
+            return false;
+        }
+        if (node.isArray()) {
+            for (JsonNode item : node) {
+                if (containsTaskResource(item, resourcePrefix)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (!node.isObject()) {
+            return false;
+        }
+        for (java.util.Map.Entry<String, JsonNode> entry : node.properties()) {
+            if ("Resource".equals(entry.getKey())
+                    && entry.getValue().isTextual()
+                    && entry.getValue().textValue().startsWith(resourcePrefix)) {
+                return true;
+            }
+            if (containsTaskResource(entry.getValue(), resourcePrefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<String> validateStageContract(
@@ -2280,9 +2539,12 @@ public class WorkflowAiConversationService {
                 .reduce((first, second) -> second)
                 .map(WorkflowAiMessage::getContent)
                 .orElse(null);
+        String intentMessage = lastUserMessage == null
+                ? conversation.getInitialInstruction()
+                : lastUserMessage;
         boolean generalTurn = isGeneralChatTurn(
                 conversation,
-                lastUserMessage == null ? task : lastUserMessage
+                intentMessage
         );
         // A plain-chat turn uses the slim prompt (so a small model stops deflecting into "what's the
         // workflow name?") and skips the catalog entirely. Building turns get the full builder prompt.
@@ -2332,8 +2594,8 @@ public class WorkflowAiConversationService {
         return new BuiltPrompt(
                 messages,
                 generalTurn,
-                schedulingRequested(conversation, lastUserMessage == null ? task : lastUserMessage),
-                artifactRequired(conversation, lastUserMessage == null ? task : lastUserMessage)
+                schedulingRequested(conversation, intentMessage),
+                artifactRequired(conversation, intentMessage)
         );
     }
 
@@ -2795,6 +3057,14 @@ public class WorkflowAiConversationService {
                 asl = null;
             }
             JsonNode finalPlan = root.get("finalPlan");
+            if (asl == null && finalPlan != null && finalPlan.isObject()) {
+                JsonNode finalPlanDefinition = normalizeAslDefinition(
+                        finalPlan.get("definition")
+                );
+                if (looksLikeAsl(finalPlanDefinition)) {
+                    asl = finalPlanDefinition;
+                }
+            }
             JsonNode draftPayloadNode = root.get("draftWorkflowPayload");
             if (draftPayloadNode != null
                     && draftPayloadNode.isObject()
@@ -2803,10 +3073,20 @@ public class WorkflowAiConversationService {
                         "definition",
                         normalizeAslDefinition(draftPayloadNode.get("definition"))
                 );
+                JsonNode draftDefinition = draftPayloadNode.get("definition");
+                if (asl == null && looksLikeAsl(draftDefinition)) {
+                    asl = draftDefinition;
+                    if (stage != WorkflowAiConversationStage.PLAN_READY) {
+                        // A complete ASL machine placed in a premature draft is still useful, but
+                        // workflow metadata is not ready yet. Promote only the definition.
+                        finalPlan = null;
+                        draftPayloadNode = null;
+                    }
+                }
             }
             if (stage == WorkflowAiConversationStage.RESOURCES_PROPOSED
                     && hasResourcePlan
-                    && !looksLikeAsl(asl)) {
+                    && (!looksLikeAsl(asl) || resourcePlanNeedsProvisioning(resourcePlan))) {
                 // Resource discovery precedes workflow generation. Some weaker models append a
                 // pseudo-workflow or an illustrative, non-ASL object to an otherwise valid resource
                 // proposal. It is not an executable candidate and must not invalidate the proposal.
@@ -2821,6 +3101,16 @@ public class WorkflowAiConversationService {
                             draftPayloadNode,
                             CreateWorkflowRequestDTO.class
                     );
+            if (stage == WorkflowAiConversationStage.PLAN_READY
+                    && asl != null
+                    && (draftPayload == null || draftPayload.definition() == null)) {
+                // A complete definition hidden in finalPlan is useful, but an empty draft is not
+                // ready to save. Preserve the workflow at the honest earlier stage.
+                stage = WorkflowAiConversationStage.ASL_READY;
+                finalPlan = null;
+                draftPayloadNode = null;
+                draftPayload = null;
+            }
             if (message == null || message.isBlank()) {
                 if (asl != null && !asl.isNull()) {
                     message = "Generated workflow definition.";
@@ -2865,6 +3155,32 @@ public class WorkflowAiConversationService {
                     exception.getMessage()
             );
         }
+    }
+
+    private boolean resourcePlanNeedsProvisioning(WorkflowAiResourcePlanDTO resourcePlan) {
+        if (resourcePlan == null) {
+            return false;
+        }
+        if (resourcePlan.functions() != null
+                && resourcePlan.functions().stream().anyMatch(Objects::nonNull)) {
+            return true;
+        }
+        List<WorkflowAiMcpRequirementDTO> requirements = resourcePlan.mcpRequirements();
+        if (requirements == null || requirements.isEmpty()) {
+            return false;
+        }
+        List<WorkflowAiResourceCatalogService.McpRequirementMatch> matches =
+                resourceCatalogService.findMcpRequirementMatches(requirements);
+        Set<String> matchedCapabilities = matches.stream()
+                .map(WorkflowAiResourceCatalogService.McpRequirementMatch::capability)
+                .filter(Objects::nonNull)
+                .map(capability -> capability.trim().toLowerCase(Locale.ROOT))
+                .collect(java.util.stream.Collectors.toSet());
+        return requirements.stream()
+                .filter(Objects::nonNull)
+                .map(WorkflowAiMcpRequirementDTO::capability)
+                .anyMatch(capability -> capability == null
+                        || !matchedCapabilities.contains(capability.trim().toLowerCase(Locale.ROOT)));
     }
 
     private List<String> validateExecutableDefinition(JsonNode definition) {
@@ -3345,10 +3661,26 @@ public class WorkflowAiConversationService {
      * conversions (for example JSONPath fields to JSONata) remain the model repair loop's job.
      */
     private JsonNode normalizeAslDefinition(JsonNode candidate) {
+        if (candidate != null && candidate.isTextual()) {
+            String embeddedJson = candidate.textValue();
+            if (embeddedJson != null && embeddedJson.trim().startsWith("{")) {
+                try {
+                    return normalizeAslDefinition(LENIENT_MODEL_MAPPER.readTree(embeddedJson));
+                } catch (Exception ignored) {
+                    // Keep the original text node so ordinary ASL validation reports the bad shape.
+                }
+            }
+        }
         if (candidate == null || !candidate.isObject()) {
             return candidate;
         }
         ObjectNode normalized = (ObjectNode) candidate.deepCopy();
+        normalized.remove("Version");
+        normalized.remove("version");
+        normalized.remove("QueryLanguage");
+        // End belongs to individual non-terminal states. It is never a machine-level field; weak
+        // models commonly duplicate it at the root after correctly terminating the last state.
+        normalized.remove("End");
         JsonNode lowerStartAt = normalized.get("startAt");
         if (!normalized.has("StartAt")
                 && lowerStartAt != null
@@ -3359,6 +3691,20 @@ public class WorkflowAiConversationService {
         if (!normalized.has("States") && normalized.path("states").isObject()) {
             normalized.set("States", normalized.get("states"));
             normalized.remove("states");
+        }
+        JsonNode statesNode = normalized.get("States");
+        if (statesNode != null && statesNode.isObject()) {
+            statesNode.properties().forEach(entry -> {
+                JsonNode state = entry.getValue();
+                JsonNode type = state == null ? null : state.get("Type");
+                if (state instanceof ObjectNode stateObject
+                        && type != null
+                        && type.isTextual()
+                        && ("Succeed".equals(type.textValue()) || "Fail".equals(type.textValue()))) {
+                    stateObject.remove("Next");
+                    stateObject.remove("End");
+                }
+            });
         }
         JsonNode startAtNode = normalized.get("StartAt");
         if (normalized.has("States")
