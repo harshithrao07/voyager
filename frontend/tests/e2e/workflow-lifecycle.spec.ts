@@ -202,7 +202,7 @@ async function triggerWorkflowThroughUi(
   const triggerButton = page.getByTestId('execution-trigger-run');
   await expect(triggerButton).toBeEnabled();
   await triggerButton.click();
-  await page.getByTestId('execution-input-json').fill(JSON.stringify(input, null, 2));
+  await page.getByTestId('execution-input-json').locator('textarea').fill(JSON.stringify(input, null, 2));
   await page.getByTestId('execution-submit-run').click();
   await expect(page.getByTestId('execution-trigger-dialog')).toBeHidden();
   await expect(page.getByTestId('execution-selected-status')).toBeVisible();
@@ -674,6 +674,15 @@ test('a recurring workflow can move through draft revisions, activation, and arc
   await expect(page.getByTestId('workflow-revision-count')).toHaveText('3 revisions');
   await expect(page.getByTestId('workflow-revision-3')).toHaveAttribute('data-revision-active', 'true');
   await expect(page.getByTestId('workflow-revision-2')).toHaveAttribute('data-revision-active', 'false');
+
+  await page.getByTestId('workflow-revision-2').click();
+  const makeActiveButton = page.getByTestId('workflow-make-revision-active');
+  await expect(makeActiveButton).toBeVisible();
+  await expect(makeActiveButton).toHaveAttribute('title', 'Make Rev 2 the active revision');
+  await makeActiveButton.click();
+  await expect(makeActiveButton).toBeHidden();
+  await expect(page.getByTestId('workflow-revision-2')).toHaveAttribute('data-revision-active', 'true');
+  await expect(page.getByTestId('workflow-revision-3')).toHaveAttribute('data-revision-active', 'false');
 
   await page.getByTestId('workflow-settings-open').click();
   page.once('dialog', async (dialog) => {

@@ -367,6 +367,7 @@ export interface UpdateWorkflowMetadataRequest {
   expectedVersion: number;
   name?: string;
   cronExpression?: string | null;
+  scheduledInput?: unknown;
   timezone?: string;
   maxAttempts?: number;
 }
@@ -389,6 +390,7 @@ export interface WorkflowResponseDTO {
   cronExpression: string | null;
   timezone: string | null;
   nextRunAt: string | null;
+  scheduledInput: unknown;
   maxAttempts: number;
   idempotencyKey: string;
   activeDefinition: WorkflowDefinitionResponseDTO | null;
@@ -699,7 +701,7 @@ export interface WorkflowTriageResponse {
   patch: WorkflowTriagePatch;
 }
 
-/** AI diagnosis of a failed execution: root cause + an optional validated ASL patch. */
+/** Read-only AI diagnosis of a failed execution. The legacy patch field is always empty. */
 export function triageWorkflowExecution(
   workflowId: string,
   executionId: string,

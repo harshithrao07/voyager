@@ -12,13 +12,6 @@ import com.job.scheduler.enums.AslStateType;
 import com.job.scheduler.enums.StateExecutionStatus;
 import com.job.scheduler.enums.WorkflowExecutionStatus;
 import com.job.scheduler.repository.WorkflowExecutionRepository;
-import com.job.scheduler.workflow.asl.runtime.AslRuntimeCapabilityValidator;
-import com.job.scheduler.workflow.asl.validation.AslDefinitionValidator;
-import com.job.scheduler.workflow.asl.validation.AslFunctionResourceValidator;
-import com.job.scheduler.workflow.asl.validation.AslMcpResourceValidator;
-import com.job.scheduler.workflow.asl.validation.AslValidationCategory;
-import com.job.scheduler.workflow.asl.validation.AslValidationIssue;
-import com.job.scheduler.workflow.asl.validation.AslValidationResult;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
@@ -38,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -45,17 +39,11 @@ class WorkflowAiFailureTriageServiceTest {
 
     private static final String ORIGINAL_ASL =
             "{\"StartAt\":\"Call\",\"States\":{\"Call\":{\"Type\":\"Task\",\"Resource\":\"voyager://function/f\",\"End\":true}}}";
-    private static final String PATCHED_ASL =
-            "{\"StartAt\":\"Call\",\"States\":{\"Call\":{\"Type\":\"Task\",\"Resource\":\"voyager://function/f\",\"Retry\":[{\"ErrorEquals\":[\"States.ALL\"],\"MaxAttempts\":3}],\"End\":true}}}";
 
     @Mock private WorkflowExecutionRepository workflowExecutionRepository;
     @Mock private WorkflowExecutionInspectionService inspectionService;
     @Mock private AiModelConfigService aiModelConfigService;
     @Mock private WorkflowAiModelResolver modelResolver;
-    @Mock private AslDefinitionValidator aslDefinitionValidator;
-    @Mock private AslRuntimeCapabilityValidator runtimeCapabilityValidator;
-    @Mock private AslMcpResourceValidator mcpResourceValidator;
-    @Mock private AslFunctionResourceValidator functionResourceValidator;
     @Mock private ChatModel chatModel;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -71,22 +59,10 @@ class WorkflowAiFailureTriageServiceTest {
                 inspectionService,
                 aiModelConfigService,
                 modelResolver,
-                aslDefinitionValidator,
-                runtimeCapabilityValidator,
-                mcpResourceValidator,
-                functionResourceValidator,
                 objectMapper
         );
         lenient().when(aiModelConfigService.resolveModel(null)).thenReturn(new AiModelConfig());
         lenient().when(modelResolver.resolve(org.mockito.ArgumentMatchers.any())).thenReturn(chatModel);
-        lenient().when(aslDefinitionValidator.validate(org.mockito.ArgumentMatchers.any()))
-                .thenReturn(new AslValidationResult(List.of()));
-        lenient().when(runtimeCapabilityValidator.validate(org.mockito.ArgumentMatchers.any()))
-                .thenReturn(List.of());
-        lenient().when(mcpResourceValidator.validate(org.mockito.ArgumentMatchers.any()))
-                .thenReturn(List.of());
-        lenient().when(functionResourceValidator.validate(org.mockito.ArgumentMatchers.any()))
-                .thenReturn(List.of());
     }
 
     private WorkflowExecution failedExecution(WorkflowExecutionStatus status) {
@@ -132,49 +108,61 @@ class WorkflowAiFailureTriageServiceTest {
     }
 
     @Test
-    void returnsRootCauseAndValidatedPatch() {
+    void returnsRootCauseWithoutProposingAChange() {
         failedExecution(WorkflowExecutionStatus.FAILED);
         stubFailingState();
         stubModelReply("""
-                {"rootCause":"The Task has no Retry.",
-                 "explanation":"Add a Retry so transient failures recover.",
-                 "changes":["Add Retry to Call"],
-                 "aslDefinition":%s}
-                """.formatted(PATCHED_ASL));
+                {"rootCause":"The Task resource returned TASK_FAILED.",
+                 "explanation":"The persisted Call state contains the error boom and the execution ended as FAILED."}
+                """);
 
         WorkflowTriageResponseDTO result = service.triage(workflowId, executionId, null);
 
         assertThat(result.failingStateName()).isEqualTo("Call");
-        assertThat(result.rootCause()).isEqualTo("The Task has no Retry.");
-        assertThat(result.patch().hasPatch()).isTrue();
-        assertThat(result.patch().valid()).isTrue();
-        assertThat(result.patch().changes()).containsExactly("Add Retry to Call");
-        assertThat(result.patch().aslDefinition().path("States").path("Call").has("Retry")).isTrue();
+        assertThat(result.rootCause()).isEqualTo("The Task resource returned TASK_FAILED.");
+        assertThat(result.explanation()).contains("persisted Call state");
+        assertThat(result.patch().hasPatch()).isFalse();
     }
 
     @Test
-    void flagsPatchThatFailsValidation() {
+    void usesTheRequestedDiagnosisModel() {
+        UUID selectedModelId = UUID.randomUUID();
         failedExecution(WorkflowExecutionStatus.FAILED);
         stubFailingState();
-        when(aslDefinitionValidator.validate(org.mockito.ArgumentMatchers.any()))
-                .thenReturn(new AslValidationResult(List.of(new AslValidationIssue(
-                        "$.States.Call", AslValidationCategory.ASL, "BAD", "broken"))));
+        when(aiModelConfigService.resolveModel(selectedModelId)).thenReturn(new AiModelConfig());
         stubModelReply("""
-                {"rootCause":"x","explanation":"y","changes":[],"aslDefinition":%s}
-                """.formatted(PATCHED_ASL));
+                {"rootCause":"The state input was empty.",
+                 "explanation":"The recorded input did not contain the value required by Call."}
+                """);
+
+        service.triage(workflowId, executionId, selectedModelId);
+
+        verify(aiModelConfigService).resolveModel(selectedModelId);
+    }
+
+    @Test
+    void ignoresPatchFieldsIfModelViolatesDiagnosisOnlyContract() {
+        failedExecution(WorkflowExecutionStatus.FAILED);
+        stubFailingState();
+        stubModelReply("""
+                {"rootCause":"The state input was missing data.",
+                 "explanation":"The recorded state input was empty.",
+                 "changes":["Change the workflow"],
+                 "aslDefinition":%s}
+                """.formatted(ORIGINAL_ASL));
 
         WorkflowTriageResponseDTO result = service.triage(workflowId, executionId, null);
 
-        assertThat(result.patch().hasPatch()).isTrue();
-        assertThat(result.patch().valid()).isFalse();
-        assertThat(result.patch().validationIssues()).anyMatch(issue -> issue.contains("broken"));
+        assertThat(result.rootCause()).isEqualTo("The state input was missing data.");
+        assertThat(result.patch().hasPatch()).isFalse();
+        assertThat(result.patch().aslDefinition()).isNull();
     }
 
     @Test
-    void returnsNoPatchWhenModelOmitsAsl() {
+    void returnsDiagnosisForTimedOutExecution() {
         failedExecution(WorkflowExecutionStatus.TIMED_OUT);
         stubFailingState();
-        stubModelReply("{\"rootCause\":\"External outage\",\"explanation\":\"Retry later\"}");
+        stubModelReply("{\"rootCause\":\"External outage\",\"explanation\":\"The Task timed out while the external service was unavailable.\"}");
 
         WorkflowTriageResponseDTO result = service.triage(workflowId, executionId, null);
 
@@ -183,27 +171,16 @@ class WorkflowAiFailureTriageServiceTest {
     }
 
     @Test
-    void returnsNoPatchWhenPatchEqualsOriginal() {
-        failedExecution(WorkflowExecutionStatus.FAILED);
-        stubFailingState();
-        stubModelReply("{\"rootCause\":\"x\",\"aslDefinition\":" + ORIGINAL_ASL + "}");
-
-        WorkflowTriageResponseDTO result = service.triage(workflowId, executionId, null);
-
-        assertThat(result.patch().hasPatch()).isFalse();
-    }
-
-    @Test
     void toleratesModelReplyWithProseAndThinkBlock() {
         failedExecution(WorkflowExecutionStatus.FAILED);
         stubFailingState();
-        stubModelReply("<think>let me reason</think>\nHere is the fix:\n```json\n"
-                + "{\"rootCause\":\"missing retry\",\"aslDefinition\":" + PATCHED_ASL + "}\n```");
+        stubModelReply("<think>let me reason</think>\nDiagnosis:\n```json\n"
+                + "{\"rootCause\":\"missing input\",\"explanation\":\"The recorded state input was empty.\"}\n```");
 
         WorkflowTriageResponseDTO result = service.triage(workflowId, executionId, null);
 
-        assertThat(result.rootCause()).isEqualTo("missing retry");
-        assertThat(result.patch().hasPatch()).isTrue();
+        assertThat(result.rootCause()).isEqualTo("missing input");
+        assertThat(result.patch().hasPatch()).isFalse();
     }
 
     @Test

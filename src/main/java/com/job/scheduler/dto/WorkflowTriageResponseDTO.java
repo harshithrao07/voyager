@@ -3,8 +3,8 @@ package com.job.scheduler.dto;
 import java.util.UUID;
 
 /**
- * AI diagnosis of a failed workflow execution: a plain-English root cause and explanation, plus an
- * optional validated ASL patch the user can open in the editor.
+ * Read-only AI diagnosis of a failed workflow execution: a plain-English root cause and supporting
+ * evidence. The patch field remains in the response for compatibility and is always empty.
  */
 public record WorkflowTriageResponseDTO(
         UUID executionId,

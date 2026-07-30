@@ -308,7 +308,7 @@ async function triggerWorkflowThroughUi(
   await page.getByTestId('workflow-tab-executions').click();
   await expect(page.getByTestId('execution-trigger-run')).toBeEnabled();
   await page.getByTestId('execution-trigger-run').click();
-  await page.getByTestId('execution-input-json').fill(JSON.stringify(input, null, 2));
+  await page.getByTestId('execution-input-json').locator('textarea').fill(JSON.stringify(input, null, 2));
   await page.getByTestId('execution-submit-run').click();
   await expect(page.getByTestId('execution-trigger-dialog')).toBeHidden();
   await expect(page.getByTestId('execution-selected-status')).toBeVisible();

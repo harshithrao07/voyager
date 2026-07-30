@@ -840,17 +840,19 @@ function App() {
       });
   }, [selectedRevision, workflowDetail]);
 
-  const handleActivateSchedule = async () => {
-    if (!workflowDetail || !workflowDetail.cronExpression || !selectedRevision) {
+  const handleActivateRevision = async () => {
+    if (!workflowDetail || !selectedRevision) {
       return;
     }
 
     const revision = Number(selectedRevision.id);
     if (!Number.isSafeInteger(revision) || revision < 1) {
-      toast.error('Select a persisted revision before activating the schedule.');
+      toast.error('Select a persisted revision before making it active.');
       return;
     }
 
+    const activatingDraftSchedule = workflowDetail.status === 'DRAFT'
+      && Boolean(workflowDetail.cronExpression);
     setWorkflowActionBusy(true);
     try {
       await activateWorkflowRevision(workflowDetail.id, revision);
@@ -874,9 +876,11 @@ function App() {
         content: current.content.map((item) => item.id === detail.id ? detail : item),
       } : current);
       setSelectedWorkflow(summary);
-      toast.success('Schedule activated');
+      toast.success(activatingDraftSchedule
+        ? 'Schedule activated'
+        : `${selectedRevision.label} is now active`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not activate the schedule.');
+      toast.error(error instanceof Error ? error.message : 'Could not make the revision active.');
     } finally {
       setWorkflowActionBusy(false);
     }
@@ -1421,23 +1425,35 @@ function App() {
                       Edit as new revision
                     </button>
                   )}
-                  {workflowDetail?.status === 'DRAFT' && workflowDetail.cronExpression ? (
+                  {selectedRevision
+                    && !selectedRevision.active
+                    && workflowDetail?.status !== 'ARCHIVED' && (
                     <button
                       type="button"
-                      data-testid="workflow-activate-schedule"
-                      onClick={handleActivateSchedule}
-                      disabled={workflowActionBusy || !selectedRevision}
+                      data-testid={workflowDetail?.status === 'DRAFT' && workflowDetail.cronExpression
+                        ? 'workflow-activate-schedule'
+                        : 'workflow-make-revision-active'}
+                      onClick={handleActivateRevision}
+                      disabled={workflowActionBusy}
                       className="flex h-9 items-center gap-2 rounded-DEFAULT border border-primary bg-primary px-3 font-body-sm text-body-sm font-medium text-surface-lowest transition-colors hover:bg-primary-fixed disabled:cursor-not-allowed disabled:opacity-60"
+                      title={workflowDetail?.status === 'PAUSED'
+                        ? `Make ${selectedRevision.label} active and resume the workflow`
+                        : `Make ${selectedRevision.label} the active revision`}
                     >
                       <span className="material-symbols-outlined text-[16px]">event_available</span>
-                      {workflowActionBusy ? 'Activating...' : 'Activate schedule'}
+                      {workflowActionBusy
+                        ? 'Activating...'
+                        : workflowDetail?.status === 'DRAFT' && workflowDetail.cronExpression
+                          ? 'Activate schedule'
+                          : 'Make active'}
                     </button>
-                  ) : (workflowDetail?.status === 'ACTIVE' || workflowDetail?.status === 'PAUSED') ? (
+                  )}
+                  {(workflowDetail?.status === 'ACTIVE' || workflowDetail?.status === 'PAUSED') && (
                     <button onClick={() => setActiveTab('executions')} className="flex h-9 items-center gap-2 rounded-DEFAULT border border-primary bg-primary px-3 font-body-sm text-body-sm font-medium text-surface-lowest transition-colors hover:bg-primary-fixed">
                       <span className="material-symbols-outlined text-[16px]">play_arrow</span>
                       Execute
                     </button>
-                  ) : null}
+                  )}
                 </div>
               )}
             </div>

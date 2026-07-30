@@ -10,11 +10,6 @@ import com.job.scheduler.entity.WorkflowExecution;
 import com.job.scheduler.enums.StateExecutionStatus;
 import com.job.scheduler.enums.WorkflowExecutionStatus;
 import com.job.scheduler.repository.WorkflowExecutionRepository;
-import com.job.scheduler.workflow.asl.runtime.AslRuntimeCapabilityValidator;
-import com.job.scheduler.workflow.asl.validation.AslDefinitionValidator;
-import com.job.scheduler.workflow.asl.validation.AslFunctionResourceValidator;
-import com.job.scheduler.workflow.asl.validation.AslMcpResourceValidator;
-import com.job.scheduler.workflow.asl.validation.AslValidationIssue;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -29,7 +24,6 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -37,9 +31,8 @@ import java.util.UUID;
 
 /**
  * Diagnoses a failed workflow execution with the AI model: it feeds the failing state, its input and
- * error, and the full ASL to the model and returns a plain-English root cause plus an optional
- * corrected ASL. The patch is run through the same validators as authoring so the UI knows whether it
- * is safe to open in the editor.
+ * error, and the full ASL to the model and returns a plain-English, evidence-based root cause.
+ * Triage is intentionally read-only: it never proposes or applies workflow changes.
  *
  * <p>Deliberately self-contained — it resolves the model through {@link WorkflowAiModelResolver} and
  * calls {@code chat()} directly rather than reusing the authoring conversation's structured-output
@@ -60,10 +53,6 @@ public class WorkflowAiFailureTriageService {
     private final WorkflowExecutionInspectionService inspectionService;
     private final AiModelConfigService aiModelConfigService;
     private final WorkflowAiModelResolver modelResolver;
-    private final AslDefinitionValidator aslDefinitionValidator;
-    private final AslRuntimeCapabilityValidator runtimeCapabilityValidator;
-    private final AslMcpResourceValidator mcpResourceValidator;
-    private final AslFunctionResourceValidator functionResourceValidator;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -78,8 +67,6 @@ public class WorkflowAiFailureTriageService {
         }
 
         String asl = execution.getWorkflowDefinition().getDefinition();
-        JsonNode aslNode = parseJsonOrNull(asl);
-
         WorkflowExecutionDetailDTO detail = inspectionService.getExecution(workflowId, executionId);
         WorkflowStateExecutionDTO failingState = findFailingState(detail).orElse(null);
 
@@ -96,14 +83,12 @@ public class WorkflowAiFailureTriageService {
         JsonNode parsed = parseLenientJson(raw);
         String rootCause = textField(parsed, "rootCause", "The model did not identify a specific cause.");
         String explanation = textField(parsed, "explanation", "");
-        WorkflowTriagePatchDTO patch = buildPatch(parsed, aslNode);
-
         return new WorkflowTriageResponseDTO(
                 executionId,
                 failingState == null ? null : failingState.stateName(),
                 rootCause,
                 explanation,
-                patch
+                WorkflowTriagePatchDTO.none()
         );
     }
 
@@ -125,66 +110,24 @@ public class WorkflowAiFailureTriageService {
         return Optional.ofNullable(withError);
     }
 
-    private WorkflowTriagePatchDTO buildPatch(JsonNode parsed, JsonNode originalAsl) {
-        JsonNode patched = parsed == null ? null : parsed.get("aslDefinition");
-        if (patched == null || !patched.isObject()) {
-            return WorkflowTriagePatchDTO.none();
-        }
-        // A patch identical to the original is not a fix worth surfacing.
-        if (originalAsl != null && originalAsl.equals(patched)) {
-            return WorkflowTriagePatchDTO.none();
-        }
-        List<String> changes = new ArrayList<>();
-        JsonNode changesNode = parsed.get("changes");
-        if (changesNode != null && changesNode.isArray()) {
-            changesNode.forEach(change -> {
-                if (change.isString() && !change.stringValue().isBlank()) {
-                    changes.add(change.stringValue());
-                }
-            });
-        }
-        List<String> issues = validatePatch(patched);
-        return new WorkflowTriagePatchDTO(true, patched, List.copyOf(changes), issues.isEmpty(), issues);
-    }
-
-    /** Runs the same validator set as authoring so an unsafe patch is flagged before the user opens it. */
-    private List<String> validatePatch(JsonNode patched) {
-        List<String> issues = new ArrayList<>();
-        try {
-            aslDefinitionValidator.validate(patched).issues().forEach(issue -> issues.add(format(issue)));
-            runtimeCapabilityValidator.validate(patched).forEach(issue -> issues.add(format(issue)));
-            mcpResourceValidator.validate(patched).forEach(issue -> issues.add(format(issue)));
-            functionResourceValidator.validate(patched).forEach(issue -> issues.add(format(issue)));
-        } catch (RuntimeException exception) {
-            issues.add("Could not validate the proposed ASL: " + exception.getMessage());
-        }
-        return issues;
-    }
-
-    private static String format(AslValidationIssue issue) {
-        return issue.location() + " — " + issue.code() + ": " + issue.message();
-    }
-
     private String systemPrompt() {
         return """
                 You are Voyager's workflow failure-triage assistant. Voyager runs Amazon States
                 Language (ASL) workflows that use JSONata (in {% ... %}) for data flow, plus Task
                 resources like voyager://function/<name> and voyager://mcp/<server>/<tool>.
 
-                Given a failed execution, diagnose the root cause and, when the fix is in the workflow
-                definition, propose a corrected ASL. Only change what is necessary — add a Retry or
-                Catch, fix a JSONata expression or path, correct a Task Resource or its Arguments.
+                Given a failed execution, identify what caused the failure and explain the evidence
+                from the execution status, error, state input, state error, and workflow definition.
+                This is diagnosis only. Do not propose, recommend, or describe any fix, remediation,
+                retry, workflow edit, corrected expression, code change, patch, or next step. Do not
+                return an ASL definition, changes list, instructions, or suggestions.
 
                 Respond with a single JSON object and nothing else:
                 {
-                  "rootCause": "one or two sentences, plain English",
-                  "explanation": "a short paragraph with the reasoning and the fix",
-                  "changes": ["short bullet describing each edit"],
-                  "aslDefinition": { ...the full corrected ASL... }
+                  "rootCause": "one or two sentences identifying the direct cause",
+                  "explanation": "a short evidence-based paragraph explaining how the observed input, state, or error caused the failure"
                 }
-                Omit "aslDefinition" (or set it to null) if the failure is not fixable by editing the
-                workflow (for example an external outage or missing credentials). Never include
-                comments or trailing commas in the JSON.
+                Never include comments or trailing commas in the JSON.
                 """;
     }
 
@@ -238,14 +181,6 @@ public class WorkflowAiFailureTriageService {
         return value != null && value.isString() && !value.stringValue().isBlank()
                 ? value.stringValue()
                 : fallback;
-    }
-
-    private JsonNode parseJsonOrNull(String value) {
-        try {
-            return value == null ? null : objectMapper.readTree(value);
-        } catch (RuntimeException exception) {
-            return null;
-        }
     }
 
     /**

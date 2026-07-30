@@ -263,3 +263,6 @@ WHERE message.conversation_id = conversation.id
 
 CREATE INDEX IF NOT EXISTS idx_workflow_ai_messages_conversation_created
     ON workflow_ai_messages (conversation_id, created_at);
+
+ALTER TABLE workflows
+    ADD COLUMN IF NOT EXISTS scheduled_input JSONB NOT NULL DEFAULT '{}'::jsonb;

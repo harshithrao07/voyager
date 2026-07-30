@@ -10,8 +10,18 @@ public record UpdateWorkflowMetadataRequestDTO(
         Long expectedVersion,
         String name,
         JsonNode cronExpression,
+        JsonNode scheduledInput,
         String timezone,
         @PositiveOrZero(message = "Max attempts cannot be negative")
         Integer maxAttempts
 ) {
+    public UpdateWorkflowMetadataRequestDTO(
+            Long expectedVersion,
+            String name,
+            JsonNode cronExpression,
+            String timezone,
+            Integer maxAttempts
+    ) {
+        this(expectedVersion, name, cronExpression, null, timezone, maxAttempts);
+    }
 }

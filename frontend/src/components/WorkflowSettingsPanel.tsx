@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Archive, Clock3, Pause, Play, Save, Settings2, X } from 'lucide-react';
+import Editor from '@monaco-editor/react';
 import { toast } from 'sonner';
 import {
   archiveWorkflow,
@@ -66,14 +67,19 @@ export function WorkflowSettingsPanel({
   const [name, setName] = useState(workflow.name);
   const [maxAttempts, setMaxAttempts] = useState(workflow.maxAttempts);
   const [cronExpression, setCronExpression] = useState(workflow.cronExpression || '');
+  const [scheduledInputText, setScheduledInputText] = useState(
+    JSON.stringify(workflow.scheduledInput ?? {}, null, 2),
+  );
   const [timezone, setTimezone] = useState(workflow.timezone || 'UTC');
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
 
   const loadWorkflowDraft = (nextWorkflow: WorkflowResponseDTO) => {
     setName(nextWorkflow.name);
     setMaxAttempts(nextWorkflow.maxAttempts);
     setCronExpression(nextWorkflow.cronExpression || '');
+    setScheduledInputText(JSON.stringify(nextWorkflow.scheduledInput ?? {}, null, 2));
     setTimezone(nextWorkflow.timezone || 'UTC');
   };
 
@@ -84,16 +90,30 @@ export function WorkflowSettingsPanel({
   const cronError = validateCron(cronExpression);
   const timezoneMissing = recurring && !timezone.trim();
   const attemptsInvalid = !Number.isInteger(maxAttempts) || maxAttempts < 0;
+  let parsedScheduledInput: unknown;
+  let scheduledInputError: string | null = null;
+  try {
+    parsedScheduledInput = JSON.parse(scheduledInputText);
+  } catch (error) {
+    scheduledInputError = error instanceof Error ? error.message : 'Scheduled input must be valid JSON.';
+  }
+  const currentScheduledInputText = JSON.stringify(workflow.scheduledInput ?? {});
+  const normalizedScheduledInputText = scheduledInputError
+    ? scheduledInputText
+    : JSON.stringify(parsedScheduledInput);
+  const scheduledInputDirty = normalizedScheduledInputText !== currentScheduledInputText;
   const dirty = useMemo(() => (
     normalizedName !== workflow.name
     || normalizedCron !== currentCron
+    || scheduledInputDirty
     || maxAttempts !== workflow.maxAttempts
     || (recurring && timezone !== (workflow.timezone || 'UTC'))
-  ), [currentCron, maxAttempts, normalizedCron, normalizedName, recurring, timezone, workflow.maxAttempts, workflow.name, workflow.timezone]);
+  ), [currentCron, maxAttempts, normalizedCron, normalizedName, recurring, scheduledInputDirty, timezone, workflow.maxAttempts, workflow.name, workflow.timezone]);
   const canSave = dirty
     && normalizedName.length > 0
     && !attemptsInvalid
     && !cronError
+    && !scheduledInputError
     && !timezoneMissing
     && !busyAction;
 
@@ -113,17 +133,25 @@ export function WorkflowSettingsPanel({
   }, [dirty]);
 
   const requestClose = useCallback(() => {
-    if (dirty && !window.confirm('Discard the unsaved workflow settings?')) return;
+    if (dirty) {
+      setDiscardDialogOpen(true);
+      return;
+    }
     onClose();
   }, [dirty, onClose]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') requestClose();
+      if (event.key !== 'Escape') return;
+      if (discardDialogOpen) {
+        setDiscardDialogOpen(false);
+        return;
+      }
+      requestClose();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [requestClose]);
+  }, [discardDialogOpen, requestClose]);
 
   const refreshAfterConflict = async () => {
     const refreshed = await getWorkflow({ workflowId: workflow.id });
@@ -138,6 +166,7 @@ export function WorkflowSettingsPanel({
     const request: UpdateWorkflowMetadataRequest = { expectedVersion: workflow.version };
     if (normalizedName !== workflow.name) request.name = normalizedName;
     if (normalizedCron !== currentCron) request.cronExpression = normalizedCron || null;
+    if (scheduledInputDirty) request.scheduledInput = parsedScheduledInput;
     if (maxAttempts !== workflow.maxAttempts) request.maxAttempts = maxAttempts;
     if (recurring && (!currentCron || !workflow.timezone || timezone !== workflow.timezone)) {
       request.timezone = timezone;
@@ -302,18 +331,55 @@ export function WorkflowSettingsPanel({
               fieldClass={fieldClass}
             />
             {recurring && (
-              <label className="block">
-                <span className="text-body-sm text-on-surface">Timezone</span>
-                <select data-testid="workflow-timezone" value={timezone || 'UTC'} onChange={(event) => setTimezone(event.target.value)} className={fieldClass}>
-                  <option value="UTC">UTC</option>
-                  {storedTimezone && <option value={timezone}>{timezone}</option>}
-                  {TIMEZONE_GROUPS.map(([region, zones]) => (
-                    <optgroup key={region} label={region}>
-                      {zones.map((zone) => <option key={zone} value={zone}>{timezoneLabel(zone)}</option>)}
-                    </optgroup>
-                  ))}
-                </select>
-              </label>
+              <>
+                <label className="block">
+                  <span className="text-body-sm text-on-surface">Timezone</span>
+                  <select data-testid="workflow-timezone" value={timezone || 'UTC'} onChange={(event) => setTimezone(event.target.value)} className={fieldClass}>
+                    <option value="UTC">UTC</option>
+                    {storedTimezone && <option value={timezone}>{timezone}</option>}
+                    {TIMEZONE_GROUPS.map(([region, zones]) => (
+                      <optgroup key={region} label={region}>
+                        {zones.map((zone) => <option key={zone} value={zone}>{timezoneLabel(zone)}</option>)}
+                      </optgroup>
+                    ))}
+                  </select>
+                </label>
+                <div>
+                  <div className="text-body-sm text-on-surface">Scheduled run input</div>
+                  <p className="mt-1 text-[11px] leading-5 text-on-surface-variant/75">
+                    This JSON becomes <span className="font-mono-sm">$states.input</span> for every recurring run.
+                  </p>
+                  <div
+                    data-testid="workflow-scheduled-input"
+                    className={`mt-2 h-56 overflow-hidden rounded-DEFAULT border bg-surface-container-lowest ${scheduledInputError ? 'border-status-error' : 'border-border-subtle'}`}
+                  >
+                    <Editor
+                      height="100%"
+                      defaultLanguage="json"
+                      theme="vs-dark"
+                      value={scheduledInputText}
+                      onChange={(value) => setScheduledInputText(value || '')}
+                      options={{
+                        ariaLabel: 'Scheduled run input JSON',
+                        minimap: { enabled: false },
+                        scrollBeyondLastLine: false,
+                        fontSize: 12,
+                        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                        wordWrap: 'on',
+                        tabSize: 2,
+                        lineNumbersMinChars: 3,
+                        padding: { top: 10, bottom: 10 },
+                        automaticLayout: true,
+                      }}
+                    />
+                  </div>
+                  {scheduledInputError && (
+                    <span className="mt-1 flex items-start gap-1.5 text-[11px] text-status-error">
+                      <AlertTriangle size={13} className="mt-0.5 shrink-0" /> {scheduledInputError}
+                    </span>
+                  )}
+                </div>
+              </>
             )}
             <details className="group rounded-DEFAULT border border-border-subtle bg-surface-container-lowest px-3 py-2.5">
               <summary className="cursor-pointer list-none font-mono-sm text-[10px] uppercase tracking-[0.12em] text-on-surface-variant [&::-webkit-details-marker]:hidden">
@@ -441,6 +507,57 @@ export function WorkflowSettingsPanel({
           </div>
         </footer>
       </aside>
+      {discardDialogOpen && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-background/80 p-6 backdrop-blur-sm"
+          onClick={(event) => {
+            event.stopPropagation();
+            setDiscardDialogOpen(false);
+          }}
+          role="presentation"
+        >
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="discard-settings-title"
+            aria-describedby="discard-settings-description"
+            data-testid="workflow-settings-discard-dialog"
+            className="w-full max-w-md rounded-lg border border-border-subtle bg-surface-elevated shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start gap-3 border-b border-border-subtle px-5 py-4">
+              <div className="rounded-DEFAULT border border-status-warning/35 bg-status-warning/10 p-2 text-status-warning">
+                <AlertTriangle size={18} />
+              </div>
+              <div>
+                <h2 id="discard-settings-title" className="font-headline-lg text-headline-lg text-primary">
+                  Discard unsaved settings?
+                </h2>
+                <p id="discard-settings-description" className="mt-1 text-body-sm leading-5 text-on-surface-variant">
+                  Your workflow setting changes have not been saved and will be lost.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setDiscardDialogOpen(false)}
+                className="h-9 rounded-DEFAULT border border-border-subtle px-4 text-body-sm text-on-surface transition-colors hover:bg-surface-container-high"
+              >
+                Keep editing
+              </button>
+              <button
+                type="button"
+                data-testid="workflow-settings-confirm-discard"
+                onClick={onClose}
+                className="h-9 rounded-DEFAULT border border-status-error/40 bg-status-error/10 px-4 text-body-sm font-medium text-status-error transition-colors hover:bg-status-error/15"
+              >
+                Discard changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

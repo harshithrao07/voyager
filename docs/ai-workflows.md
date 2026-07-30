@@ -227,13 +227,15 @@ Voyager UI.
 A failed or timed-out execution can be diagnosed with the model. **Diagnose with AI** on the
 execution trace calls `POST /app/v1/workflows/{id}/executions/{executionId}/triage`, which feeds the
 failing state (name, resource, input, error, cause), the execution input, and the full ASL to the
-model and returns a plain-English root cause, an explanation, and — when the fix is in the definition
-— a corrected ASL. `WorkflowAiFailureTriageService` is deliberately separate from the authoring
-conversation: it resolves the model through `WorkflowAiModelResolver` and calls `chat()` with a
-lenient JSON parse, then runs any proposed ASL through the same validators as authoring so the UI can
-show whether it validates. **Apply patch** stashes the corrected definition and opens the revision
-editor pre-loaded with it, so the fix is reviewed and saved through the normal path — including ASL
-validation and the trust-confirmation gate above. Triage is read-only until the user saves.
+model and returns only a plain-English root cause and an evidence-based explanation.
+The execution panel lists enabled AI models and selects the configured default model initially; the
+user can choose a different enabled model before diagnosing or re-diagnosing the run. The selected
+model ID is sent with the triage request. When callers omit it, the backend resolves the enabled
+default model (or the first enabled model by display name when no default is marked).
+`WorkflowAiFailureTriageService` is deliberately separate from the authoring conversation: it
+resolves the model through `WorkflowAiModelResolver` and calls `chat()` with a lenient JSON parse.
+Triage is strictly read-only and never proposes workflow edits, patches, remediation steps, or next
+actions. The legacy `patch` response field remains empty for API compatibility.
 
 AI-proposed function names are canonicalized before display and approval. Camel case and snake case
 inputs such as `shortenAndTitleCase` or `shorten_and_title_case` become the registry-safe kebab-case

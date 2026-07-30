@@ -5,8 +5,8 @@ import tools.jackson.databind.JsonNode;
 import java.util.List;
 
 /**
- * A proposed ASL fix from failure triage. The corrected definition is run through the same
- * validators as authoring so the UI can show whether it is safe to open in the editor.
+ * Legacy failure-triage patch response retained for API compatibility. Diagnosis-only triage always
+ * returns {@link #none()} and never proposes workflow changes.
  *
  * @param hasPatch          whether the model returned a corrected definition
  * @param aslDefinition     the full corrected ASL, or null when the model proposed no change

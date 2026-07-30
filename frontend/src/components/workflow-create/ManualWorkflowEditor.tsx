@@ -43,6 +43,7 @@ type Props = {
   validationIssues: string[];
   saving: boolean;
   canSave: boolean;
+  saveDisabledReasons: string[];
   onSave: () => void;
   onSaveWithoutActivation?: () => void;
   /** The workspace is already linked to a workflow, so Save creates another revision. */
@@ -80,6 +81,7 @@ export function ManualWorkflowEditor({
   validationIssues,
   saving,
   canSave,
+  saveDisabledReasons,
   onSave,
   onSaveWithoutActivation,
   saveCreatesRevision,
@@ -114,6 +116,9 @@ export function ManualWorkflowEditor({
   const [testBenchOpen, setTestBenchOpen] = useState(false);
   const [machinePath, setMachinePath] = useState<MachinePath>([]);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const saveDisabledTooltip = !canSave && saveDisabledReasons.length > 0
+    ? `Cannot save yet:\n${saveDisabledReasons.map((reason) => `• ${reason}`).join('\n')}`
+    : undefined;
   const validationTooltipId = useId();
 
   useEffect(() => {
@@ -619,33 +624,37 @@ export function ManualWorkflowEditor({
           <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="border-b border-border-subtle p-6">
             {revisionEdit?.recurring && onSaveWithoutActivation && (
+              <div title={saveDisabledTooltip} className="mb-2">
+                <button
+                  type="button"
+                  data-testid="workflow-save-without-activation"
+                  onClick={onSaveWithoutActivation}
+                  disabled={!canSave}
+                  className="flex h-10 w-full items-center justify-center gap-2 rounded-DEFAULT border border-border-subtle bg-surface-container-low px-4 font-body-sm text-[12px] font-medium text-on-surface transition-colors hover:border-secondary/55 hover:text-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+                  Save revision
+                </button>
+              </div>
+            )}
+            <div title={saveDisabledTooltip} data-testid="workflow-save-tooltip">
               <button
                 type="button"
-                data-testid="workflow-save-without-activation"
-                onClick={onSaveWithoutActivation}
+                data-testid="workflow-save"
+                onClick={onSave}
                 disabled={!canSave}
-                className="mb-2 flex h-10 w-full items-center justify-center gap-2 rounded-DEFAULT border border-border-subtle bg-surface-container-low px-4 font-body-sm text-[12px] font-medium text-on-surface transition-colors hover:border-secondary/55 hover:text-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-10 w-full items-center justify-center gap-2 rounded-DEFAULT bg-primary px-4 font-body-sm text-[12px] font-medium text-on-primary shadow-[0_12px_30px_rgba(242,121,90,0.18)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
-                Save revision
+                {revisionEdit?.recurring
+                  ? 'Save & activate'
+                  : revisionEdit
+                    ? 'Save revision'
+                    : saveCreatesRevision
+                      ? 'Save new revision'
+                      : 'Save workflow'}
               </button>
-            )}
-            <button
-              type="button"
-              data-testid="workflow-save"
-              onClick={onSave}
-              disabled={!canSave}
-              className="flex h-10 w-full items-center justify-center gap-2 rounded-DEFAULT bg-primary px-4 font-body-sm text-[12px] font-medium text-on-primary shadow-[0_12px_30px_rgba(242,121,90,0.18)] transition-colors hover:bg-primary-fixed-dim disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
-              {revisionEdit?.recurring
-                ? 'Save & activate'
-                : revisionEdit
-                  ? 'Save revision'
-                  : saveCreatesRevision
-                    ? 'Save new revision'
-                    : 'Save workflow'}
-            </button>
+            </div>
             {saveCreatesRevision && !revisionEdit && (
               <p
                 data-testid="workflow-save-revision-note"

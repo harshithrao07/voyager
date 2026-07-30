@@ -45,10 +45,6 @@ import { ModelSettingsModal } from './workflow-create/ModelSettingsModal';
 import { cloudProviderPreset } from './workflow-create/modelProviders';
 import { SidebarAiChat } from './workflow-create/SidebarAiChat';
 import { ResourcePlanCard } from './workflow-create/ResourcePlanCard';
-import {
-  clearPendingTriagePatch,
-  getPendingTriagePatch,
-} from './workflow-create/triagePatchStore';
 import { TrustConfirmationModal } from './workflow-create/TrustConfirmationModal';
 import { WorkflowAiEmptyState } from './workflow-create/WorkflowAiEmptyState';
 import type { TaskResourceOption } from './workflow-create/StateEditorForm';
@@ -343,14 +339,8 @@ export function CreateWorkflowView({
   const [discoverEndpoint, setDiscoverEndpoint] = useState('');
   const [expandedEndpoint, setExpandedEndpoint] = useState<string | null>(null);
   const [managingModels, setManagingModels] = useState(false);
-  const pendingTriagePatch = revisionEdit
-    ? getPendingTriagePatch(revisionEdit.workflow.id)
-    : null;
-  const [definitionText, setDefinitionText] = useState(() => {
-    // Failure triage may have stashed a proposed fix for this workflow; seed the editor with it
-    // instead of the base revision so "Apply patch" opens the corrected ASL.
-    return formatJson(pendingTriagePatch ?? revisionEdit?.baseRevision.definition ?? starterDefinition);
-  });
+  const [definitionText, setDefinitionText] = useState(() =>
+    formatJson(revisionEdit?.baseRevision.definition ?? starterDefinition));
   const [canvasNodePositions, setCanvasNodePositions] = useState<CanvasNodePositions>(
     revisionEdit?.baseRevision.canvasLayout || {},
   );
@@ -389,18 +379,6 @@ export function CreateWorkflowView({
   const appliedTurnsRef = useRef<Set<string>>(new Set());
   const messagesRef = useRef<ChatMessage[]>(messages);
   messagesRef.current = messages;
-
-  useEffect(() => {
-    if (!revisionEdit || pendingTriagePatch == null) return;
-
-    // Defer consumption past React Strict Mode's development-only mount/unmount/remount probe.
-    // The probe cancels this first timer, allowing the committed mount to read the same patch.
-    const clearTimer = window.setTimeout(
-      () => clearPendingTriagePatch(revisionEdit.workflow.id),
-      0,
-    );
-    return () => window.clearTimeout(clearTimer);
-  }, [pendingTriagePatch, revisionEdit?.workflow.id]);
 
   // The in-flight websocket turn is keyed by the conversation it belongs to (or a scoped sentinel
   // before the first response). Revision edits get their own sentinel so they can use the same AI
@@ -636,6 +614,40 @@ export function CreateWorkflowView({
     && !revisionSaveCompleted
     && (revisionDefinitionDirty || revisionLayoutDirty),
   );
+
+  const saveDisabledReasons = useMemo(() => {
+    const reasons: string[] = [];
+    if (name.trim().length === 0) reasons.push('Enter a workflow name.');
+    if (idempotencyKey.trim().length === 0) reasons.push('Enter an idempotency key.');
+    if (!definitionStatus.valid) reasons.push(definitionStatus.message);
+    builderValidationIssues.forEach((issue) => reasons.push(issue));
+    const cronError = validateCron(cronExpression);
+    if (cronError) reasons.push(cronError);
+    if ((routeChatId || routeDraftId) && !conversationId) {
+      reasons.push('Wait for the workflow conversation to finish loading.');
+    }
+    if (revisionEdit && !hasUnsavedRevisionChanges) {
+      reasons.push('Make a change before saving a new revision.');
+    }
+    if (saving) reasons.push('The workflow is currently being saved.');
+    if (generating) reasons.push('Wait for workflow generation to finish.');
+    if (draftCreating) reasons.push('Wait for the draft to finish being created.');
+    return [...new Set(reasons)];
+  }, [
+    name,
+    idempotencyKey,
+    definitionStatus,
+    builderValidationIssues,
+    cronExpression,
+    routeChatId,
+    routeDraftId,
+    conversationId,
+    revisionEdit,
+    hasUnsavedRevisionChanges,
+    saving,
+    generating,
+    draftCreating,
+  ]);
 
   const canSave = name.trim().length > 0
     && idempotencyKey.trim().length > 0
@@ -1960,6 +1972,7 @@ export function CreateWorkflowView({
           validationIssues={builderValidationIssues}
           saving={saving}
           canSave={canSave}
+          saveDisabledReasons={saveDisabledReasons}
           onSave={() => void handleSave(Boolean(revisionEdit?.workflow.cronExpression))}
           onSaveWithoutActivation={revisionEdit ? () => void handleSave(false) : undefined}
           saveCreatesRevision={Boolean(linkedWorkflowId)}

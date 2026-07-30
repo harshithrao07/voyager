@@ -23,14 +23,8 @@ functions via [`FunctionRegistryService`](../src/main/java/com/job/scheduler/ser
 
 - [x] **AI failure triage on executions** — a "Diagnose with AI" action on a failed/timed-out run
   feeds the failing state + input + error/cause + ASL to the model and returns a plain-English root
-  cause plus an optional validated ASL patch; **Apply patch** opens the revision editor pre-loaded
-  with the fix (so it still passes ASL validation + the trust gate on save). `WorkflowAiFailureTriageService`
-  reuses the model resolver and the authoring validators; endpoint `POST /workflows/{id}/executions/{execId}/triage`.
-  - [x] **Live patch-generation verification:** reproduced `States.QueryEvaluationError` from an
-    unsupported JSONata function, confirmed two registered models returned validated ASL patches,
-    and verified **Apply patch** opens the revision editor with the corrected definition. The live
-    check also fixed a React Strict Mode handoff bug that could consume the one-shot patch before the
-    committed editor mounted.
+  cause and supporting evidence. Triage is diagnosis-only: it does not propose fixes, patches,
+  workflow edits, or next steps. Endpoint: `POST /workflows/{id}/executions/{execId}/triage`.
 - [ ] **AI JSONata expression assistant** — in the state inspector, "describe what you want" →
   validated JSONata `{% … %}` from the state's input shape + desired output. Removes the biggest
   authoring pain point.

@@ -71,6 +71,7 @@ public class WorkflowService {
         workflow.setStatus(WorkflowStatus.DRAFT);
         workflow.setCronExpression(cronExpression);
         workflow.setTimezone(timezone);
+        workflow.setScheduledInput("{}");
         workflow.setMaxAttempts(
                 request.maxAttempts() == null
                         ? workflow.getMaxAttempts()
@@ -233,6 +234,13 @@ public class WorkflowService {
             workflow.setCronExpression(cronExpression);
             changed = true;
             schedulingChanged = true;
+        }
+        if (request.scheduledInput() != null) {
+            workflow.setScheduledInput(writeJson(
+                    request.scheduledInput(),
+                    "scheduled workflow input"
+            ));
+            changed = true;
         }
         if (request.timezone() != null) {
             workflow.setTimezone(normalizeTimezone(request.timezone()));
@@ -446,6 +454,7 @@ public class WorkflowService {
                 workflow.getCronExpression(),
                 workflow.getTimezone(),
                 workflow.getNextRunAt(),
+                readScheduledInput(workflow),
                 workflow.getMaxAttempts(),
                 workflow.getIdempotencyKey(),
                 workflow.getActiveDefinition() == null
@@ -493,6 +502,21 @@ public class WorkflowService {
         } catch (Exception exception) {
             throw new IllegalStateException(
                     "Could not read persisted workflow canvas layout",
+                    exception
+            );
+        }
+    }
+
+    private JsonNode readScheduledInput(Workflow workflow) {
+        if (workflow.getScheduledInput() == null
+                || workflow.getScheduledInput().isBlank()) {
+            return objectMapper.createObjectNode();
+        }
+        try {
+            return objectMapper.readTree(workflow.getScheduledInput());
+        } catch (Exception exception) {
+            throw new IllegalStateException(
+                    "Could not read persisted scheduled workflow input",
                     exception
             );
         }

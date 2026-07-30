@@ -57,13 +57,14 @@ class WorkflowSchedulingServiceTest {
     }
 
     @Test
-    void materializesDueOccurrenceAndAdvancesSchedule() {
+    void materializesDueOccurrenceAndAdvancesSchedule() throws Exception {
         Instant now = Instant.parse("2026-06-21T10:05:00Z");
         Instant scheduledFor = Instant.parse("2026-06-21T10:00:00Z");
         Instant nextRunAt = Instant.parse("2026-06-21T11:00:00Z");
         Workflow workflow = new Workflow();
         workflow.setId(UUID.randomUUID());
         workflow.setNextRunAt(scheduledFor);
+        workflow.setScheduledInput("{\"name\":\"Scheduled Harsh\"}");
         CreatedWorkflowExecution created = new CreatedWorkflowExecution(
                 UUID.randomUUID(),
                 UUID.randomUUID()
@@ -92,8 +93,8 @@ class WorkflowSchedulingServiceTest {
                 input.capture(),
                 eq(scheduledFor)
         );
-        assertThat(input.getValue().isObject()).isTrue();
-        assertThat(input.getValue().isEmpty()).isTrue();
+        assertThat(input.getValue().path("name").asText())
+                .isEqualTo("Scheduled Harsh");
     }
 
     @Test

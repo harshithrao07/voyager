@@ -18,7 +18,9 @@ import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -60,6 +62,11 @@ public class Workflow {
 
     @Column(name = "next_run_at")
     private Instant nextRunAt;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "scheduled_input", columnDefinition = "jsonb", nullable = false)
+    @ColumnDefault("'{}'::jsonb")
+    private String scheduledInput = "{}";
 
     @Column(name = "max_attempts", nullable = false)
     @ColumnDefault("3")

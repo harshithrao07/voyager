@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Braces,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -12,15 +11,17 @@ import {
   Search,
   Sparkles,
   Square,
-  Wrench,
   X,
 } from 'lucide-react';
+import Editor from '@monaco-editor/react';
 import {
   cancelWorkflowExecution,
   getWorkflowExecution,
+  listAiModels,
   listWorkflowExecutions,
   startWorkflowExecution,
   triageWorkflowExecution,
+  type AiModelConfigDTO,
   type WorkflowExecutionDetailDTO,
   type WorkflowExecutionPageDTO,
   type WorkflowExecutionStatusDTO,
@@ -31,7 +32,6 @@ import {
   type WorkflowStateExecutionDTO,
   type WorkflowTriageResponse,
 } from '../api';
-import { setPendingTriagePatch } from './workflow-create/triagePatchStore';
 
 const PAGE_SIZE = 20;
 const POLL_INTERVAL_MS = 1_500;
@@ -147,25 +147,47 @@ function runButtonMessage(workflow: WorkflowResponseDTO) {
   return null;
 }
 
-/**
- * AI failure triage for a failed/timed-out execution: diagnoses the root cause and, when the fix is
- * in the workflow, offers a validated ASL patch. "Apply patch" stashes the corrected definition and
- * opens the revision editor pre-loaded with it (the user reviews and saves through the normal path).
- */
+/** Read-only AI failure triage for a failed or timed-out execution. */
 function TriagePanel({
   workflowId,
   executionId,
-  editRevision,
-  onNavigate,
 }: {
   workflowId: string;
   executionId: string;
-  editRevision: number | null;
-  onNavigate?: (path: string) => void;
 }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<WorkflowTriageResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [models, setModels] = useState<AiModelConfigDTO[]>([]);
+  const [modelId, setModelId] = useState('');
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setModelsLoading(true);
+    setModelsError(null);
+    listAiModels()
+      .then((enabledModels) => {
+        if (cancelled) return;
+        setModels(enabledModels);
+        const preferred = enabledModels.find((model) => model.defaultModel) ?? enabledModels[0];
+        setModelId((current) =>
+          enabledModels.some((model) => model.id === current) ? current : preferred?.id ?? '');
+      })
+      .catch((loadError) => {
+        if (cancelled) return;
+        setModels([]);
+        setModelId('');
+        setModelsError(loadError instanceof Error ? loadError.message : 'Failed to load AI models.');
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // A different execution is a different diagnosis; drop any stale result.
   useEffect(() => {
@@ -177,7 +199,7 @@ function TriagePanel({
     setLoading(true);
     setError(null);
     try {
-      setResult(await triageWorkflowExecution(workflowId, executionId));
+      setResult(await triageWorkflowExecution(workflowId, executionId, modelId));
     } catch (diagnoseError) {
       setError(diagnoseError instanceof Error ? diagnoseError.message : 'Diagnosis failed.');
     } finally {
@@ -185,27 +207,42 @@ function TriagePanel({
     }
   };
 
-  const patch = result?.patch;
-  const canApply = Boolean(patch?.hasPatch && patch.valid && editRevision != null && onNavigate);
-
-  const applyPatch = () => {
-    if (!patch?.aslDefinition || editRevision == null) return;
-    setPendingTriagePatch(workflowId, patch.aslDefinition);
-    onNavigate?.(`/workflows/${encodeURIComponent(workflowId)}/revisions/${editRevision}/edit`);
-  };
-
   return (
     <div className="rounded border border-status-info/40 bg-surface-container-high p-3" data-testid="execution-triage">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 font-body-sm text-body-sm font-medium text-status-info">
-          <Sparkles size={15} /> AI failure triage
-        </div>
+      <div className="flex items-center gap-2 font-body-sm text-body-sm font-medium text-status-info">
+        <Sparkles size={15} /> AI failure triage
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-end gap-2">
+        <label className="min-w-0 flex-1">
+          <span className="mb-1 block font-label-caps text-[10px] uppercase tracking-wider text-on-surface-variant">
+            Diagnosis model
+          </span>
+          <select
+            aria-label="AI failure diagnosis model"
+            value={modelId}
+            onChange={(event) => setModelId(event.target.value)}
+            disabled={loading || modelsLoading}
+            className="w-full rounded border border-border-muted bg-surface-lowest px-2.5 py-1.5 font-body-sm text-[12px] text-primary outline-none focus:border-status-info disabled:opacity-50"
+          >
+            {models.length === 0 && (
+              <option value="">{modelsLoading ? 'Loading enabled models…' : 'No enabled AI models'}</option>
+            )}
+            {models.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.displayName || model.modelName}
+                {model.defaultModel ? ' (default)' : ''}
+                {model.displayName && model.displayName !== model.modelName ? ` · ${model.modelName}` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
         {!result && (
           <button
             type="button"
             data-testid="execution-triage-run"
             onClick={() => void diagnose()}
-            disabled={loading}
+            disabled={loading || modelsLoading || !modelId}
             className="flex items-center gap-1.5 rounded border border-status-info/50 bg-status-info/10 px-2.5 py-1 font-body-sm text-[12px] text-status-info transition-colors hover:bg-status-info/20 disabled:opacity-50"
           >
             {loading ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
@@ -214,6 +251,7 @@ function TriagePanel({
         )}
       </div>
 
+      {modelsError && <p className="mt-2 text-body-sm text-status-error">{modelsError}</p>}
       {error && <p className="mt-2 text-body-sm text-status-error">{error}</p>}
 
       {result && (
@@ -226,53 +264,10 @@ function TriagePanel({
             <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-on-surface-variant">{result.explanation}</p>
           )}
 
-          {patch?.hasPatch ? (
-            <div className="rounded border border-border-muted bg-surface-lowest p-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 font-body-sm text-[12px] font-medium text-on-surface">
-                  <Wrench size={13} /> Proposed fix
-                </div>
-                {patch.valid ? (
-                  <span className="flex items-center gap-1 rounded border border-status-success/40 bg-status-success/10 px-1.5 py-0.5 font-mono-sm text-[10px] text-status-success">
-                    <CheckCircle2 size={10} /> Validates
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1 rounded border border-status-error/40 bg-status-error/10 px-1.5 py-0.5 font-mono-sm text-[10px] text-status-error">
-                    <AlertTriangle size={10} /> Needs review
-                  </span>
-                )}
-              </div>
-              {patch.changes.length > 0 && (
-                <ul className="mt-1.5 list-disc pl-4 text-[12px] text-on-surface-variant">
-                  {patch.changes.map((change, index) => <li key={index}>{change}</li>)}
-                </ul>
-              )}
-              {!patch.valid && patch.validationIssues.length > 0 && (
-                <ul className="mt-1.5 list-disc pl-4 text-[11.5px] text-status-error">
-                  {patch.validationIssues.map((issue, index) => <li key={index}>{issue}</li>)}
-                </ul>
-              )}
-              <button
-                type="button"
-                data-testid="execution-triage-apply"
-                onClick={applyPatch}
-                disabled={!canApply}
-                title={patch.valid ? 'Open the corrected ASL in the revision editor' : 'The proposed ASL did not validate; open it anyway to edit'}
-                className="mt-2 flex items-center gap-1.5 rounded border border-status-info bg-status-info/15 px-2.5 py-1 font-body-sm text-[12px] text-status-info transition-colors hover:bg-status-info/25 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Wrench size={13} /> Apply patch in editor
-              </button>
-            </div>
-          ) : (
-            <p className="text-[12px] text-on-surface-variant">
-              No workflow change proposed — the fix is likely outside the definition (an outage, credentials, or input).
-            </p>
-          )}
-
           <button
             type="button"
             onClick={() => void diagnose()}
-            disabled={loading}
+            disabled={loading || modelsLoading || !modelId}
             className="self-start text-[11px] text-on-surface-variant underline-offset-2 transition-colors hover:text-on-surface hover:underline disabled:opacity-50"
           >
             {loading ? 'Diagnosing…' : 'Re-diagnose'}
@@ -283,7 +278,7 @@ function TriagePanel({
   );
 }
 
-export function ExecutionStatusView({ workflow, selectedRevisionNumber, onNavigate }: Props) {
+export function ExecutionStatusView({ workflow, selectedRevisionNumber }: Props) {
   const [page, setPage] = useState(0);
   const [executionPage, setExecutionPage] = useState<WorkflowExecutionPageDTO | null>(null);
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
@@ -535,7 +530,6 @@ export function ExecutionStatusView({ workflow, selectedRevisionNumber, onNaviga
               <h1 className="truncate font-headline-lg text-headline-lg text-primary">{workflow.name}</h1>
               <div className="mt-0.5 flex flex-wrap items-center gap-2 font-mono-sm text-[11px] text-on-surface-variant">
                 <span>Active revision: {activeRevision ? `Rev ${activeRevision}` : 'None'}</span>
-                {selectedRevisionNumber != null && <span>Viewing: Rev {selectedRevisionNumber}</span>}
                 {selectedRevisionIsHistorical && (
                   <span className="rounded border border-status-warning bg-surface-container-high px-1.5 py-0.5 text-status-warning">
                     New runs use Rev {activeRevision}
@@ -683,7 +677,7 @@ export function ExecutionStatusView({ workflow, selectedRevisionNumber, onNaviga
             </div>
           </div>
 
-          <div className="grid grid-cols-[minmax(0,1fr)_42px_88px_98px] gap-2 border-b border-border-muted bg-surface-container-lowest px-4 py-2 font-label-caps text-label-caps uppercase text-on-surface-variant">
+          <div className="grid grid-cols-[minmax(0,1fr)_42px_88px_152px] gap-2 border-b border-border-muted bg-surface-container-lowest px-4 py-2 font-label-caps text-label-caps uppercase text-on-surface-variant">
             <div>Execution</div>
             <div>Rev</div>
             <div>Status</div>
@@ -714,7 +708,7 @@ export function ExecutionStatusView({ workflow, selectedRevisionNumber, onNaviga
                       setDetailError(null);
                       setDetailLoading(true);
                     }}
-                    className={`grid w-full grid-cols-[minmax(0,1fr)_42px_88px_98px] gap-2 border-b border-border-muted px-4 py-2.5 text-left transition-colors hover:bg-surface-container-low ${selected ? 'border-l-2 border-l-status-info bg-surface-container-high' : 'border-l-2 border-l-transparent bg-surface-lowest'}`}
+                    className={`grid w-full grid-cols-[minmax(0,1fr)_42px_88px_152px] gap-2 border-b border-border-muted px-4 py-2.5 text-left transition-colors hover:bg-surface-container-low ${selected ? 'border-l-2 border-l-status-info bg-surface-container-high' : 'border-l-2 border-l-transparent bg-surface-lowest'}`}
                   >
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 truncate font-mono-sm text-mono-sm text-primary">
@@ -854,9 +848,6 @@ export function ExecutionStatusView({ workflow, selectedRevisionNumber, onNaviga
                   <TriagePanel
                     workflowId={workflow.id}
                     executionId={selectedDetail.execution.id}
-                    editRevision={selectedDetail.execution.definitionRevision
-                      ?? workflow.activeDefinition?.revision ?? null}
-                    onNavigate={onNavigate}
                   />
                 )}
 
@@ -932,21 +923,36 @@ export function ExecutionStatusView({ workflow, selectedRevisionNumber, onNaviga
               </button>
             </div>
             <div className="p-5">
-              <label htmlFor="execution-input" className="mb-2 block font-label-caps text-label-caps uppercase tracking-wider text-on-surface-variant">
+              <div className="mb-2 font-label-caps text-label-caps uppercase tracking-wider text-on-surface-variant">
                 Workflow input JSON
-              </label>
-              <textarea
-                id="execution-input"
+              </div>
+              <div
                 data-testid="execution-input-json"
-                value={executionInput}
-                onChange={(event) => {
-                  setExecutionInput(event.target.value);
-                  setTriggerError(null);
-                }}
-                rows={12}
-                spellCheck={false}
-                className="w-full resize-y rounded border border-border-muted bg-surface-lowest p-3 font-mono-sm text-mono-sm text-primary outline-none focus:border-status-info focus:ring-1 focus:ring-status-info"
-              />
+                className="h-72 overflow-hidden rounded border border-border-muted bg-surface-lowest focus-within:border-status-info focus-within:ring-1 focus-within:ring-status-info"
+              >
+                <Editor
+                  height="100%"
+                  defaultLanguage="json"
+                  theme="vs-dark"
+                  value={executionInput}
+                  onChange={(value) => {
+                    setExecutionInput(value || '');
+                    setTriggerError(null);
+                  }}
+                  options={{
+                    ariaLabel: 'Workflow input JSON',
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                    fontSize: 13,
+                    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                    wordWrap: 'on',
+                    tabSize: 2,
+                    lineNumbersMinChars: 3,
+                    padding: { top: 12, bottom: 12 },
+                    automaticLayout: true,
+                  }}
+                />
+              </div>
               {triggerError && (
                 <div className="mt-3 rounded border border-status-error bg-surface-container-high px-3 py-2 text-body-sm text-status-error" role="alert">
                   {triggerError}
@@ -1066,7 +1072,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded border border-border-muted bg-surface-container-low px-3 py-2">
       <div className="font-label-caps text-[10px] uppercase tracking-wider text-on-surface-variant">{label}</div>
-      <div className="mt-0.5 truncate font-mono-sm text-mono-sm text-primary">{value}</div>
+      <div className="mt-0.5 break-words font-mono-sm text-mono-sm text-primary" title={value}>{value}</div>
     </div>
   );
 }
@@ -1170,17 +1176,45 @@ function JsonPanel({
   open?: boolean;
   testId?: string;
 }) {
+  const [copied, setCopied] = useState(false);
+
+  const copyJson = async () => {
+    try {
+      await navigator.clipboard.writeText(formatJson(value));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_500);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   return (
-    <details className="group overflow-hidden rounded border border-border-subtle bg-surface-elevated" open={open}>
+    <details className="group min-w-0 rounded border border-border-subtle bg-surface-elevated" open={open}>
       <summary className="flex cursor-pointer select-none items-center justify-between border-b border-border-subtle bg-surface-container-low px-4 py-2.5 transition-colors hover:bg-surface-container-high">
         <div className="flex items-center gap-2 font-headline-md text-body-sm font-medium text-primary">
           <span className="material-symbols-outlined text-[16px] transition-transform group-open:rotate-90">chevron_right</span>
           {title}
         </div>
-        <span className="rounded border border-border-muted bg-surface-lowest px-2 py-0.5 font-label-caps text-label-caps text-on-surface-variant">JSON</span>
+        <span className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void copyJson();
+            }}
+            className="flex items-center gap-1 rounded border border-border-muted bg-surface-lowest px-2 py-1 font-body-sm text-[11px] text-on-surface-variant transition-colors hover:text-primary"
+            aria-label={`Copy ${title}`}
+            title={copied ? 'Copied' : `Copy ${title}`}
+          >
+            <Copy size={12} />
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+          <span className="rounded border border-border-muted bg-surface-lowest px-2 py-0.5 font-label-caps text-label-caps text-on-surface-variant">JSON</span>
+        </span>
       </summary>
-      <div className="bg-surface-lowest p-4">
-        <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono-sm text-mono-sm text-on-surface" data-testid={testId}>
+      <div className="min-w-0 overflow-x-hidden bg-surface-lowest p-4">
+        <pre className="max-w-full whitespace-pre-wrap break-all font-mono-sm text-mono-sm text-on-surface" data-testid={testId}>
           <code>{formatJson(value)}</code>
         </pre>
       </div>

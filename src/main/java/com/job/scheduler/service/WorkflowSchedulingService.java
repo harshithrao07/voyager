@@ -42,7 +42,7 @@ public class WorkflowSchedulingService {
             Instant scheduledFor = workflow.getNextRunAt();
             created.add(workflowExecutionService.createExecution(
                     workflow,
-                    objectMapper.createObjectNode(),
+                    scheduledInput(workflow),
                     scheduledFor
             ));
             workflow.setNextRunAt(
@@ -54,6 +54,21 @@ public class WorkflowSchedulingService {
             workflowRepository.save(workflow);
         }
         return List.copyOf(created);
+    }
+
+    private tools.jackson.databind.JsonNode scheduledInput(Workflow workflow) {
+        if (workflow.getScheduledInput() == null
+                || workflow.getScheduledInput().isBlank()) {
+            return objectMapper.createObjectNode();
+        }
+        try {
+            return objectMapper.readTree(workflow.getScheduledInput());
+        } catch (Exception exception) {
+            throw new IllegalStateException(
+                    "Could not read persisted scheduled workflow input",
+                    exception
+            );
+        }
     }
 
     @Transactional

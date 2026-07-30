@@ -160,6 +160,10 @@ The **Revision** panel lists every revision with its definition hash and an **Ac
 
 ## Scheduling and lifecycle
 
+Scheduled executions receive the workflow's saved **Scheduled run input** JSON as their initial
+`$states.input`. It defaults to `{}`. Updating it affects future scheduled executions only;
+executions that were already created retain the input captured when they were materialized.
+
 **How the cron scheduler works:** a poller claims due `ACTIVE` workflows with `FOR UPDATE SKIP LOCKED` (multi-node safe), creates one execution per occurrence (unique on workflow + occurrence time, so two scheduler nodes can't double-fire), and advances `nextRunAt` **from the previous occurrence, not from now** — a workflow that was down catches up by materializing each missed occurrence one poll at a time rather than silently skipping to the future.
 
 The **Settings** drawer manages everything mutable on the workflow: name, attempts, the trigger policy (the same schedule builder as creation — clearing the cron converts to manual, adding one to an active workflow starts scheduling immediately), and lifecycle:
