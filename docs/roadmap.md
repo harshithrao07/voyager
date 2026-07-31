@@ -25,9 +25,6 @@ functions via [`FunctionRegistryService`](../src/main/java/com/job/scheduler/ser
   feeds the failing state + input + error/cause + ASL to the model and returns a plain-English root
   cause and supporting evidence. Triage is diagnosis-only: it does not propose fixes, patches,
   workflow edits, or next steps. Endpoint: `POST /workflows/{id}/executions/{execId}/triage`.
-- [ ] **AI JSONata expression assistant** — in the state inspector, "describe what you want" →
-  validated JSONata `{% … %}` from the state's input shape + desired output. Removes the biggest
-  authoring pain point.
 - [x] **Placeholder-secret guard on provisioning** — reject creating any AI-proposed function whose
   code carries placeholder credentials (`YOUR_API_KEY`, bearer tokens) or won't serialize. Small;
   closes a real hole in the resource-provisioning flow.

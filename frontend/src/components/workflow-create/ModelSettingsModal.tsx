@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { createPortal } from 'react-dom';
 import { Activity, BarChart3, Bot, Check, ChevronDown, CircleDollarSign, Code2, Copy, Globe2, History as HistoryIcon, Info, KeyRound, Link, ListChecks, Loader2, Monitor, Play, Plus, Power, RefreshCw, Scale, ShieldCheck, Sparkles, Square, Trash2, X } from 'lucide-react';
 import {
   cancelAiModelEvaluation,
@@ -237,11 +238,11 @@ export function ModelSettingsModal({
     await startAllEvaluations(candidates, mode);
   };
 
-  return (
+  const content = (
     <>
     <div className={embedded
       ? 'flex h-full min-h-0 w-full flex-col'
-      : 'pointer-events-auto fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-6'}>
+      : 'pointer-events-auto fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-6 backdrop-blur-md'}>
       <div className={embedded
         ? 'flex h-full min-h-0 w-full flex-col overflow-hidden rounded-lg border border-primary/20 bg-surface-lowest'
         : 'flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-primary/20 bg-surface-lowest shadow-[0_24px_90px_rgba(0,0,0,0.65)]'}>
@@ -376,6 +377,11 @@ export function ModelSettingsModal({
     )}
     </>
   );
+
+  // The floating modal escapes to <body>: inside <main> (a z-0 stacking context) its z-[70]
+  // overlay can never paint above the z-40 app sidebar, leaving the sidebar crisp while the
+  // rest of the page blurs. The embedded variant stays inline.
+  return embedded ? content : createPortal(content, document.body);
 }
 
 type BenchmarkConfirmState = {
