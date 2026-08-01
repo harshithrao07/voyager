@@ -55,10 +55,13 @@ export interface WorkflowAiProvisionRequest {
   modelConfigId?: string | null;
 }
 
+export type AiModelRole = 'CHAT' | 'EMBEDDING';
+
 export interface AiModelConfigDTO {
   id: string;
   displayName: string;
   providerType: 'OPENAI_COMPATIBLE_LOCAL' | 'OPENAI_COMPATIBLE_API';
+  role: AiModelRole;
   baseUrl: string;
   modelName: string;
   enabled: boolean;
@@ -77,6 +80,7 @@ export type AiStructuredOutputMode =
 export interface AiModelConfigRequest {
   displayName: string;
   providerType?: 'OPENAI_COMPATIBLE_LOCAL' | 'OPENAI_COMPATIBLE_API';
+  role?: AiModelRole;
   baseUrl: string;
   modelName: string;
   // Actual secret / API key, encrypted server-side. Omit to leave unchanged; "" to clear.
@@ -88,6 +92,7 @@ export interface AiModelTestRequest {
   baseUrl: string;
   modelName?: string | null;
   credential?: string | null;
+  role?: AiModelRole;
 }
 
 export interface AiModelTestResponse {
@@ -99,6 +104,7 @@ export interface AiModelDiscoverRequest {
   baseUrl: string;
   credential?: string | null;
   providerType?: 'OPENAI_COMPATIBLE_LOCAL' | 'OPENAI_COMPATIBLE_API';
+  role?: AiModelRole;
 }
 
 export interface AiModelEnabledRequest {
@@ -226,6 +232,30 @@ export interface AiModelEvaluationDTO {
   errorMessage?: string | null;
   startedAt: string;
   finishedAt?: string | null;
+}
+
+export interface WorkflowAiExplanationResponse {
+  summary: string;
+  stateDetails: string[];
+  validationIssues: string[];
+}
+
+export type WorkflowPreActivationWarningCategory =
+  | 'DESTRUCTIVE_MCP'
+  | 'DATA_EXPOSURE'
+  | 'ERROR_HANDLING'
+  | 'OTHER'
+  | 'REVIEW_UNAVAILABLE';
+
+export interface WorkflowPreActivationWarning {
+  category: WorkflowPreActivationWarningCategory;
+  title: string;
+  detail: string;
+  stateName?: string | null;
+}
+
+export interface WorkflowPreActivationReviewResponse {
+  warnings: WorkflowPreActivationWarning[];
 }
 
 export interface AiModelEvaluationHistoryDTO {
@@ -682,6 +712,36 @@ export function getWorkflowExecution(
 ): Promise<WorkflowExecutionDetailDTO> {
   return getJson<WorkflowExecutionDetailDTO>(
     `/app/v1/workflows/${workflowId}/executions/${executionId}`,
+  );
+}
+
+export interface WorkflowRunStateSummary {
+  scopePath: string;
+  sequenceNumber: number;
+  stateName: string;
+  stateType: string;
+  status: string;
+  summary: string;
+}
+
+export interface WorkflowRunSummaryResponse {
+  executionId: string;
+  headline: string;
+  overview: string;
+  outcome: string;
+  states: WorkflowRunStateSummary[];
+  generatedAt: string;
+}
+
+/** AI-generated, read-only digest grounded in the persisted execution trace. */
+export function summarizeWorkflowExecution(
+  workflowId: string,
+  executionId: string,
+): Promise<WorkflowRunSummaryResponse> {
+  return sendJson<WorkflowRunSummaryResponse>(
+    `/app/v1/workflows/${workflowId}/executions/${executionId}/summary`,
+    'POST',
+    {},
   );
 }
 
@@ -1433,6 +1493,73 @@ export async function setAiModelEnabled(
   return response.json();
 }
 
+export async function setAiModelDefault(modelId: string): Promise<AiModelConfigDTO> {
+  const response = await fetch(`/app/v1/ai/models/${modelId}/default`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to set default model: ${await readError(response)}`);
+  }
+
+  return response.json();
+}
+
+export type EmbeddingRankingStatus = 'RUNNING' | 'COMPLETED' | 'FAILED';
+
+export interface EmbeddingRankingModelResult {
+  modelId: string;
+  displayName: string;
+  modelName: string;
+  dimensions: number | null;
+  recallAt1: number | null;
+  recallAtK: number | null;
+  mrr: number | null;
+  avgLatencyMs: number | null;
+  queriesEvaluated: number;
+  error: string | null;
+}
+
+export interface EmbeddingRankingResult {
+  k: number;
+  catalogSize: number;
+  totalQueries: number;
+  generatedAt: string;
+  models: EmbeddingRankingModelResult[];
+}
+
+export interface EmbeddingRankingRun {
+  id: string;
+  status: EmbeddingRankingStatus;
+  result: EmbeddingRankingResult | null;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export async function startEmbeddingRanking(): Promise<EmbeddingRankingRun> {
+  const response = await fetch('/app/v1/ai/embeddings/ranking', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to start embedding ranking: ${await readError(response)}`);
+  }
+  return response.json();
+}
+
+export async function getEmbeddingRankingLatest(): Promise<EmbeddingRankingRun | null> {
+  const response = await fetch('/app/v1/ai/embeddings/ranking/latest');
+  if (!response.ok) {
+    throw new Error(`Failed to load embedding ranking: ${await readError(response)}`);
+  }
+  const text = await response.text();
+  return text ? (JSON.parse(text) as EmbeddingRankingRun) : null;
+}
+
 export async function deleteAiModel(modelId: string): Promise<void> {
   const response = await fetch(`/app/v1/ai/models/${modelId}`, {
     method: 'DELETE',
@@ -1913,6 +2040,30 @@ export interface PublicMcpServer {
   source: PublicMcpSource;
   installs: PublicMcpInstallOption[];
   suggestedTrustLevel: McpTrustLevel;
+}
+
+async function postWorkflowAuthoring<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`/app/v1/workflows/authoring/${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(`AI authoring failed: ${await readError(response)}`);
+  }
+  return response.json();
+}
+
+export function explainWorkflowDefinition(definition: unknown) {
+  return postWorkflowAuthoring<WorkflowAiExplanationResponse>('explain', { definition });
+}
+
+/** Warning-only AI review. It never mutates the definition or activates the revision. */
+export function reviewWorkflowBeforeActivation(definition: unknown) {
+  return postWorkflowAuthoring<WorkflowPreActivationReviewResponse>(
+    'pre-activation-review',
+    { definition },
+  );
 }
 
 export interface PublicMcpRegistryPage {

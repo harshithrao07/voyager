@@ -45,6 +45,9 @@ class McpToolRegistryServiceTest {
     @Mock
     private McpClientService mcpClientService;
 
+    @Mock
+    private CatalogDescriptionGenerationService descriptionGenerationService;
+
     private ObjectMapper objectMapper;
     private McpToolRegistryService mcpToolRegistryService;
 
@@ -55,7 +58,8 @@ class McpToolRegistryServiceTest {
                 mcpServerRepository,
                 mcpToolRepository,
                 mcpClientService,
-                objectMapper
+                objectMapper,
+                descriptionGenerationService
         );
     }
 
@@ -130,6 +134,30 @@ class McpToolRegistryServiceTest {
         assertThat(result.disabledCount()).isZero();
         assertThat(existingTool.getDescription()).isEqualTo("Updated");
         assertThat(existingTool.isEnabled()).isTrue();
+    }
+
+    @Test
+    void syncToolsGeneratesDescriptionWhenProviderOmitsIt() {
+        McpServer server = server();
+        McpTool existingTool = tool(server, "lookup-order", true);
+        existingTool.setDescription(null);
+        McpSchema.Tool discoveredTool = McpSchema.Tool.builder(
+                "lookup-order", Map.of("type", "object", "properties", Map.of("orderId", Map.of("type", "string"))))
+                .title("Lookup order")
+                .build();
+
+        when(mcpServerRepository.findByServerId("local-tools")).thenReturn(Optional.of(server));
+        when(mcpClientService.listTools("local-tools"))
+                .thenReturn(Mono.just(new McpSchema.ListToolsResult(List.of(discoveredTool), null)));
+        when(mcpToolRepository.findByMcpServerOrderByToolNameAsc(server)).thenReturn(List.of(existingTool));
+        when(mcpToolRepository.save(any(McpTool.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(descriptionGenerationService.describeMcpTool(existingTool))
+                .thenReturn("Looks up an order using its orderId and returns the matching order data.");
+
+        mcpToolRegistryService.syncTools("local-tools");
+
+        assertThat(existingTool.getDescription())
+                .isEqualTo("Looks up an order using its orderId and returns the matching order data.");
     }
 
     @Test

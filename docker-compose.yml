@@ -4,6 +4,9 @@ services:
       context: .
     ports:
       - "8081:8080"
+    volumes:
+      # Dedicated host directory exposed to the Filesystem MCP server.
+      - ./mcp-files:/mcp-files:rw
     environment:
       SPRING_PROFILES_ACTIVE: local
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/jobscheduler
@@ -86,7 +89,10 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16-alpine
+    # pgvector image (Postgres 16 + the `vector` extension) backs the workflow-AI
+    # resource-embedding catalog. Drop-in for postgres:16-alpine; db/embeddings.sql
+    # runs `CREATE EXTENSION IF NOT EXISTS vector` at startup.
+    image: pgvector/pgvector:pg16
     # Keep enough headroom for the app pool plus local admin connections.
     command: ["postgres", "-c", "max_connections=300"]
     environment:
@@ -97,6 +103,9 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # Creates the `vector` extension on first init so Hibernate can build the
+      # resource_embeddings vector column before the schema SQL runs.
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d jobscheduler"]
       interval: 10s

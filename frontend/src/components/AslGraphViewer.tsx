@@ -72,6 +72,20 @@ function positionsFromNodes(nodes: any[]): CanvasNodePositions {
   ]));
 }
 
+function sameNodePositions(
+  left?: CanvasNodePositions,
+  right?: CanvasNodePositions,
+) {
+  if (left === right) return true;
+  const leftEntries = Object.entries(left || {});
+  const rightKeys = Object.keys(right || {});
+  if (leftEntries.length !== rightKeys.length) return false;
+  return leftEntries.every(([stateName, position]) => {
+    const other = right?.[stateName];
+    return other?.x === position.x && other?.y === position.y;
+  });
+}
+
 function overlaps(a: NodePosition, b: NodePosition) {
   return Math.abs(a.x - b.x) < NODE_WIDTH + 28 && Math.abs(a.y - b.y) < NODE_HEIGHT + 28;
 }
@@ -482,7 +496,10 @@ export function AslGraphViewer({
       data: { ...(edge.data || {}), onContextMenu: onEdgeContextMenu },
     }));
     const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(initialNodes, edgesWithHandlers, layoutDirection);
-    const savedPositionsChanged = lastInitialPositionsRef.current !== initialNodePositions;
+    const savedPositionsChanged = !sameNodePositions(
+      lastInitialPositionsRef.current,
+      initialNodePositions,
+    );
     lastInitialPositionsRef.current = initialNodePositions;
     setNodes((currentNodes) => {
       const shouldRelayout = lastLayoutVersionRef.current !== layoutVersion;

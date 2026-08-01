@@ -20,6 +20,7 @@ import {
   listAiModels,
   listWorkflowExecutions,
   startWorkflowExecution,
+  summarizeWorkflowExecution,
   triageWorkflowExecution,
   type AiModelConfigDTO,
   type WorkflowExecutionDetailDTO,
@@ -28,10 +29,12 @@ import {
   type WorkflowExecutionTriggerDTO,
   type WorkflowResponseDTO,
   type WorkflowRuntimeStatusDTO,
+  type WorkflowRunSummaryResponse,
   type WorkflowStateExecutionAttemptDTO,
   type WorkflowStateExecutionDTO,
   type WorkflowTriageResponse,
 } from '../api';
+import { asyncOperationStore, useAsyncOperation } from '../utils/asyncOperationStore';
 
 const PAGE_SIZE = 20;
 const POLL_INTERVAL_MS = 1_500;
@@ -145,6 +148,98 @@ function runButtonMessage(workflow: WorkflowResponseDTO) {
   if (workflow.status === 'DRAFT') return 'Activate the recurring workflow revision before executing it.';
   if (!workflow.activeDefinition) return 'This workflow has no active definition.';
   return null;
+}
+
+/** Navigation-persistent AI report for any terminal execution. */
+function RunSummaryPanel({
+  workflowId,
+  executionId,
+}: {
+  workflowId: string;
+  executionId: string;
+}) {
+  const operationKey = `execution:${executionId}:run-summary`;
+  const operation = useAsyncOperation<WorkflowRunSummaryResponse>(operationKey);
+  const loading = operation?.status === 'running';
+  const result = operation?.status === 'succeeded' ? operation.result : undefined;
+  const error = operation?.status === 'failed' ? operation.error : undefined;
+
+  const generate = () => {
+    void asyncOperationStore
+      .run(operationKey, () => summarizeWorkflowExecution(workflowId, executionId))
+      .catch(() => undefined);
+  };
+
+  return (
+    <div className="rounded border border-primary/35 bg-surface-container-high p-3" data-testid="execution-run-summary">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="flex items-center gap-2 font-body-sm text-body-sm font-medium text-primary">
+            <Sparkles size={15} /> AI run summary
+          </div>
+          <p className="mt-1 text-[11px] text-on-surface-variant">
+            Uses the default Chat model and the persisted execution trace.
+          </p>
+        </div>
+        {!result && (
+          <button
+            type="button"
+            data-testid="execution-run-summary-generate"
+            onClick={generate}
+            disabled={loading}
+            className="flex items-center gap-1.5 rounded border border-primary/50 bg-primary/10 px-2.5 py-1 font-body-sm text-[12px] text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
+          >
+            {loading ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            {loading ? 'Summarizing…' : 'Generate summary'}
+          </button>
+        )}
+      </div>
+
+      {error && <p className="mt-2 text-body-sm text-status-error">{error}</p>}
+
+      {result && (
+        <div className="mt-3 space-y-3" data-testid="execution-run-summary-result">
+          <div>
+            <h3 className="text-[14px] font-semibold text-on-surface">{result.headline}</h3>
+            <p className="mt-1 whitespace-pre-wrap text-[12.5px] leading-relaxed text-on-surface-variant">
+              {result.overview}
+            </p>
+          </div>
+          <div className="rounded border border-border-muted bg-surface-lowest px-3 py-2">
+            <div className="font-label-caps text-[10px] uppercase tracking-wider text-on-surface-variant">Outcome</div>
+            <p className="mt-1 text-[12px] leading-relaxed text-on-surface">{result.outcome}</p>
+          </div>
+          <details className="group rounded border border-border-muted bg-surface-lowest">
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[12px] font-medium text-on-surface [&::-webkit-details-marker]:hidden">
+              State-by-state report
+              <span className="font-mono-sm text-[10px] text-on-surface-variant">{result.states.length}</span>
+              <ChevronRight size={14} className="ml-auto transition-transform group-open:rotate-90" />
+            </summary>
+            <div className="space-y-2 border-t border-border-muted p-2">
+              {result.states.map((state) => (
+                <div key={`${state.scopePath}:${state.sequenceNumber}`} className="rounded border border-border-muted bg-surface-container-low px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono-sm text-[11px] font-semibold text-primary">{state.stateName}</span>
+                    <span className="font-mono-sm text-[9px] text-on-surface-variant">{state.scopePath}</span>
+                    <span className="ml-auto font-mono-sm text-[9px] text-on-surface-variant">{state.status}</span>
+                  </div>
+                  <p className="mt-1 text-[11.5px] leading-relaxed text-on-surface-variant">{state.summary}</p>
+                </div>
+              ))}
+            </div>
+          </details>
+          <button
+            type="button"
+            onClick={generate}
+            disabled={loading}
+            className="text-[11px] text-on-surface-variant underline-offset-2 transition-colors hover:text-on-surface hover:underline disabled:opacity-50"
+          >
+            {loading ? 'Summarizing…' : 'Regenerate summary'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Read-only AI failure triage for a failed or timed-out execution. */
@@ -841,6 +936,13 @@ export function ExecutionStatusView({ workflow, selectedRevisionNumber }: Props)
                     </div>
                     {selectedDetail.execution.cause && <p className="mt-1 text-on-surface">{selectedDetail.execution.cause}</p>}
                   </div>
+                )}
+
+                {!isActiveExecution(selectedDetail.execution.status) && (
+                  <RunSummaryPanel
+                    workflowId={workflow.id}
+                    executionId={selectedDetail.execution.id}
+                  />
                 )}
 
                 {(selectedDetail.execution.status === 'FAILED'

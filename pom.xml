@@ -89,6 +89,17 @@
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
 		</dependency>
+		<!--
+		  pgvector support for Hibernate: maps SqlTypes.VECTOR to the Postgres `vector`
+		  column type and registers distance functions (cosine_distance, etc.) used by
+		  the resource-embedding catalog. Version is managed by the Spring Boot parent's
+		  Hibernate BOM.
+		-->
+		<dependency>
+			<groupId>org.hibernate.orm</groupId>
+			<artifactId>hibernate-vector</artifactId>
+			<version>${hibernate.version}</version>
+		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>

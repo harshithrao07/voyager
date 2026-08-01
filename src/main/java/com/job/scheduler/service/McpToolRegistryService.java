@@ -32,6 +32,7 @@ public class McpToolRegistryService {
     private final McpToolRepository mcpToolRepository;
     private final McpClientService mcpClientService;
     private final ObjectMapper objectMapper;
+    private final CatalogDescriptionGenerationService descriptionGenerationService;
 
     /** Default upper bound for a blocking tool sync when a server has no override. */
     @Value("${scheduler.mcp.sync-timeout-ms:60000}")
@@ -80,9 +81,14 @@ public class McpToolRegistryService {
             }
 
             persistedTool.setTitle(discoveredTool.title());
-            persistedTool.setDescription(discoveredTool.description());
             persistedTool.setInputSchema(writeJson(defaultSchema(discoveredTool.inputSchema())));
             persistedTool.setOutputSchema(discoveredTool.outputSchema() == null ? null : writeJson(discoveredTool.outputSchema()));
+            String providerDescription = discoveredTool.description();
+            if (providerDescription != null && !providerDescription.isBlank()) {
+                persistedTool.setDescription(providerDescription.trim());
+            } else if (persistedTool.getDescription() == null || persistedTool.getDescription().isBlank()) {
+                persistedTool.setDescription(descriptionGenerationService.describeMcpTool(persistedTool));
+            }
             persistedTool.setEnabled(true);
             persistedTool.setLastSeenAt(syncedAt);
             mcpToolRepository.save(persistedTool);

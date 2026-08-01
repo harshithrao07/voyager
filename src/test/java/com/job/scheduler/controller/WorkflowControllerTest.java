@@ -8,6 +8,8 @@ import com.job.scheduler.dto.WorkflowExecutionPageDTO;
 import com.job.scheduler.dto.WorkflowExecutionSummaryDTO;
 import com.job.scheduler.dto.WorkflowExecutionCancellationResponseDTO;
 import com.job.scheduler.dto.WorkflowPageDTO;
+import com.job.scheduler.dto.WorkflowRunSummaryResponseDTO;
+import com.job.scheduler.dto.WorkflowRunStateSummaryDTO;
 import com.job.scheduler.dto.DraftStateTestResponseDTO;
 import com.job.scheduler.enums.WorkflowExecutionStatus;
 import com.job.scheduler.enums.WorkflowExecutionTrigger;
@@ -15,6 +17,7 @@ import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.exception.ApiExceptionHandler;
 import com.job.scheduler.service.WorkflowExecutionRunner;
 import com.job.scheduler.service.WorkflowAiFailureTriageService;
+import com.job.scheduler.service.WorkflowAiRunSummaryService;
 import com.job.scheduler.service.WorkflowDraftTestService;
 import com.job.scheduler.service.WorkflowExecutionInspectionService;
 import com.job.scheduler.service.WorkflowExecutionCancellationService;
@@ -58,6 +61,8 @@ class WorkflowControllerTest {
     private WorkflowDraftTestService workflowDraftTestService;
     @Mock
     private WorkflowAiFailureTriageService workflowAiFailureTriageService;
+    @Mock
+    private WorkflowAiRunSummaryService workflowAiRunSummaryService;
 
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
@@ -72,7 +77,8 @@ class WorkflowControllerTest {
                         workflowExecutionInspectionService,
                         workflowExecutionCancellationService,
                         workflowDraftTestService,
-                        workflowAiFailureTriageService
+                        workflowAiFailureTriageService,
+                        workflowAiRunSummaryService
                 ))
                 .setControllerAdvice(new ApiExceptionHandler())
                 .build();
@@ -472,6 +478,35 @@ class WorkflowControllerTest {
                 .andExpect(jsonPath("$.status").value("CANCELED"))
                 .andExpect(jsonPath("$.error")
                         .value("Execution.Canceled"));
+    }
+
+    @Test
+    void summarizesCompletedWorkflowExecution() throws Exception {
+        UUID workflowId = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        when(workflowAiRunSummaryService.summarize(workflowId, executionId)).thenReturn(
+                new WorkflowRunSummaryResponseDTO(
+                        executionId,
+                        "Order processing completed.",
+                        "The workflow validated and processed the order.",
+                        "The execution succeeded.",
+                        List.of(new WorkflowRunStateSummaryDTO(
+                                "$", 1, "ValidateOrder", null, null,
+                                "Validated the supplied order."
+                        )),
+                        Instant.now()
+                )
+        );
+
+        mockMvc.perform(post(
+                        "/app/v1/workflows/{workflowId}/executions/{executionId}/summary",
+                        workflowId,
+                        executionId
+                ))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.executionId").value(executionId.toString()))
+                .andExpect(jsonPath("$.headline").value("Order processing completed."))
+                .andExpect(jsonPath("$.states[0].stateName").value("ValidateOrder"));
     }
 
     @Test

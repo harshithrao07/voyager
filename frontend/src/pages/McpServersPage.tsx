@@ -55,11 +55,17 @@ import {
   type PublicMcpInstallOption,
   type PublicMcpServer,
 } from '../api';
+import {
+  asyncOperationStore,
+  useAsyncOperation,
+  useAsyncOperationVersion,
+} from '../utils/asyncOperationStore';
 
 type DetailTab = 'tools' | 'executions' | 'playground';
 type StatusFilter = 'ALL' | 'ENABLED' | 'DISABLED';
 
 const serverIdPattern = /^[a-z0-9][a-z0-9-]*$/;
+const mcpToolSyncOperationKey = (serverId: string) => `mcp:${serverId}:sync-tools`;
 
 function slugifyServerId(value: string) {
   return value
@@ -1423,7 +1429,8 @@ function ServerDetail({
   const [executionsLoading, setExecutionsLoading] = useState(true);
   const [executionsError, setExecutionsError] = useState<string | null>(null);
   const [syncResult, setSyncResult] = useState<McpToolSyncResultDTO | null>(null);
-  const [syncBusy, setSyncBusy] = useState(false);
+  const syncOperation = useAsyncOperation<McpToolSyncResultDTO>(mcpToolSyncOperationKey(server.serverId));
+  const syncBusy = syncOperation?.status === 'running';
   const [statusBusy, setStatusBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [playgroundTool, setPlaygroundTool] = useState('');
@@ -1459,18 +1466,22 @@ function ServerDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [server.serverId]);
 
-  const syncTools = async () => {
-    setSyncBusy(true);
-    setActionError(null);
-    try {
-      const result = await syncMcpTools(server.serverId);
-      setSyncResult(result);
-      setTools(result.tools);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Tool sync failed.');
-    } finally {
-      setSyncBusy(false);
+  useEffect(() => {
+    if (syncOperation?.status === 'succeeded' && syncOperation.result) {
+      setSyncResult(syncOperation.result);
+      setTools(syncOperation.result.tools);
+      setActionError(null);
+    } else if (syncOperation?.status === 'failed') {
+      setActionError(syncOperation.error ?? 'Tool sync failed.');
     }
+  }, [syncOperation]);
+
+  const syncTools = () => {
+    setActionError(null);
+    setSyncResult(null);
+    void asyncOperationStore
+      .run(mcpToolSyncOperationKey(server.serverId), () => syncMcpTools(server.serverId))
+      .catch(() => undefined);
   };
 
   const toggleStatus = async () => {
@@ -1731,6 +1742,14 @@ function ServerList({
 }) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
+  const operationVersion = useAsyncOperationVersion();
+  const syncingServerIds = useMemo(() => {
+    // Re-project the dynamic operation keys whenever the shared registry changes.
+    void operationVersion;
+    return new Set(servers
+      .filter((server) => asyncOperationStore.getEntry(mcpToolSyncOperationKey(server.serverId))?.status === 'running')
+      .map((server) => server.serverId));
+  }, [operationVersion, servers]);
 
   const enabledCount = servers.filter((server) => server.status === 'ENABLED').length;
   const disabledCount = servers.length - enabledCount;
@@ -1869,6 +1888,11 @@ function ServerList({
                   <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-on-surface">
                     {server.displayName}
                   </span>
+                  {syncingServerIds.has(server.serverId) && (
+                    <span className="flex shrink-0 items-center gap-1 rounded-md border border-primary/35 bg-primary/10 px-1.5 py-0.5 font-mono-sm text-[9px] uppercase text-primary">
+                      <Loader2 size={10} className="animate-spin" /> Syncing
+                    </span>
+                  )}
                   <TrustBadge level={server.trustLevel} showLabel={false} />
                 </div>
                 <div className="mt-2 truncate font-mono-sm text-[11px] text-on-surface-variant">{server.serverId}</div>

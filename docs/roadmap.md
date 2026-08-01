@@ -36,10 +36,10 @@ functions via [`FunctionRegistryService`](../src/main/java/com/job/scheduler/ser
 
 ### Authoring & editing
 
-- [ ] **Natural-language edit of a selected state/node** ("retry 3× with backoff", "add a Catch to
+- [x] **Natural-language edit of a selected state/node** ("retry 3× with backoff", "add a Catch to
   email on failure") — scoped edits vs. whole-workflow regeneration.
-- [ ] **AI workflow explainer** — readable summary of what an ASL does (useful for revisions/handoff).
-- [ ] **"Fix my ASL" button** — run validators, feed issues to the model, apply the corrected
+- [x] **AI workflow explainer** — readable summary of what an ASL does (useful for revisions/handoff).
+- [x] **"Fix my ASL" button** — run validators, feed issues to the model, apply the corrected
   definition (user-facing version of the internal repair loop).
 
 ### MCP & catalog
@@ -48,36 +48,49 @@ functions via [`FunctionRegistryService`](../src/main/java/com/job/scheduler/ser
   requirement opens a public-catalog browser (`PublicMcpRegistryService`: bundled JSON always, external
   `registry.modelcontextprotocol.io` enabled by default and configurable via `scheduler.mcp.registry.external.*`); picking an install
   option prefills the register form for the user to review trust + secrets before creating.
-- [ ] **Embeddings / RAG catalog matching** — embed functions + MCP tools and retrieve only relevant
-  ones per prompt instead of injecting the whole catalog. Scales the catalog and cuts token/
-  truncation pressure on local models.
-- [ ] **AI-generated descriptions** for functions/MCP tools — better catalog descriptions measurably
-  improve resource matching.
+- [x] **Embeddings / RAG catalog matching** — models are now typed by role (`AiModelRole` CHAT /
+  EMBEDDING; one default per role). A registered EMBEDDING model vectorizes functions + MCP tools
+  into a pgvector `resource_embeddings` table (`WorkflowAiEmbeddingService`, reconciled on a fixed
+  delay, failure-safe). `buildCatalog(intent)` embeds the turn intent and retrieves the top-k
+  nearest resources (`cosine_distance` via hibernate-vector) to render at full detail — MCP arg
+  schemas + descriptions — while the rest stay a one-line index so the model still sees the whole
+  menu. Retrieval only engages once the catalog passes `min-catalog-size`; below that, on a blank
+  intent, or on any embedding failure it falls back to the full-detail catalog. Trades the
+  KV-cache-stable catalog prefix for per-turn relevance, which pays off exactly when the catalog is
+  large enough to pressure local-model context. Pairs with **AI-generated descriptions** (the
+  embedded text) below.
+- [x] **AI-generated descriptions** for functions/MCP tools — missing descriptions are generated
+  after function publication/activation and during MCP tool sync; human/provider descriptions win.
+- [x] **Embedding / retrieval ranking** — `EmbeddingRankingService` scores EMBEDDING-role models on
+  *retrieval quality* (parallel to the chat `workflow-ai-v1` ranking). Ground truth is synthetic: the
+  default chat model writes one natural-language query per catalog resource (cached in
+  `resource_eval_queries`, regenerated on text change). Each model embeds the catalog + queries
+  **in-memory** (models differ in dimension, so it never touches the fixed-width production
+  `resource_embeddings` column) and is scored on where it ranks the correct resource per query —
+  recall@1, recall@k, MRR — plus average latency and dimension, ranked best-first. Runs async on a
+  background thread (`embedding_ranking_runs` ledger; `POST /app/v1/ai/embeddings/ranking`, poll
+  `GET .../latest`); the shared `CatalogResourceProvider` guarantees the eval embeds the exact text
+  production does. UI: the Embedding Ranking tab in AI Settings. Answers "which embedding model should
+  be the default."
 
 ### Execution & ops
 
-- [ ] **Run summaries / reports** — natural-language digest of an execution or batch: what ran, what
-  each state produced, where it failed.
-- [ ] **Anomaly detection** on run metrics (Prometheus is already wired) — flag latency/failure-rate
-  spikes.
-- [ ] **Pre-run cost/duration estimate** for a workflow.
+- [x] **Run summaries / reports** — completed executions expose an on-demand AI digest grounded in
+  the persisted trace: overall outcome, a state-by-state report across root/Parallel/Map scopes, and
+  the failure point when applicable. It uses the default Chat model, preserves real scope/sequence/
+  status metadata, and retains generation state across in-app navigation.
 
 ### Safety (extends the provisioning work)
 
-- [ ] **Pre-activation AI review** — before activation, flag risky patterns: unguarded `DESTRUCTIVE`
-  MCP calls, PII in logs, missing error handling.
+- [x] **Pre-activation AI review** — an explicit **AI review** action in the editor and workflow
+  details calls the default Chat model on demand and shows warning-only observations for unguarded
+  `DESTRUCTIVE` MCP calls, data exposure, and missing error handling. The review never changes ASL,
+  proposes a fix, blocks activation, or adds model latency to normal save/activate actions.
 - [x] **Trust-aware confirmation** — saving an AI-authored workflow that grants `WRITE`/`DESTRUCTIVE`
   MCP trust (`?trust=…`) is blocked until the user confirms. `WorkflowAiTrustReviewService` scans the
   definition; `saveWorkspaceWorkflow` throws `WorkflowAiTrustConfirmationRequiredException` → HTTP 409
   `MCP_TRUST_CONFIRMATION_REQUIRED` with the tools; the UI shows `TrustConfirmationModal` and retries
   the save with `confirmElevatedTrust: true`.
-
-### Platform / UX
-
-- [ ] **Streaming responses** — token streaming over the WebSocket instead of returning the whole
-  reply at once (faster feel; makes truncation visible as it happens).
-- [ ] **Model routing** — auto-pick a stronger model for code-generation steps (function proposals)
-  vs. a cheap one for chat, addressing weak-local-model code-in-JSON failures structurally.
 
 ---
 
@@ -106,20 +119,12 @@ Suggested arc: evals → constrained decoding → distillation / tool-calling.
   scores each case 1–5 against the suite's per-case `judge.expectation` rubric and adds a `judge`
   block (mean score, pass rate, STRONG/MIXED/WEAK verdict, rationales) to the persisted result
   without moving deterministic gates or the recommendation.
-- [ ] **Distillation / fine-tuning a small ASL model** — generate synthetic training data with a
-  large model, then SFT/LoRA a small local model on Voyager's ASL + JSONata + function format.
-  Structural fix for weak local models (e.g. qwen3:8b) failing at code-in-JSON.
-- [ ] **Data flywheel from user edits** — the `ResourcePlanCard` already captures the human-corrected
-  function code before approval. That (AI draft → approved) diff is preference/SFT data; feeds DPO or
-  an SFT corpus that compounds with usage.
 
 ### New frontiers
 
 - [ ] **Real tool-calling instead of a text catalog** — expose `search_catalog`, `validate_asl`,
   `create_function` as tools the model calls in a ReAct loop, so it queries for resources and checks
   its own work mid-generation rather than reading the whole catalog blob.
-- [ ] **Multi-agent orchestration** — Planner → Coder → Reviewer pipeline; the conversation stages
-  already imply these roles. A clean study of agent handoff.
 - [ ] **Semantic caching + RAG** — embed workflows/functions/executions for catalog retrieval, plus
   semantic response caching (a similar request adapts a prior workflow). Embeddings, vector search,
   reranking.

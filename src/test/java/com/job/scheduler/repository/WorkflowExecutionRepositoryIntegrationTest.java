@@ -25,6 +25,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import tools.jackson.databind.ObjectMapper;
@@ -49,7 +50,8 @@ class WorkflowExecutionRepositoryIntegrationTest {
 
     @Container
     static PostgreSQLContainer<?> postgres =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            new PostgreSQLContainer<>(DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres"))
+                    .withInitScript("db/pgvector-init.sql")
                     .withDatabaseName("jobscheduler")
                     .withUsername("postgres")
                     .withPassword("postgres");

@@ -12,6 +12,7 @@ import com.job.scheduler.dto.WorkflowExecutionDetailDTO;
 import com.job.scheduler.dto.WorkflowExecutionPageDTO;
 import com.job.scheduler.dto.WorkflowResponseDTO;
 import com.job.scheduler.dto.WorkflowPageDTO;
+import com.job.scheduler.dto.WorkflowRunSummaryResponseDTO;
 import com.job.scheduler.dto.WorkflowTriageRequestDTO;
 import com.job.scheduler.dto.WorkflowTriageResponseDTO;
 import com.job.scheduler.dto.UpdateWorkflowMetadataRequestDTO;
@@ -20,6 +21,7 @@ import com.job.scheduler.enums.WorkflowStatus;
 import com.job.scheduler.enums.WorkflowExecutionStatus;
 import com.job.scheduler.enums.WorkflowExecutionTrigger;
 import com.job.scheduler.service.WorkflowAiFailureTriageService;
+import com.job.scheduler.service.WorkflowAiRunSummaryService;
 import com.job.scheduler.service.WorkflowExecutionInspectionService;
 import com.job.scheduler.service.WorkflowDraftTestService;
 import com.job.scheduler.service.WorkflowExecutionCancellationService;
@@ -53,6 +55,7 @@ public class WorkflowController {
             workflowExecutionCancellationService;
     private final WorkflowDraftTestService workflowDraftTestService;
     private final WorkflowAiFailureTriageService workflowAiFailureTriageService;
+    private final WorkflowAiRunSummaryService workflowAiRunSummaryService;
 
     @PostMapping
     public ResponseEntity<WorkflowResponseDTO> createWorkflow(
@@ -191,6 +194,14 @@ public class WorkflowController {
                         request == null ? null : request.modelConfigId()
                 )
         );
+    }
+
+    @PostMapping("/{workflowId}/executions/{executionId}/summary")
+    public ResponseEntity<WorkflowRunSummaryResponseDTO> summarizeExecution(
+            @PathVariable UUID workflowId,
+            @PathVariable UUID executionId
+    ) {
+        return ResponseEntity.ok(workflowAiRunSummaryService.summarize(workflowId, executionId));
     }
 
     @PostMapping("/{workflowId}/pause")

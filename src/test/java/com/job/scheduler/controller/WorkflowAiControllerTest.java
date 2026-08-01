@@ -2,7 +2,10 @@ package com.job.scheduler.controller;
 
 import com.job.scheduler.dto.WorkflowGenerationRequestDTO;
 import com.job.scheduler.dto.WorkflowGenerationResponseDTO;
+import com.job.scheduler.dto.WorkflowPreActivationReviewResponseDTO;
+import com.job.scheduler.dto.WorkflowPreActivationWarningDTO;
 import com.job.scheduler.service.WorkflowGenerationService;
+import com.job.scheduler.service.WorkflowAiAuthoringService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,10 +31,13 @@ class WorkflowAiControllerTest {
 
     @Mock
     private WorkflowGenerationService workflowGenerationService;
+    @Mock
+    private WorkflowAiAuthoringService workflowAiAuthoringService;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new WorkflowAiController(workflowGenerationService)).build();
+        mockMvc = MockMvcBuilders.standaloneSetup(
+                new WorkflowAiController(workflowGenerationService, workflowAiAuthoringService)).build();
     }
 
     @Test
@@ -71,5 +77,30 @@ class WorkflowAiControllerTest {
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.validationIssues[0]").value("INVALID_STATE_TYPE"));
+    }
+
+    @Test
+    void reviewsWorkflowBeforeActivation() throws Exception {
+        var definition = objectMapper.readTree("""
+                {"StartAt":"Call","States":{"Call":{"Type":"Task",
+                "Resource":"voyager://mcp/db/delete?trust=DESTRUCTIVE","End":true}}}
+                """);
+        when(workflowAiAuthoringService.reviewBeforeActivation(definition, null))
+                .thenReturn(new WorkflowPreActivationReviewResponseDTO(List.of(
+                        new WorkflowPreActivationWarningDTO(
+                                "DESTRUCTIVE_MCP",
+                                "Destructive operation",
+                                "The task can permanently delete connected data.",
+                                "Call")
+                )));
+
+        mockMvc.perform(post("/app/v1/workflows/authoring/pre-activation-review")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                objectMapper.createObjectNode().set("definition", definition))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.warnings[0].category").value("DESTRUCTIVE_MCP"))
+                .andExpect(jsonPath("$.warnings[0].stateName").value("Call"))
+                .andExpect(jsonPath("$.warnings[0].solution").doesNotExist());
     }
 }

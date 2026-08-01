@@ -47,6 +47,7 @@ public class FunctionRegistryService {
     private final FunctionDefinitionRepository functionRepository;
     private final FunctionVersionRepository versionRepository;
     private final FunctionRuntimePolicy runtimePolicy;
+    private final CatalogDescriptionGenerationService descriptionGenerationService;
 
     @Value("${scheduler.judge0.default-cpu-time-limit-seconds:2.0}")
     private double defaultCpuTimeLimitSeconds;
@@ -298,6 +299,7 @@ public class FunctionRegistryService {
         ensureFunctionCanChangeVersions(function);
         FunctionVersion functionVersion = findVersion(function, version);
         if (functionVersion.getStatus() == FunctionVersionStatus.AVAILABLE) {
+            ensureFunctionDescription(function, functionVersion);
             return toResponse(functionVersion);
         }
         if (functionVersion.getStatus() != FunctionVersionStatus.DRAFT) {
@@ -312,6 +314,7 @@ public class FunctionRegistryService {
             function.setActiveVersion(saved.getVersion());
             functionRepository.save(function);
         }
+        ensureFunctionDescription(function, saved);
         return toResponse(saved);
     }
 
@@ -329,7 +332,17 @@ public class FunctionRegistryService {
             );
         }
         function.setActiveVersion(version);
-        return toResponse(functionRepository.save(function));
+        FunctionDefinition saved = functionRepository.save(function);
+        ensureFunctionDescription(saved, functionVersion);
+        return toResponse(saved);
+    }
+
+    private void ensureFunctionDescription(FunctionDefinition function, FunctionVersion version) {
+        if (function.getDescription() != null && !function.getDescription().isBlank()) return;
+        String generated = descriptionGenerationService.describeFunction(function, version);
+        if (generated == null || generated.isBlank()) return;
+        function.setDescription(generated);
+        functionRepository.save(function);
     }
 
     @Transactional

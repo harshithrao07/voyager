@@ -9,7 +9,7 @@
         "label": "npm (npx)",
         "transport": "STDIO",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"],
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/mcp-files"],
         "env": []
       }
     ]

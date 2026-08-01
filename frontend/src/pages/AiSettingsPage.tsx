@@ -24,6 +24,8 @@ export function AiSettingsPage() {
           onDiscoverEndpointChange={management.setDiscoverEndpoint}
           localModelName={management.localModelName}
           onLocalModelNameChange={management.setLocalModelName}
+          localModelRole={management.localModelRole}
+          onLocalModelRoleChange={management.setLocalModelRole}
           onAddLocalModel={management.addLocalModel}
           addingModel={management.addingModel}
           localCredentialRef={management.localCredentialRef}
@@ -50,6 +52,7 @@ export function AiSettingsPage() {
           onUpdateEndpointEnabled={management.updateEndpointEnabled}
           onDeleteSingleModel={management.deleteSingleModel}
           onUpdateSingleModelEnabled={management.updateSingleModelEnabled}
+          onSetDefaultModel={management.setSingleModelDefault}
         />
       </div>
     </div>

@@ -40,6 +40,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -60,7 +61,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class WorkflowExecutionRetentionServiceIntegrationTest {
     @Container
     static PostgreSQLContainer<?> postgres =
-            new PostgreSQLContainer<>("postgres:16-alpine")
+            new PostgreSQLContainer<>(DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres"))
+                    .withInitScript("db/pgvector-init.sql")
                     .withDatabaseName("jobscheduler")
                     .withUsername("postgres")
                     .withPassword("postgres");

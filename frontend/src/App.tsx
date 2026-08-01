@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import type { WorkflowSummary } from './components/WorkflowListView';
 import { WorkspaceState } from './components/WorkspaceState';
 import { WorkflowSettingsPanel } from './components/WorkflowSettingsPanel';
+import { PreActivationReviewModal } from './components/workflow-create/PreActivationReviewModal';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { CreateWorkflowPage } from './pages/CreateWorkflowPage';
 import { FunctionsPage } from './pages/FunctionsPage';
@@ -23,10 +24,12 @@ import {
   listWorkflows,
   renameWorkflowAiConversation,
   renameWorkflowAiDraft,
+  reviewWorkflowBeforeActivation,
   updateWorkflowCanvasLayout,
   type WorkflowAiConversationSummaryDTO,
   type WorkflowDefinitionResponseDTO,
   type WorkflowPageDTO,
+  type WorkflowPreActivationWarning,
   type WorkflowResponseDTO,
   type WorkflowStatusDTO,
 } from './api';
@@ -263,6 +266,9 @@ function App() {
   const [workflowDetailLoading, setWorkflowDetailLoading] = useState(false);
   const [workflowDetailError, setWorkflowDetailError] = useState<string | null>(null);
   const [workflowActionBusy, setWorkflowActionBusy] = useState(false);
+  const [workflowReviewBusy, setWorkflowReviewBusy] = useState(false);
+  const [activationReviewWarnings, setActivationReviewWarnings] =
+    useState<WorkflowPreActivationWarning[] | null>(null);
   const [workflowDef, setWorkflowDef] = useState<any>(activeDefinition);
   const [activeTab, setActiveTab] = useState<'visualizer' | 'definition' | 'executions'>('visualizer');
   const [selectedStateName, setSelectedStateName] = useState('Fetch Source Data');
@@ -840,7 +846,7 @@ function App() {
       });
   }, [selectedRevision, workflowDetail]);
 
-  const handleActivateRevision = async () => {
+  const performActivateRevision = async () => {
     if (!workflowDetail || !selectedRevision) {
       return;
     }
@@ -885,6 +891,27 @@ function App() {
       setWorkflowActionBusy(false);
     }
   };
+
+  const handleReviewRevision = async () => {
+    if (!selectedRevision) return;
+
+    setWorkflowReviewBusy(true);
+    try {
+      const review = await reviewWorkflowBeforeActivation(selectedRevision.definition);
+      setActivationReviewWarnings(review.warnings);
+    } catch {
+      setActivationReviewWarnings([{
+        category: 'REVIEW_UNAVAILABLE',
+        title: 'The AI review did not complete',
+        detail: 'This revision has not been checked for activation risks.',
+        stateName: null,
+      }]);
+    } finally {
+      setWorkflowReviewBusy(false);
+    }
+  };
+
+  const handleActivateRevision = performActivateRevision;
 
   const handleStateSelect = (stateName: string) => {
     setSelectedStateName(stateName);
@@ -1426,6 +1453,23 @@ function App() {
                     </button>
                   )}
                   {selectedRevision
+                    && Number.isSafeInteger(Number(selectedRevision.id))
+                    && workflowDetail?.status !== 'ARCHIVED' && (
+                    <button
+                      type="button"
+                      data-testid="workflow-ai-activation-review"
+                      onClick={() => void handleReviewRevision()}
+                      disabled={workflowReviewBusy}
+                      className="flex h-9 items-center gap-2 rounded-DEFAULT border border-status-warning/45 bg-status-warning/5 px-3 font-body-sm text-body-sm font-medium text-status-warning transition-colors hover:bg-status-warning/10 disabled:cursor-not-allowed disabled:opacity-60"
+                      title={`Ask the default Chat model to review ${selectedRevision.label} for activation risks`}
+                    >
+                      <span className={`material-symbols-outlined text-[16px] ${workflowReviewBusy ? 'animate-spin' : ''}`}>
+                        {workflowReviewBusy ? 'progress_activity' : 'policy'}
+                      </span>
+                      {workflowReviewBusy ? 'Reviewing...' : 'AI review'}
+                    </button>
+                  )}
+                  {selectedRevision
                     && !selectedRevision.active
                     && workflowDetail?.status !== 'ARCHIVED' && (
                     <button
@@ -1575,6 +1619,12 @@ function App() {
           onValueChange={setWorkspaceRenameValue}
           onCancel={cancelRenameWorkspace}
           onConfirm={() => void performRenameWorkspace()}
+        />
+      )}
+      {activationReviewWarnings && (
+        <PreActivationReviewModal
+          warnings={activationReviewWarnings}
+          onClose={() => setActivationReviewWarnings(null)}
         />
       )}
     </div>

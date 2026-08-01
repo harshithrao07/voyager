@@ -7,10 +7,12 @@ import com.job.scheduler.dto.AiModelTestResponseDTO;
 import com.job.scheduler.enums.AiModelEvaluationMode;
 import com.job.scheduler.enums.AiModelEvaluationStatus;
 import com.job.scheduler.enums.AiModelProviderType;
+import com.job.scheduler.enums.AiModelRole;
 import com.job.scheduler.enums.AiStructuredOutputMode;
 import com.job.scheduler.exception.ApiExceptionHandler;
 import com.job.scheduler.service.AiModelConfigService;
 import com.job.scheduler.service.AiModelEvaluationService;
+import com.job.scheduler.service.EmbeddingRankingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,6 +43,8 @@ class AiModelControllerTest {
     private AiModelConfigService aiModelConfigService;
     @Mock
     private AiModelEvaluationService aiModelEvaluationService;
+    @Mock
+    private EmbeddingRankingService embeddingRankingService;
 
     private MockMvc mockMvc;
 
@@ -49,7 +53,8 @@ class AiModelControllerTest {
         mockMvc = MockMvcBuilders
                 .standaloneSetup(new AiModelController(
                         aiModelConfigService,
-                        aiModelEvaluationService
+                        aiModelEvaluationService,
+                        embeddingRankingService
                 ))
                 .setControllerAdvice(new ApiExceptionHandler())
                 .build();
@@ -142,14 +147,16 @@ class AiModelControllerTest {
         when(aiModelConfigService.discoverAndOnboardModels(
                 eq("http://localhost:11434/v1"),
                 eq("cred-1"),
-                eq(AiModelProviderType.OPENAI_COMPATIBLE_LOCAL)))
+                eq(AiModelProviderType.OPENAI_COMPATIBLE_LOCAL),
+                eq(AiModelRole.EMBEDDING)))
                 .thenReturn(List.of(model("Discovered", true)));
 
         String body = """
                 {
                   "baseUrl": "http://localhost:11434/v1",
                   "credential": "cred-1",
-                  "providerType": "OPENAI_COMPATIBLE_LOCAL"
+                  "providerType": "OPENAI_COMPATIBLE_LOCAL",
+                  "role": "EMBEDDING"
                 }
                 """;
 
@@ -306,6 +313,7 @@ class AiModelControllerTest {
                 UUID.randomUUID(),
                 displayName,
                 AiModelProviderType.OPENAI_COMPATIBLE_LOCAL,
+                AiModelRole.CHAT,
                 "http://localhost:11434/v1",
                 "llama3",
                 enabled,

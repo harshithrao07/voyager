@@ -3,6 +3,7 @@ package com.job.scheduler.entity;
 import com.job.scheduler.enums.AiModelProviderType;
 import com.job.scheduler.enums.AiModelEvaluationMode;
 import com.job.scheduler.enums.AiModelEvaluationStatus;
+import com.job.scheduler.enums.AiModelRole;
 import com.job.scheduler.enums.AiStructuredOutputMode;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -30,7 +31,8 @@ import java.util.UUID;
         name = "ai_model_configs",
         indexes = {
                 @Index(name = "idx_ai_model_configs_enabled", columnList = "enabled"),
-                @Index(name = "idx_ai_model_configs_default", columnList = "default_model")
+                @Index(name = "idx_ai_model_configs_default", columnList = "default_model"),
+                @Index(name = "idx_ai_model_configs_role", columnList = "role")
         }
 )
 public class AiModelConfig {
@@ -45,6 +47,10 @@ public class AiModelConfig {
     @Enumerated(EnumType.STRING)
     @Column(name = "provider_type", nullable = false)
     private AiModelProviderType providerType = AiModelProviderType.OPENAI_COMPATIBLE_LOCAL;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "role", nullable = false)
+    private AiModelRole role = AiModelRole.CHAT;
 
     @Column(name = "base_url", nullable = false)
     private String baseUrl;

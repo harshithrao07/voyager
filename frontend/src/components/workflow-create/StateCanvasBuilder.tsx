@@ -69,6 +69,7 @@ export function StateCanvasBuilder({
   const [connectionNotice, setConnectionNotice] = useState<{ tone: 'ok' | 'warn'; message: string } | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [edgeContextMenu, setEdgeContextMenu] = useState<EdgeContextMenuState | null>(null);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const pointerDownRef = useRef<{ x: number; y: number } | null>(null);
   const states = useMemo(() => (
     definition.States && typeof definition.States === 'object' ? definition.States : {}
@@ -130,6 +131,7 @@ export function StateCanvasBuilder({
     setInspectorOpen(false);
     setContextMenu(null);
     setEdgeContextMenu(null);
+    setClearConfirmOpen(false);
     setConnectionNotice({ tone: 'ok', message: 'Canvas cleared.' });
   };
 
@@ -224,6 +226,7 @@ export function StateCanvasBuilder({
     setContextMenu(null);
     setEdgeContextMenu(null);
     setInspectorOpen(false);
+    onStateSelect('');
   };
 
   useEffect(() => {
@@ -300,7 +303,7 @@ export function StateCanvasBuilder({
             </div>
             <button
               type="button"
-              onClick={handleClearCanvas}
+              onClick={() => setClearConfirmOpen(true)}
               disabled={stateNames.length === 0}
               className="flex h-7 items-center gap-1.5 rounded-DEFAULT border border-border-subtle px-2 font-mono-sm text-[10px] text-on-surface-variant transition-colors hover:border-status-error/45 hover:bg-status-error/10 hover:text-status-error disabled:cursor-not-allowed disabled:opacity-40"
               title="Clear canvas"
@@ -456,6 +459,60 @@ export function StateCanvasBuilder({
             onOpenNestedScope={onOpenNestedScope}
           />
         </section>
+      )}
+
+      {clearConfirmOpen && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="clear-workflow-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setClearConfirmOpen(false);
+          }}
+        >
+          <section className="w-full max-w-md overflow-hidden rounded-DEFAULT border border-border-subtle bg-surface-container-highest shadow-[0_24px_80px_rgba(0,0,0,0.58)]">
+            <div className="flex items-start gap-3 border-b border-border-subtle px-5 py-4">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-status-error/12 text-status-error">
+                <Trash2 size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2 id="clear-workflow-title" className="font-mono-sm text-[13px] text-on-surface">
+                  Clear workflow canvas?
+                </h2>
+                <p className="mt-1 text-[12px] leading-5 text-on-surface-variant">
+                  This removes all {stateNames.length} {stateNames.length === 1 ? 'state' : 'states'} from the current machine scope. This action cannot be undone.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setClearConfirmOpen(false)}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-DEFAULT text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface"
+                aria-label="Close clear confirmation"
+              >
+                <X size={15} />
+              </button>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setClearConfirmOpen(false)}
+                className="h-9 rounded-DEFAULT border border-border-subtle px-4 font-mono-sm text-[11px] text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                data-testid="workflow-confirm-clear-canvas"
+                onClick={handleClearCanvas}
+                className="flex h-9 items-center gap-2 rounded-DEFAULT bg-status-error px-4 font-mono-sm text-[11px] text-white transition-colors hover:brightness-110"
+              >
+                <Trash2 size={13} />
+                Clear canvas
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import type { AiStructuredOutputMode, WorkflowAiResourcePlan } from '../../api';
+import type { AiModelRole, AiStructuredOutputMode, WorkflowAiResourcePlan } from '../../api';
 
 export type DefinitionMode = 'manual' | 'ai';
 
@@ -8,6 +8,7 @@ export type AiModel = {
   endpoint: string;
   modelName?: string;
   provider: 'local' | 'api';
+  role?: AiModelRole;
   enabled?: boolean;
   defaultModel?: boolean;
   hasCredential?: boolean;
@@ -64,4 +65,4 @@ export type EndpointModelGroup = {
   hasCredential: boolean;
 };
 
-export type ModelSettingsTab = 'add' | 'added' | 'ranking';
+export type ModelSettingsTab = 'defaults' | 'add' | 'added' | 'ranking' | 'embeddings';

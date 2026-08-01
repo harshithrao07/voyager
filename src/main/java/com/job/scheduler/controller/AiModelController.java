@@ -9,8 +9,10 @@ import com.job.scheduler.dto.AiModelEvaluationHistoryDTO;
 import com.job.scheduler.dto.AiModelEvaluationStartRequestDTO;
 import com.job.scheduler.dto.AiModelTestRequestDTO;
 import com.job.scheduler.dto.AiModelTestResponseDTO;
+import com.job.scheduler.dto.EmbeddingRankingRunDTO;
 import com.job.scheduler.service.AiModelConfigService;
 import com.job.scheduler.service.AiModelEvaluationService;
+import com.job.scheduler.service.EmbeddingRankingService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -33,6 +35,7 @@ import java.util.UUID;
 public class AiModelController {
     private final AiModelConfigService aiModelConfigService;
     private final AiModelEvaluationService aiModelEvaluationService;
+    private final EmbeddingRankingService embeddingRankingService;
 
     @GetMapping("/models")
     public ResponseEntity<List<AiModelConfigDTO>> listModels() {
@@ -65,7 +68,8 @@ public class AiModelController {
         return ResponseEntity.ok(aiModelConfigService.discoverAndOnboardModels(
                 request.baseUrl(),
                 request.credential(),
-                request.providerType()
+                request.providerType(),
+                request.role()
         ));
     }
 
@@ -85,6 +89,16 @@ public class AiModelController {
         return ResponseEntity.ok(aiModelConfigService.setModelEnabled(modelId, request.enabled()));
     }
 
+    @PatchMapping("/models/{modelId}/default")
+    public ResponseEntity<AiModelConfigDTO> setDefaultModel(@PathVariable UUID modelId) {
+        return ResponseEntity.ok(aiModelConfigService.setDefaultModel(modelId));
+    }
+
+    @PostMapping("/models/{modelId}/default")
+    public ResponseEntity<AiModelConfigDTO> setDefaultModelPost(@PathVariable UUID modelId) {
+        return ResponseEntity.ok(aiModelConfigService.setDefaultModel(modelId));
+    }
+
     @DeleteMapping("/models/{modelId}")
     public ResponseEntity<Void> deleteModel(@PathVariable UUID modelId) {
         aiModelConfigService.deleteModel(modelId);
@@ -94,6 +108,16 @@ public class AiModelController {
     @GetMapping("/models/evaluations/latest")
     public ResponseEntity<List<AiModelEvaluationDTO>> listLatestEvaluations() {
         return ResponseEntity.ok(aiModelEvaluationService.listLatest());
+    }
+
+    @PostMapping("/embeddings/ranking")
+    public ResponseEntity<EmbeddingRankingRunDTO> startEmbeddingRanking() {
+        return ResponseEntity.accepted().body(embeddingRankingService.start());
+    }
+
+    @GetMapping("/embeddings/ranking/latest")
+    public ResponseEntity<EmbeddingRankingRunDTO> latestEmbeddingRanking() {
+        return ResponseEntity.ok(embeddingRankingService.latest());
     }
 
     @PostMapping("/models/{modelId}/evaluations")

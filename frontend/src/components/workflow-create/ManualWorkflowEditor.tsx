@@ -1,6 +1,7 @@
 import Editor from '@monaco-editor/react';
 import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { AlertCircle, Braces, ChevronRight, FileUp, FlaskConical, ListPlus, Loader2, PanelRightClose, PanelRightOpen, Plus, Save, Sliders, Sparkles, Wand2, X } from 'lucide-react';
+import { AlertCircle, ArrowRight, BookOpenText, Braces, ChevronRight, FileUp, FlaskConical, ListPlus, Loader2, PanelRightClose, PanelRightOpen, Plus, Save, ShieldAlert, Sliders, Sparkles, Undo2, Wand2, X } from 'lucide-react';
+import { explainWorkflowDefinition } from '../../api';
 import type { DefinitionStatus, WorkflowPreview } from './types';
 import { useTemplateFilePicker, type TemplateImportHandler } from './useTemplateImport';
 import { AslGraphViewer } from '../AslGraphViewer';
@@ -25,6 +26,16 @@ import type { CanvasNodePositions } from '../../types/workflowCanvas';
 
 type EditorView = 'code' | 'builder';
 
+type DormantDiffLine = { kind: 'add' | 'remove' | 'context'; text: string };
+type DormantSplitDiffRow = {
+  left?: DormantDiffLine & { index: number };
+  right?: DormantDiffLine & { index: number };
+  context?: string;
+  blockId?: number;
+  firstInBlock?: boolean;
+  collapsedContext?: number;
+};
+
 type SidebarTab = 'workflow' | 'ai';
 
 type RevisionEditDetails = {
@@ -42,9 +53,11 @@ type Props = {
   error: string | null;
   validationIssues: string[];
   saving: boolean;
+  reviewingActivation: boolean;
   canSave: boolean;
   saveDisabledReasons: string[];
   onSave: () => void;
+  onReviewActivation: () => void;
   onSaveWithoutActivation?: () => void;
   /** The workspace is already linked to a workflow, so Save creates another revision. */
   saveCreatesRevision?: boolean;
@@ -80,9 +93,11 @@ export function ManualWorkflowEditor({
   error,
   validationIssues,
   saving,
+  reviewingActivation,
   canSave,
   saveDisabledReasons,
   onSave,
+  onReviewActivation,
   onSaveWithoutActivation,
   saveCreatesRevision,
   revisionEdit,
@@ -115,6 +130,17 @@ export function ManualWorkflowEditor({
   const [layoutVersion, setLayoutVersion] = useState(0);
   const [testBenchOpen, setTestBenchOpen] = useState(false);
   const [machinePath, setMachinePath] = useState<MachinePath>([]);
+  const [aiAuthoringAction, setAiAuthoringAction] = useState<'explain' | null>(null);
+  const [aiAuthoringBusy, setAiAuthoringBusy] = useState(false);
+  const [aiAuthoringResult, setAiAuthoringResult] = useState<{ title: string; lines: string[] } | null>(null);
+  const [aiAuthoringError, setAiAuthoringError] = useState<string | null>(null);
+  const aiAuthoringInstruction = '';
+  const setAiAuthoringInstruction = (_value: string) => {};
+  const [aiAuthoringPatch] = useState<null | { definition: AslDefinition; diff: DormantDiffLine[] }>(null);
+  const [selectedDiffLines, setSelectedDiffLines] = useState<Set<number>>(new Set());
+  const splitPatchRows: DormantSplitDiffRow[] = [];
+  const [stagedPatch] = useState<null | { definition: AslDefinition | null; issues: string[]; parseError: string | null }>(null);
+  const applyAiAuthoringPatch = () => {};
   const bodyRef = useRef<HTMLDivElement>(null);
   const saveDisabledTooltip = !canSave && saveDisabledReasons.length > 0
     ? `Cannot save yet:\n${saveDisabledReasons.map((reason) => `• ${reason}`).join('\n')}`
@@ -292,6 +318,29 @@ export function ManualWorkflowEditor({
     setLayoutVersion((version) => version + 1);
   };
 
+  const openAiAuthoring = () => {
+    setAiAuthoringAction('explain');
+    setAiAuthoringResult(null);
+    setAiAuthoringError(null);
+  };
+
+  const runAiAuthoring = async () => {
+    if (!parsedDefinition || !aiAuthoringAction) return;
+    setAiAuthoringBusy(true);
+    setAiAuthoringError(null);
+    try {
+      const response = await explainWorkflowDefinition(parsedDefinition);
+      setAiAuthoringResult({
+        title: 'Workflow explanation',
+        lines: [response.summary, ...response.stateDetails],
+      });
+    } catch (authoringError) {
+      setAiAuthoringError(authoringError instanceof Error ? authoringError.message : 'AI authoring failed.');
+    } finally {
+      setAiAuthoringBusy(false);
+    }
+  };
+
   const viewToggle = (
     <div className="flex items-center gap-1 rounded-DEFAULT border border-border-subtle p-0.5">
       {([
@@ -376,6 +425,31 @@ export function ManualWorkflowEditor({
               >
                 {testBenchOpen ? <X size={13} /> : <FlaskConical size={13} />}
                 {testBenchOpen ? 'Close test' : 'Test draft'}
+              </button>
+              <button
+                type="button"
+                onClick={openAiAuthoring}
+                disabled={!parsedDefinition}
+                className="flex h-8 items-center gap-1.5 rounded-DEFAULT border border-border-subtle px-3 font-mono-sm text-[11px] text-on-surface-variant transition-colors hover:border-secondary hover:text-secondary disabled:opacity-40"
+                title="Explain this workflow with AI"
+              >
+                <BookOpenText size={13} />
+                Explain
+              </button>
+              <button
+                type="button"
+                data-testid="workflow-ai-activation-review"
+                onClick={onReviewActivation}
+                disabled={reviewingActivation || saving || !definitionStatus.valid || validationIssues.length > 0}
+                className="flex h-8 items-center gap-1.5 rounded-DEFAULT border border-status-warning/45 bg-status-warning/5 px-3 font-mono-sm text-[11px] text-status-warning transition-colors hover:bg-status-warning/10 disabled:cursor-not-allowed disabled:opacity-40"
+                title={!definitionStatus.valid || validationIssues.length > 0
+                  ? 'Resolve ASL validation issues before requesting an AI review'
+                  : 'Ask the default Chat model to review activation risks'}
+              >
+                {reviewingActivation
+                  ? <Loader2 className="animate-spin" size={13} />
+                  : <ShieldAlert size={13} />}
+                {reviewingActivation ? 'Reviewing...' : 'AI review'}
               </button>
             </div>
           </div>
@@ -765,6 +839,253 @@ export function ManualWorkflowEditor({
         </aside>
         )}
       </div>
+      {aiAuthoringAction && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="AI workflow authoring"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !aiAuthoringBusy) setAiAuthoringAction(null);
+          }}
+        >
+          <section className={`w-full overflow-hidden rounded-DEFAULT border border-border-subtle bg-surface-container-highest shadow-2xl ${aiAuthoringPatch ? 'max-w-4xl' : 'max-w-xl'}`}>
+            <header className="flex items-center justify-between border-b border-border-subtle px-5 py-4">
+              <div>
+                <div className="font-mono-sm text-[12px] text-on-surface">
+                  Explain workflow
+                </div>
+                <p className="mt-1 text-[11px] text-on-surface-variant">
+                  Produces a read-only behavioral summary.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAiAuthoringAction(null)}
+                disabled={aiAuthoringBusy}
+                className="flex h-8 w-8 items-center justify-center rounded-DEFAULT text-on-surface-variant hover:bg-surface-container disabled:opacity-40"
+                aria-label="Close AI authoring"
+              >
+                <X size={15} />
+              </button>
+            </header>
+            <div className="space-y-4 p-5">
+              {false && !aiAuthoringResult && (
+                <label className="block">
+                  <span className="mb-2 block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant">
+                    Describe the change
+                  </span>
+                  <textarea
+                    autoFocus
+                    value={aiAuthoringInstruction}
+                    onChange={(event) => setAiAuthoringInstruction(event.target.value)}
+                    maxLength={4000}
+                    rows={5}
+                    placeholder="Retry three times with exponential backoff, then catch failures and send an email."
+                    className={`${monoFieldClass} w-full resize-y`}
+                  />
+                </label>
+              )}
+              {false && !aiAuthoringResult && !aiAuthoringError && !aiAuthoringPatch && (
+                <div className="rounded-DEFAULT border border-status-error/30 bg-status-error/8 p-4">
+                  <div className="font-mono-sm text-[10px] uppercase tracking-[0.08em] text-status-error">
+                    Problems to repair
+                  </div>
+                  <ul className="mt-3 space-y-2 text-[11px] leading-5 text-on-surface-variant">
+                    {uniqueValidationIssues.map((issue) => <li key={issue}>{issue}</li>)}
+                  </ul>
+                </div>
+              )}
+              {aiAuthoringResult && (
+                <div className="rounded-DEFAULT border border-secondary/30 bg-secondary-container/20 p-4">
+                  <div className="flex items-center gap-2 font-mono-sm text-[11px] text-secondary">
+                    {aiAuthoringPatch && <span className="h-2 w-2 rounded-full bg-secondary" />}
+                    {aiAuthoringResult.title}
+                  </div>
+                  <ul className="mt-3 space-y-2 text-[12px] leading-5 text-on-surface-variant">
+                    {aiAuthoringResult.lines.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
+                  </ul>
+                </div>
+              )}
+              {aiAuthoringPatch && (
+                <div className="overflow-hidden rounded-DEFAULT border border-border-subtle bg-surface-lowest">
+                  <div className="flex items-center justify-end border-b border-border-subtle px-4 py-2.5">
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedDiffLines(new Set(
+                          aiAuthoringPatch.diff
+                            .map((line, index) => line.kind === 'context' ? -1 : index)
+                            .filter((index) => index >= 0),
+                        ))}
+                        className="font-mono-sm text-[10px] text-on-surface-variant hover:text-secondary"
+                      >
+                        Select all
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedDiffLines(new Set())}
+                        className="font-mono-sm text-[10px] text-on-surface-variant hover:text-secondary"
+                      >
+                        Select none
+                      </button>
+                      <span className="font-mono-sm text-[10px] text-secondary">Validated source patch</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-[minmax(0,1fr)_5rem_minmax(0,1fr)] border-b border-border-subtle bg-surface-container-low/55 font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant">
+                    <div className="border-r border-border-subtle px-4 py-2.5">Original · definition.json</div>
+                    <div className="px-1 py-2.5 text-center text-on-surface-variant/45">Apply</div>
+                    <div className="border-l border-border-subtle px-4 py-2.5">AI proposal · definition.json</div>
+                  </div>
+                  <div className="max-h-[50vh] overflow-auto font-mono-sm text-[11px] leading-[1.65]">
+                    {splitPatchRows.map((row, rowIndex) => {
+                      if (row.collapsedContext !== undefined) {
+                        return (
+                          <div
+                            key={`collapsed-${rowIndex}`}
+                            className="grid min-w-[900px] grid-cols-[minmax(0,1fr)_5rem_minmax(0,1fr)] border-b border-border-subtle/35 bg-surface-container-low/55 font-mono-sm text-[9px] uppercase tracking-[0.08em] text-on-surface-variant/55"
+                          >
+                            <div className="border-r border-border-subtle px-4 py-2 text-center">
+                              {row.collapsedContext} unchanged lines
+                            </div>
+                            <div className="px-1 py-2 text-center">···</div>
+                            <div className="border-l border-border-subtle px-4 py-2 text-center">
+                              {row.collapsedContext} unchanged lines
+                            </div>
+                          </div>
+                        );
+                      }
+                      const indices = [row.left?.index, row.right?.index]
+                        .filter((index): index is number => index !== undefined);
+                      const accepted = indices.length > 0 && indices.every((index) => selectedDiffLines.has(index));
+                      const blockIndices = row.blockId === undefined ? [] : splitPatchRows
+                        .filter((candidate) => candidate.blockId === row.blockId)
+                        .flatMap((candidate) => [candidate.left?.index, candidate.right?.index])
+                        .filter((index): index is number => index !== undefined);
+                      const blockAccepted = blockIndices.length > 0
+                        && blockIndices.every((index) => selectedDiffLines.has(index));
+                      const toggleRow = () => setSelectedDiffLines((current) => {
+                        const next = new Set(current);
+                        indices.forEach((index) => {
+                          if (accepted) next.delete(index); else next.add(index);
+                        });
+                        return next;
+                      });
+                      const toggleBlock = () => setSelectedDiffLines((current) => {
+                        const next = new Set(current);
+                        blockIndices.forEach((index) => {
+                          if (blockAccepted) next.delete(index); else next.add(index);
+                        });
+                        return next;
+                      });
+                      return (
+                        <div
+                          key={`${rowIndex}-${row.context || row.left?.text || row.right?.text}`}
+                          className="grid min-w-[900px] grid-cols-[minmax(0,1fr)_5rem_minmax(0,1fr)] border-b border-border-subtle/35 last:border-b-0"
+                        >
+                          <div className={`grid grid-cols-[3rem_minmax(0,1fr)] border-r border-border-subtle px-2 ${row.left
+                            ? accepted ? 'bg-status-error/10 text-status-error' : 'text-on-surface-variant/45'
+                            : 'text-on-surface-variant/70'}`}
+                          >
+                            <span className="select-none pr-2 text-right text-on-surface-variant/30">{rowIndex + 1}</span>
+                            <code className={`whitespace-pre pr-3 ${row.left && !accepted ? 'line-through opacity-55' : ''}`}>
+                              {row.context ?? row.left?.text ?? ' '}
+                            </code>
+                          </div>
+                          <div className="flex items-center justify-center gap-1 bg-surface-container-lowest">
+                            {indices.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={toggleRow}
+                                className={`flex h-6 w-7 items-center justify-center rounded-[3px] border transition-colors ${accepted
+                                  ? 'border-status-error/35 text-status-error hover:bg-status-error/10'
+                                  : 'border-secondary/35 text-secondary hover:bg-secondary-container/25'}`}
+                                title={accepted ? 'Revert this change' : 'Accept this change'}
+                                aria-label={accepted ? `Revert change row ${rowIndex + 1}` : `Accept change row ${rowIndex + 1}`}
+                              >
+                                {accepted ? <Undo2 size={12} /> : <ArrowRight size={12} />}
+                              </button>
+                            )}
+                            {row.firstInBlock && (
+                              <button
+                                type="button"
+                                onClick={toggleBlock}
+                                className={`flex h-6 min-w-8 items-center justify-center rounded-[3px] border px-1 font-mono-sm text-[8px] font-semibold uppercase tracking-wide transition-colors ${blockAccepted
+                                  ? 'border-status-error/35 text-status-error hover:bg-status-error/10'
+                                  : 'border-secondary/35 text-secondary hover:bg-secondary-container/25'}`}
+                                title={blockAccepted ? 'Revert this entire change block' : 'Accept this entire change block'}
+                                aria-label={blockAccepted ? `Revert change block ${row.blockId}` : `Accept change block ${row.blockId}`}
+                              >
+                                {blockAccepted ? <Undo2 size={11} /> : 'Block'}
+                              </button>
+                            )}
+                          </div>
+                          <div className={`grid grid-cols-[3rem_minmax(0,1fr)] border-l border-border-subtle px-2 ${row.right
+                            ? accepted ? 'bg-secondary/10 text-secondary-fixed' : 'text-on-surface-variant/45'
+                            : 'text-on-surface-variant/70'}`}
+                          >
+                            <span className="select-none pr-2 text-right text-on-surface-variant/30">{rowIndex + 1}</span>
+                            <code className={`whitespace-pre pr-3 ${row.right && !accepted ? 'line-through opacity-55' : ''}`}>
+                              {row.context ?? row.right?.text ?? ' '}
+                            </code>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className={`border-t px-4 py-2.5 font-mono-sm text-[10px] ${stagedPatch?.parseError || (stagedPatch?.issues.length || 0) > 0
+                    ? 'border-status-error/25 bg-status-error/8 text-status-error'
+                    : 'border-secondary/25 bg-secondary-container/10 text-secondary'}`}
+                  >
+                    {stagedPatch?.parseError
+                      ? `Selection is not valid JSON: ${stagedPatch.parseError}`
+                      : stagedPatch && stagedPatch.issues.length > 0
+                        ? `Selection has ${stagedPatch.issues.length} ASL validation ${stagedPatch.issues.length === 1 ? 'issue' : 'issues'}. Select dependent lines together.`
+                        : `${selectedDiffLines.size} changed ${selectedDiffLines.size === 1 ? 'line' : 'lines'} staged and valid.`}
+                  </div>
+                </div>
+              )}
+              {aiAuthoringError && (
+                <div className="whitespace-pre-wrap rounded-DEFAULT border border-status-error/30 bg-status-error/10 p-3 text-[11px] text-status-error">
+                  {aiAuthoringError}
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAiAuthoringAction(null)}
+                  disabled={aiAuthoringBusy}
+                  className="h-9 rounded-DEFAULT border border-border-subtle px-4 font-mono-sm text-[11px] text-on-surface-variant disabled:opacity-40"
+                >
+                  {aiAuthoringPatch ? 'Discard' : aiAuthoringResult ? 'Done' : 'Cancel'}
+                </button>
+                {aiAuthoringPatch ? (
+                  <button
+                    type="button"
+                    data-testid="workflow-apply-ai-patch"
+                    onClick={applyAiAuthoringPatch}
+                    disabled={!stagedPatch?.definition || stagedPatch.issues.length > 0}
+                    className="flex h-9 items-center gap-2 rounded-DEFAULT bg-secondary px-4 font-mono-sm text-[11px] text-on-secondary disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <span className="material-symbols-outlined text-[15px]">difference</span>
+                    Apply selected
+                  </button>
+                ) : !aiAuthoringResult && (
+                  <button
+                    type="button"
+                    onClick={runAiAuthoring}
+                    disabled={aiAuthoringBusy}
+                    className="flex h-9 items-center gap-2 rounded-DEFAULT bg-primary px-4 font-mono-sm text-[11px] text-on-primary disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    {aiAuthoringBusy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                    {aiAuthoringBusy ? 'Working...' : 'Explain'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

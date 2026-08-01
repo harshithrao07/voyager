@@ -16,13 +16,16 @@ import {
   listMcpKnownTools,
   provisionWorkflowAiResources,
   regenerateWorkflowAiMessage,
+  reviewWorkflowBeforeActivation,
   saveWorkflowAiConversation,
   saveWorkflowAiDraft,
   saveWorkflowAiWorkspace,
   saveWorkflowAiDraftWorkspace,
+  setAiModelDefault,
   setAiModelEnabled,
   TrustConfirmationRequiredError,
   updateWorkflowCanvasLayout,
+  type AiModelRole,
   type ElevatedMcpTool,
   type FunctionDefinitionDTO,
   type McpToolDTO,
@@ -32,6 +35,7 @@ import {
   type WorkflowAiResponse,
   type WorkflowAiWorkspaceRequest,
   type WorkflowDefinitionResponseDTO,
+  type WorkflowPreActivationWarning,
   type WorkflowResponseDTO,
 } from '../api';
 import {
@@ -39,9 +43,11 @@ import {
   NEW_CONVERSATION_KEY,
   useAiGeneration,
 } from './workflow-create/aiGenerationStore';
+import { aiModelFromDto, endpointHost } from './workflow-create/aiModelMapping';
 import { ChatComposer } from './workflow-create/ChatComposer';
 import { ManualWorkflowEditor } from './workflow-create/ManualWorkflowEditor';
 import { ModelSettingsModal } from './workflow-create/ModelSettingsModal';
+import { PreActivationReviewModal } from './workflow-create/PreActivationReviewModal';
 import { cloudProviderPreset } from './workflow-create/modelProviders';
 import { SidebarAiChat } from './workflow-create/SidebarAiChat';
 import { ResourcePlanCard } from './workflow-create/ResourcePlanCard';
@@ -256,37 +262,6 @@ function visibleChatMessages(messages: WorkflowAiMessageDTO[]) {
     .map(chatMessageFromDto);
 }
 
-function aiModelFromDto(model: {
-  id: string;
-  displayName: string;
-  providerType: 'OPENAI_COMPATIBLE_LOCAL' | 'OPENAI_COMPATIBLE_API';
-  baseUrl: string;
-  modelName: string;
-  enabled?: boolean;
-  defaultModel?: boolean;
-  hasCredential?: boolean;
-  structuredOutputMode?: import('../api').AiStructuredOutputMode;
-}): AiModel {
-  return {
-    id: model.id,
-    label: model.displayName || model.modelName,
-    endpoint: model.baseUrl,
-    modelName: model.modelName,
-    provider: model.providerType === 'OPENAI_COMPATIBLE_API' ? 'api' : 'local',
-    enabled: model.enabled,
-    defaultModel: model.defaultModel,
-    hasCredential: model.hasCredential,
-    structuredOutputMode: model.structuredOutputMode,
-  };
-}
-
-function endpointHost(endpoint: string) {
-  try {
-    return new URL(endpoint).host;
-  } catch {
-    return endpoint.replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '');
-  }
-}
 
 function functionTaskResource(fn: FunctionDefinitionDTO) {
   return `voyager://function/${fn.name}@v${fn.activeVersion}`;
@@ -327,6 +302,7 @@ export function CreateWorkflowView({
   const [settingsTab, setSettingsTab] = useState<ModelSettingsTab>('add');
   const [localCredentialRef, setLocalCredentialRef] = useState('');
   const [localModelName, setLocalModelName] = useState('');
+  const [localModelRole, setLocalModelRole] = useState<AiModelRole>('CHAT');
   const [apiProvider, setApiProvider] = useState('DeepSeek');
   const [apiModelName, setApiModelName] = useState('');
   const [apiEndpoint, setApiEndpoint] = useState('https://api.deepseek.com');
@@ -363,6 +339,9 @@ export function CreateWorkflowView({
   const [trustPrompt, setTrustPrompt] = useState<
     { tools: ElevatedMcpTool[]; onConfirm: () => void | Promise<void> } | null
   >(null);
+  const [activationReviewWarnings, setActivationReviewWarnings] =
+    useState<WorkflowPreActivationWarning[] | null>(null);
+  const [reviewingActivation, setReviewingActivation] = useState(false);
   const [expandedThinkingMessageIds, setExpandedThinkingMessageIds] = useState<Set<string>>(() => new Set());
   const modelPickerRef = useRef<HTMLDivElement | null>(null);
   const instructionTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -708,7 +687,10 @@ export function CreateWorkflowView({
     setModelId((current) => (
       current && nextModels.some((model) => model.id === current)
         ? current
-        : nextModels.find((model) => model.id === readLastSelectedModelId())?.id || nextModels[0]?.id || ''
+        : nextModels.find((model) => model.defaultModel)?.id
+          || nextModels.find((model) => model.id === readLastSelectedModelId())?.id
+          || nextModels[0]?.id
+          || ''
     ));
     setExpandedEndpoint((current) => current || nextAllModels[0]?.endpoint || null);
   };
@@ -716,6 +698,18 @@ export function CreateWorkflowView({
   const selectModel = (nextModelId: string) => {
     setModelId(nextModelId);
     writeLastSelectedModelId(nextModelId);
+
+    const nextModel = allModels.find((model) => model.id === nextModelId)
+      ?? models.find((model) => model.id === nextModelId);
+    if (!nextModel || nextModel.role === 'EMBEDDING' || nextModel.defaultModel) return;
+
+    // The composer selection is also the user's global chat preference. Persist
+    // it without delaying the local picker interaction.
+    void setAiModelDefault(nextModelId)
+      .then(refreshModelLists)
+      .catch((err: Error) => {
+        toast.error(err.message || 'Failed to update the default chat model.');
+      });
   };
 
   const refreshModelLists = async () => {
@@ -1472,6 +1466,41 @@ export function CreateWorkflowView({
     void handleProvisionResources([]);
   };
 
+  const handleReviewActivation = async () => {
+    if (!definitionStatus.valid) {
+      setError(definitionStatus.message);
+      return;
+    }
+    if (builderValidationIssues.length > 0) {
+      setError('Fix the ASL validation issues before reviewing activation risks.');
+      return;
+    }
+
+    let definition: Record<string, unknown>;
+    try {
+      definition = parseDefinition(definitionText);
+    } catch (parseError) {
+      setError(parseError instanceof Error ? parseError.message : 'Definition must be valid JSON.');
+      return;
+    }
+
+    setReviewingActivation(true);
+    setError(null);
+    try {
+      const review = await reviewWorkflowBeforeActivation(definition);
+      setActivationReviewWarnings(review.warnings);
+    } catch {
+      setActivationReviewWarnings([{
+        category: 'REVIEW_UNAVAILABLE',
+        title: 'The AI review did not complete',
+        detail: 'This workflow has not been checked for activation risks.',
+        stateName: null,
+      }]);
+    } finally {
+      setReviewingActivation(false);
+    }
+  };
+
   const handleSave = async (activateRevision = false) => {
     if (!definitionStatus.valid) {
       setError(definitionStatus.message);
@@ -1648,14 +1677,21 @@ export function CreateWorkflowView({
       const created = await createAiModel({
         displayName: modelName,
         providerType: 'OPENAI_COMPATIBLE_LOCAL',
+        role: localModelRole,
         baseUrl: endpoint,
         modelName,
         credential: localCredential(),
-        defaultModel: models.length === 0,
+        // First model of its role becomes that role's default (the backend also backfills).
+        defaultModel: !allModels.some((item) => (item.role ?? 'CHAT') === localModelRole),
       });
       const model = toLocalModel(created);
-      mergeModels([model]);
-      selectModel(model.id);
+      if (localModelRole === 'EMBEDDING') {
+        // Embedding models power catalog retrieval; they never belong in the chat picker.
+        await refreshModelLists();
+      } else {
+        mergeModels([model]);
+        selectModel(model.id);
+      }
       setModelActionMessage(`Connected ${model.label}.`);
       setModelActionSuccess(true);
       setLocalModelName('');
@@ -1693,6 +1729,24 @@ export function CreateWorkflowView({
       toast.success('Model updated');
     } catch (err: any) {
       toast.error(err.message || 'Failed to update model.');
+    } finally {
+      setManagingModels(false);
+    }
+  };
+
+  const setSingleModelDefault = async (model: AiModel) => {
+    if (model.defaultModel) return;
+    setManagingModels(true);
+    try {
+      await setAiModelDefault(model.id);
+      if ((model.role ?? 'CHAT') === 'CHAT') {
+        setModelId(model.id);
+        writeLastSelectedModelId(model.id);
+      }
+      await refreshModelLists();
+      toast.success(`${model.label} is now the default ${(model.role ?? 'CHAT').toLowerCase()} model`);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to set default model.');
     } finally {
       setManagingModels(false);
     }
@@ -1888,6 +1942,7 @@ export function CreateWorkflowView({
       onModelSelected={selectModel}
       onOpenModelSettings={() => {
         setModelPickerOpen(false);
+        setSettingsTab('add');
         setAddModelOpen(true);
       }}
       generating={generating || conversationLoading}
@@ -1909,6 +1964,10 @@ export function CreateWorkflowView({
   const displayedMessages = generation && generation.status === 'active'
     ? [...messages, generation.userMessage, generation.assistantMessage]
     : messages;
+  const showModeSwitch = !revisionEdit
+    && !routeChatId
+    && !routeDraftId
+    && displayedMessages.length === 0;
 
   const sidebarAiChatNode = (
     <SidebarAiChat
@@ -1944,7 +2003,7 @@ export function CreateWorkflowView({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col text-on-surface">
-      {!revisionEdit && displayedMessages.length === 0 && (
+      {showModeSwitch && (
         <header className="pointer-events-none absolute right-10 top-1 z-30 flex justify-end">
           <div className="pointer-events-auto">
             {modeSwitch}
@@ -1971,9 +2030,11 @@ export function CreateWorkflowView({
           error={error}
           validationIssues={builderValidationIssues}
           saving={saving}
+          reviewingActivation={reviewingActivation}
           canSave={canSave}
           saveDisabledReasons={saveDisabledReasons}
           onSave={() => void handleSave(Boolean(revisionEdit?.workflow.cronExpression))}
+          onReviewActivation={() => void handleReviewActivation()}
           onSaveWithoutActivation={revisionEdit ? () => void handleSave(false) : undefined}
           saveCreatesRevision={Boolean(linkedWorkflowId)}
           revisionEdit={revisionEdit ? {
@@ -1998,7 +2059,7 @@ export function CreateWorkflowView({
           fieldClass={fieldClass}
           monoFieldClass={monoFieldClass}
           taskResourceOptions={taskResourceOptions}
-          reserveTopControlsSpace={!revisionEdit && displayedMessages.length === 0}
+          reserveTopControlsSpace={showModeSwitch}
           initialNodePositions={canvasNodePositions}
           onNodePositionsChange={setCanvasNodePositions}
           onImportTemplate={handleImportTemplate}
@@ -2018,6 +2079,8 @@ export function CreateWorkflowView({
           onDiscoverEndpointChange={setDiscoverEndpoint}
           localModelName={localModelName}
           onLocalModelNameChange={setLocalModelName}
+          localModelRole={localModelRole}
+          onLocalModelRoleChange={setLocalModelRole}
           onAddLocalModel={addLocalModel}
           addingModel={addingModel}
           localCredentialRef={localCredentialRef}
@@ -2044,6 +2107,7 @@ export function CreateWorkflowView({
           onUpdateEndpointEnabled={updateEndpointEnabled}
           onDeleteSingleModel={deleteSingleModel}
           onUpdateSingleModelEnabled={updateSingleModelEnabled}
+          onSetDefaultModel={setSingleModelDefault}
         />
       )}
 
@@ -2053,6 +2117,12 @@ export function CreateWorkflowView({
           busy={saving}
           onConfirm={trustPrompt.onConfirm}
           onCancel={() => setTrustPrompt(null)}
+        />
+      )}
+      {activationReviewWarnings && (
+        <PreActivationReviewModal
+          warnings={activationReviewWarnings}
+          onClose={() => setActivationReviewWarnings(null)}
         />
       )}
     </div>

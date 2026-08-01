@@ -18,8 +18,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
@@ -31,6 +35,8 @@ class WorkflowAiResourceCatalogServiceTest {
     private McpToolRepository mcpToolRepository;
     @Mock
     private FunctionRuntimePolicy functionRuntimePolicy;
+    @Mock
+    private WorkflowAiEmbeddingService embeddingService;
 
     private WorkflowAiResourceCatalogService service;
 
@@ -40,8 +46,12 @@ class WorkflowAiResourceCatalogServiceTest {
                 functionRepository,
                 mcpToolRepository,
                 functionRuntimePolicy,
-                new ObjectMapper()
+                new ObjectMapper(),
+                embeddingService
         );
+        // These tests exercise the full-detail catalog; retrieval tiering is covered separately.
+        lenient().when(embeddingService.retrievalActive(org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(false);
         lenient().when(functionRuntimePolicy.supportedSelectableLanguages())
                 .thenReturn(List.of());
         lenient().when(functionRuntimePolicy.aiDefaultLanguage())
@@ -190,6 +200,48 @@ class WorkflowAiResourceCatalogServiceTest {
         ));
 
         assertThat(matches).isEmpty();
+    }
+
+    @Test
+    void tiersMcpToolsByRelevanceWhenRetrievalActive() {
+        McpServer srv = server("srv", McpServerStatus.ENABLED, McpTrustLevel.READ_ONLY);
+
+        UUID relevantId = UUID.randomUUID();
+        McpTool relevantTool = tool(srv, "relevant_tool", "Relevant detailed tool");
+        relevantTool.setId(relevantId);
+        relevantTool.setInputSchema("""
+                {"type":"object","properties":{"foo":{"type":"string"}}}
+                """);
+
+        McpTool indexTool = tool(srv, "index_tool", "Index only tool");
+        indexTool.setId(UUID.randomUUID());
+        indexTool.setInputSchema("""
+                {"type":"object","properties":{"bar":{"type":"string"}}}
+                """);
+
+        when(functionRepository.findByStatusNotOrderByUpdatedAtDesc(FunctionStatus.ARCHIVED))
+                .thenReturn(List.of());
+        when(mcpToolRepository.findByEnabledTrue())
+                .thenReturn(List.of(relevantTool, indexTool));
+        when(embeddingService.retrievalActive(anyInt())).thenReturn(true);
+        when(embeddingService.selectRelevantResourceIds(
+                eq(com.job.scheduler.enums.ResourceEmbeddingType.MCP_TOOL), eq("send a foo")))
+                .thenReturn(Set.of(relevantId.toString()));
+        when(embeddingService.selectRelevantResourceIds(
+                eq(com.job.scheduler.enums.ResourceEmbeddingType.FUNCTION), eq("send a foo")))
+                .thenReturn(Set.of());
+
+        String catalog = service.buildCatalog("send a foo");
+
+        // Relevant tool keeps full detail: argument schema and description.
+        assertThat(catalog)
+                .contains("voyager://mcp/srv/relevant_tool")
+                .contains("args: {foo:string}")
+                .contains("Relevant detailed tool");
+        // Index-tier tool keeps only its URI — no argument schema, no description.
+        assertThat(catalog).contains("voyager://mcp/srv/index_tool");
+        assertThat(catalog).doesNotContain("Index only tool");
+        assertThat(catalog).doesNotContain("bar:string");
     }
 
     private FunctionDefinition function(String name, FunctionStatus status, Integer activeVersion) {

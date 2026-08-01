@@ -53,6 +53,10 @@ public class McpClientService {
     @Value("${scheduler.mcp.request-timeout-ms:30000}")
     private long defaultRequestTimeoutMs = 30000;
 
+    /** Startup/initialize has its own SDK timeout and is slower for cold npx installs. */
+    @Value("${scheduler.mcp.initialization-timeout-ms:60000}")
+    private long defaultInitializationTimeoutMs = 60000;
+
     // One initialized client per server, reused across calls so every invocation
     // no longer pays a fresh connect+initialize+close handshake. An entry is
     // rebuilt when the server's connection config changes (fingerprint) and
@@ -259,6 +263,14 @@ public class McpClientService {
         return Duration.ofMillis(millis);
     }
 
+    /** A per-server timeout overrides both phases; otherwise startup gets a larger budget. */
+    private Duration initializationTimeout(McpServer server) {
+        long millis = server.getRequestTimeoutMs() != null
+                ? server.getRequestTimeoutMs()
+                : defaultInitializationTimeoutMs;
+        return Duration.ofMillis(millis);
+    }
+
     /** Connection-relevant config; a change invalidates the pooled client. */
     private String fingerprint(McpServer server) {
         return String.join("|",
@@ -319,6 +331,7 @@ public class McpClientService {
         };
         return McpClient.async(transport)
                 .requestTimeout(requestTimeout(server))
+                .initializationTimeout(initializationTimeout(server))
                 .toolsChangeConsumer(tools -> Mono.fromRunnable(() ->
                         log.info("MCP tools updated for {}: {}", server.getServerId(), tools)
                 ))

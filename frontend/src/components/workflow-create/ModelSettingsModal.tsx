@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, BarChart3, Bot, Check, ChevronDown, CircleDollarSign, Code2, Copy, Globe2, History as HistoryIcon, Info, KeyRound, Link, ListChecks, Loader2, Monitor, Play, Plus, Power, RefreshCw, Scale, ShieldCheck, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { Activity, BarChart3, Bot, Check, ChevronDown, CircleDollarSign, Code2, Copy, Globe2, History as HistoryIcon, Info, KeyRound, Link, ListChecks, Loader2, Monitor, Play, Plus, Power, RefreshCw, Scale, Settings2, ShieldCheck, Sparkles, Square, Trash2, X } from 'lucide-react';
 import {
   cancelAiModelEvaluation,
   listAiModelEvaluationHistory,
@@ -10,7 +10,9 @@ import {
   type AiModelEvaluationJudgeSummary,
   type AiModelEvaluationMode,
   type AiModelEvaluationObservation,
+  type AiModelRole,
 } from '../../api';
+import { EmbeddingRankingSection } from './EmbeddingRankingSection';
 import { cloudProviderPreset, cloudProviderPresets } from './modelProviders';
 import type { AiModel, EndpointModelGroup, ModelSettingsTab } from './types';
 
@@ -23,6 +25,8 @@ type Props = {
   onDiscoverEndpointChange: (value: string) => void;
   localModelName: string;
   onLocalModelNameChange: (value: string) => void;
+  localModelRole: AiModelRole;
+  onLocalModelRoleChange: (value: AiModelRole) => void;
   onAddLocalModel: () => void;
   addingModel: 'local' | 'api' | null;
   localCredentialRef: string;
@@ -49,6 +53,7 @@ type Props = {
   onUpdateEndpointEnabled: (endpoint: string, enabled: boolean) => void;
   onDeleteSingleModel: (model: AiModel) => void;
   onUpdateSingleModelEnabled: (model: AiModel, enabled: boolean) => void;
+  onSetDefaultModel: (model: AiModel) => void;
   /** Render as an inline page panel (no overlay, no close button) instead of a modal dialog. */
   embedded?: boolean;
 };
@@ -59,8 +64,10 @@ const settingsNavItems: Array<{
   icon: typeof Plus;
 }> = [
   { id: 'add', label: 'Add Models', icon: Plus },
+  { id: 'defaults', label: 'Defaults', icon: Settings2 },
   { id: 'added', label: 'Added Models', icon: Check },
   { id: 'ranking', label: 'Model Ranking', icon: BarChart3 },
+  { id: 'embeddings', label: 'Embedding Ranking', icon: Activity },
 ];
 
 export function ModelSettingsModal({
@@ -72,6 +79,8 @@ export function ModelSettingsModal({
   onDiscoverEndpointChange,
   localModelName,
   onLocalModelNameChange,
+  localModelRole,
+  onLocalModelRoleChange,
   onAddLocalModel,
   addingModel,
   localCredentialRef,
@@ -98,6 +107,7 @@ export function ModelSettingsModal({
   onUpdateEndpointEnabled,
   onDeleteSingleModel,
   onUpdateSingleModelEnabled,
+  onSetDefaultModel,
   embedded = false,
 }: Props) {
   const [evaluations, setEvaluations] = useState<Record<string, AiModelEvaluationDTO>>({});
@@ -106,8 +116,12 @@ export function ModelSettingsModal({
   const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
   const [judgeModelId, setJudgeModelId] = useState<string>('');
   const [confirmDialog, setConfirmDialog] = useState<BenchmarkConfirmState | null>(null);
+  // Embedding models power catalog retrieval only — they can't run the chat benchmark or judge it,
+  // so they're excluded from ranking and the judge picker (but still shown in Added Models).
   const enabledModels = useMemo(
-    () => endpointGroups.flatMap((group) => group.models).filter((model) => model.enabled !== false),
+    () => endpointGroups
+      .flatMap((group) => group.models)
+      .filter((model) => model.enabled !== false && model.role !== 'EMBEDDING'),
     [endpointGroups],
   );
   const judgeModel = useMemo(
@@ -289,6 +303,14 @@ export function ModelSettingsModal({
           </aside>
 
           <main className="space-y-3 overflow-y-auto p-6">
+            {settingsTab === 'defaults' && (
+              <DefaultModelsSection
+                endpointGroups={endpointGroups}
+                managingModels={managingModels}
+                onSetDefaultModel={onSetDefaultModel}
+              />
+            )}
+
             {settingsTab === 'add' && (
               <>
                 <AddLocalModelsSection
@@ -296,6 +318,8 @@ export function ModelSettingsModal({
                   onDiscoverEndpointChange={onDiscoverEndpointChange}
                   localModelName={localModelName}
                   onLocalModelNameChange={onLocalModelNameChange}
+                  localModelRole={localModelRole}
+                  onLocalModelRoleChange={onLocalModelRoleChange}
                   onAddLocalModel={onAddLocalModel}
                   addingModel={addingModel}
                   localCredentialRef={localCredentialRef}
@@ -357,6 +381,8 @@ export function ModelSettingsModal({
                 onCancelEvaluation={cancelEvaluation}
               />
             )}
+
+            {settingsTab === 'embeddings' && <EmbeddingRankingSection />}
           </main>
         </div>
       </div>
@@ -382,6 +408,91 @@ export function ModelSettingsModal({
   // overlay can never paint above the z-40 app sidebar, leaving the sidebar crisp while the
   // rest of the page blurs. The embedded variant stays inline.
   return embedded ? content : createPortal(content, document.body);
+}
+
+function DefaultModelsSection({
+  endpointGroups,
+  managingModels,
+  onSetDefaultModel,
+}: Pick<Props, 'endpointGroups' | 'managingModels' | 'onSetDefaultModel'>) {
+  const models = endpointGroups.flatMap((group) => group.models);
+
+  return (
+    <section className="rounded-lg border border-primary/20 bg-surface-base p-4">
+      <div className="flex items-start gap-3 border-b border-border-subtle/40 pb-3">
+        <Settings2 size={18} className="mt-0.5 text-primary" />
+        <div>
+          <h3 className="font-headline-md text-headline-md font-semibold text-primary">Default Models</h3>
+          <p className="mt-1 text-body-sm text-on-surface-variant">
+            Choose which enabled model Voyager uses by default for each AI capability.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <DefaultModelSelect
+          label="Chat model"
+          description="Used for workflow authoring, explanations, and generated catalog descriptions."
+          role="CHAT"
+          models={models}
+          managingModels={managingModels}
+          onSetDefaultModel={onSetDefaultModel}
+        />
+        <DefaultModelSelect
+          label="Embedding model"
+          description="Used to index and retrieve relevant functions and MCP tools."
+          role="EMBEDDING"
+          models={models}
+          managingModels={managingModels}
+          onSetDefaultModel={onSetDefaultModel}
+        />
+      </div>
+    </section>
+  );
+}
+
+function DefaultModelSelect({
+  label,
+  description,
+  role,
+  models,
+  managingModels,
+  onSetDefaultModel,
+}: {
+  label: string;
+  description: string;
+  role: AiModelRole;
+  models: AiModel[];
+  managingModels: boolean;
+  onSetDefaultModel: (model: AiModel) => void;
+}) {
+  const candidates = models.filter((model) => (model.role ?? 'CHAT') === role && model.enabled !== false);
+  const selected = candidates.find((model) => model.defaultModel)?.id ?? '';
+
+  return (
+    <div className="rounded-lg border border-border-subtle/60 bg-surface-container-lowest p-4">
+      <label className="block font-mono-sm text-[12px] font-semibold text-on-surface" htmlFor={`default-${role.toLowerCase()}-model`}>
+        {label}
+      </label>
+      <p className="mt-1 min-h-10 text-[11px] leading-5 text-on-surface-variant">{description}</p>
+      <select
+        id={`default-${role.toLowerCase()}-model`}
+        value={selected}
+        onChange={(event) => {
+          const model = candidates.find((candidate) => candidate.id === event.target.value);
+          if (model) onSetDefaultModel(model);
+        }}
+        disabled={managingModels || candidates.length === 0}
+        className="mt-3 h-10 w-full rounded-DEFAULT border border-border-subtle bg-surface-base px-3 text-body-md text-on-surface outline-none transition-colors focus:border-secondary disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {candidates.length === 0 ? (
+          <option value="">No enabled {role.toLowerCase()} models</option>
+        ) : (
+          candidates.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)
+        )}
+      </select>
+    </div>
+  );
 }
 
 type BenchmarkConfirmState = {
@@ -462,6 +573,8 @@ function AddLocalModelsSection({
   onDiscoverEndpointChange,
   localModelName,
   onLocalModelNameChange,
+  localModelRole,
+  onLocalModelRoleChange,
   onAddLocalModel,
   addingModel,
   localCredentialRef,
@@ -474,6 +587,8 @@ function AddLocalModelsSection({
   | 'onDiscoverEndpointChange'
   | 'localModelName'
   | 'onLocalModelNameChange'
+  | 'localModelRole'
+  | 'onLocalModelRoleChange'
   | 'onAddLocalModel'
   | 'addingModel'
   | 'localCredentialRef'
@@ -526,16 +641,30 @@ function AddLocalModelsSection({
         </p>
       )}
 
-      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_160px] gap-2">
         <input
           value={localModelName}
           onChange={(event) => onLocalModelNameChange(event.target.value)}
           onKeyDown={(event) => { if (event.key === 'Enter') onAddLocalModel(); }}
           className="h-9 w-full rounded-DEFAULT border border-primary/30 bg-surface-container px-3 font-mono-sm text-body-sm text-on-surface outline-none placeholder:text-on-surface-variant/55 focus:border-primary/60"
-          placeholder="Exact model name, e.g. qwen2.5:7b"
+          placeholder={localModelRole === 'EMBEDDING' ? 'Embedding model, e.g. nomic-embed-text' : 'Exact model name, e.g. qwen2.5:7b'}
           disabled={busy}
           aria-label="Local model name"
         />
+        <select
+          value={localModelRole}
+          onChange={(event) => onLocalModelRoleChange(event.target.value as AiModelRole)}
+          className="h-9 w-full rounded-DEFAULT border border-primary/30 bg-surface-container px-2 font-mono-sm text-body-sm text-on-surface outline-none focus:border-primary/60"
+          disabled={busy}
+          aria-label="Model role"
+          title="Chat models generate workflows; Embedding models power resource-catalog retrieval"
+        >
+          <option value="CHAT">Role: Chat</option>
+          <option value="EMBEDDING">Role: Embedding</option>
+        </select>
+      </div>
+
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
         <input
           type="password"
           value={localCredentialRef}
@@ -816,6 +945,11 @@ function AddedModelsSection({
                             <span className={`truncate font-mono-sm text-[12px] ${enabled ? 'text-primary' : 'text-on-surface-variant'}`}>
                               {model.label}
                             </span>
+                            {model.role === 'EMBEDDING' && (
+                              <span className="shrink-0 rounded-DEFAULT bg-secondary/15 px-1.5 py-0.5 font-mono-sm text-[9px] font-semibold uppercase text-secondary">
+                                Embedding
+                              </span>
+                            )}
                           </button>
                           <div className="flex shrink-0 items-center gap-2">
                             <span className="font-mono-sm text-[10px] uppercase text-on-surface-variant">
@@ -874,7 +1008,9 @@ function ModelRankingSection({
   onRunAllEvaluations: (mode: AiModelEvaluationMode) => void;
   onCancelEvaluation: (model: AiModel, evaluation: AiModelEvaluationDTO) => void;
 }) {
-  const models = endpointGroups.flatMap((group) => group.models);
+  const models = endpointGroups
+    .flatMap((group) => group.models)
+    .filter((model) => model.role !== 'EMBEDDING');
   const hasRunningEvaluation = Object.values(evaluations).some(
     (evaluation) => evaluation.status === 'RUNNING',
   );

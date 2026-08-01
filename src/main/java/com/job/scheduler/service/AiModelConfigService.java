@@ -6,6 +6,7 @@ import com.job.scheduler.dto.AiModelTestResponseDTO;
 import com.job.scheduler.dto.AiModelConfigDTO;
 import com.job.scheduler.entity.AiModelConfig;
 import com.job.scheduler.enums.AiModelProviderType;
+import com.job.scheduler.enums.AiModelRole;
 import com.job.scheduler.repository.AiModelConfigRepository;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
@@ -18,6 +19,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -32,12 +34,23 @@ public class AiModelConfigService {
             .connectTimeout(Duration.ofSeconds(5))
             .build();
 
+    /** Enabled CHAT models — the workflow-generation / judge picker. */
     @Transactional
     public List<AiModelConfigDTO> listEnabledModels() {
-        return repository.findByEnabledTrueOrderByDefaultModelDescDisplayNameAsc()
+        return repository
+                .findByEnabledTrueAndRoleOrderByDefaultModelDescDisplayNameAsc(AiModelRole.CHAT)
                 .stream()
                 .map(this::toDto)
                 .toList();
+    }
+
+    /** Resolves the default enabled EMBEDDING model, or empty when none is registered. */
+    @Transactional
+    public Optional<AiModelConfig> findDefaultEmbeddingModel() {
+        return repository
+                .findFirstByEnabledTrueAndRoleOrderByDefaultModelDescDisplayNameAsc(
+                        AiModelRole.EMBEDDING
+                );
     }
 
     @Transactional
@@ -60,7 +73,10 @@ public class AiModelConfigService {
             }
             return model;
         }
-        return repository.findFirstByEnabledTrueOrderByDefaultModelDescDisplayNameAsc()
+        return repository
+                .findFirstByEnabledTrueAndRoleOrderByDefaultModelDescDisplayNameAsc(
+                        AiModelRole.CHAT
+                )
                 .orElseThrow(() -> new IllegalStateException(
                         "No enabled AI model config is available"
                 ));
@@ -75,12 +91,14 @@ public class AiModelConfigService {
         AiModelProviderType providerType = request.providerType() == null
                 ? AiModelProviderType.OPENAI_COMPATIBLE_LOCAL
                 : request.providerType();
+        AiModelRole role = request.role() == null ? AiModelRole.CHAT : request.role();
 
         AiModelConfig model = repository.findByBaseUrlAndModelName(baseUrl, modelName)
                 .orElseGet(AiModelConfig::new);
         boolean newModel = model.getId() == null;
         model.setDisplayName(displayName);
         model.setProviderType(providerType);
+        model.setRole(role);
         model.setBaseUrl(baseUrl);
         model.setModelName(modelName);
         // null credential = leave unchanged (except on create); "" = clear.
@@ -90,24 +108,32 @@ public class AiModelConfigService {
         model.setEnabled(true);
         model.setDefaultModel(request.defaultModel());
 
+        // default_model is scoped per role: registering a default only demotes peers
+        // of the same role, so the chat and embedding defaults are independent.
         if (request.defaultModel()) {
             repository.findAll().forEach(existing -> {
-                if (existing.getId() == null || !existing.getId().equals(model.getId())) {
+                if (existing.getRole() == role
+                        && (existing.getId() == null
+                        || !existing.getId().equals(model.getId()))) {
                     existing.setDefaultModel(false);
                 }
             });
         }
 
-        return toDto(repository.save(model));
+        AiModelConfig saved = repository.save(model);
+        ensureDefaultModel();
+        return toDto(saved);
     }
 
     @Transactional
     public List<AiModelConfigDTO> discoverAndOnboardModels(
             String requestedBaseUrl,
             String requestedCredential,
-            AiModelProviderType requestedProviderType
+            AiModelProviderType requestedProviderType,
+            AiModelRole requestedRole
     ) {
         String baseUrl = normalizeBaseUrl(requestedBaseUrl);
+        AiModelRole role = requestedRole == null ? AiModelRole.CHAT : requestedRole;
         AiModelConfig existingEndpoint = repository
                 .findFirstByBaseUrlOrderByCreatedAtAsc(baseUrl)
                 .orElse(null);
@@ -186,7 +212,7 @@ public class AiModelConfigService {
             );
         }
 
-        boolean noExistingModels = repository.countByEnabledTrue() == 0;
+        boolean noExistingModels = repository.countByEnabledTrueAndRole(role) == 0;
         List<AiModelConfigDTO> results = new ArrayList<>();
 
         for (int i = 0; i < modelIds.size(); i++) {
@@ -196,6 +222,7 @@ public class AiModelConfigService {
             boolean newModel = model.getId() == null;
             model.setDisplayName(modelId);
             model.setProviderType(providerType);
+            model.setRole(role);
             model.setBaseUrl(baseUrl);
             model.setModelName(modelId);
             if (providedCredential != null || newModel) {
@@ -212,6 +239,26 @@ public class AiModelConfigService {
 
         ensureDefaultModel();
         return results;
+    }
+
+    /** Promotes a model to the default for its role, demoting its same-role peers. */
+    @Transactional
+    public AiModelConfigDTO setDefaultModel(UUID modelId) {
+        AiModelConfig model = repository.findById(modelId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "AI model config does not exist"
+                ));
+        if (!model.isEnabled()) {
+            throw new IllegalArgumentException("Enable the model before making it the default");
+        }
+        AiModelRole role = model.getRole();
+        // default_model is per-role: only same-role peers are demoted.
+        repository.findAll().forEach(existing -> {
+            if (existing.getRole() == role) {
+                existing.setDefaultModel(existing.getId().equals(modelId));
+            }
+        });
+        return toDto(model);
     }
 
     @Transactional
@@ -280,6 +327,31 @@ public class AiModelConfigService {
                 );
             }
 
+            // Embedding models expose /embeddings, not /chat/completions; probe the
+            // endpoint that actually serves the model's role.
+            if (request.role() == AiModelRole.EMBEDDING) {
+                HttpRequest.Builder embeddingRequestBuilder = HttpRequest.newBuilder()
+                        .uri(URI.create(baseUrl + "/embeddings"))
+                        .timeout(Duration.ofSeconds(30))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString("""
+                                {"model":"%s","input":"ping"}
+                                """.formatted(escapeJson(modelName))));
+                applyAuthorization(embeddingRequestBuilder, credential);
+                HttpResponse<String> embeddingResponse = httpClient.send(
+                        embeddingRequestBuilder.build(),
+                        HttpResponse.BodyHandlers.ofString()
+                );
+                if (embeddingResponse.statusCode() < 200
+                        || embeddingResponse.statusCode() >= 300) {
+                    return new AiModelTestResponseDTO(
+                            false,
+                            "Embeddings request returned " + embeddingResponse.statusCode()
+                    );
+                }
+                return new AiModelTestResponseDTO(true, "Embedding endpoint is reachable");
+            }
+
             HttpRequest.Builder chatRequestBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + "/chat/completions"))
                     .timeout(Duration.ofSeconds(30))
@@ -309,9 +381,18 @@ public class AiModelConfigService {
         }
     }
 
+    /** Each role keeps its own default; backfill one where a role has enabled models but no default. */
     private void ensureDefaultModel() {
-        List<AiModelConfig> enabledModels = repository.findByEnabledTrueOrderByDefaultModelDescDisplayNameAsc();
-        if (enabledModels.isEmpty() || enabledModels.stream().anyMatch(AiModelConfig::isDefaultModel)) {
+        for (AiModelRole role : AiModelRole.values()) {
+            ensureDefaultModel(role);
+        }
+    }
+
+    private void ensureDefaultModel(AiModelRole role) {
+        List<AiModelConfig> enabledModels = repository
+                .findByEnabledTrueAndRoleOrderByDefaultModelDescDisplayNameAsc(role);
+        if (enabledModels.isEmpty()
+                || enabledModels.stream().anyMatch(AiModelConfig::isDefaultModel)) {
             return;
         }
         AiModelConfig nextDefault = enabledModels.get(0);
@@ -324,6 +405,7 @@ public class AiModelConfigService {
                 model.getId(),
                 model.getDisplayName(),
                 model.getProviderType(),
+                model.getRole(),
                 model.getBaseUrl(),
                 model.getModelName(),
                 model.isEnabled(),

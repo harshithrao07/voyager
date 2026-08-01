@@ -37,6 +37,9 @@ class FunctionRegistryServiceTest {
     @Mock
     private FunctionRuntimePolicy runtimePolicy;
 
+    @Mock
+    private CatalogDescriptionGenerationService descriptionGenerationService;
+
     private FunctionRegistryService service;
 
     @BeforeEach
@@ -44,7 +47,8 @@ class FunctionRegistryServiceTest {
         service = new FunctionRegistryService(
                 functionRepository,
                 versionRepository,
-                runtimePolicy
+                runtimePolicy,
+                descriptionGenerationService
         );
     }
 
@@ -158,6 +162,26 @@ class FunctionRegistryServiceTest {
         verify(runtimePolicy).assertLanguageSupported(71, FunctionSourceMode.SINGLE_FILE);
         verify(versionRepository).save(version);
         verify(functionRepository).save(function);
+    }
+
+    @Test
+    void publishVersionGeneratesDescriptionWhenMissing() {
+        FunctionDefinition function = function(FunctionStatus.ENABLED);
+        function.setDescription(null);
+        FunctionVersion version = version(function);
+        version.setVersion(2);
+        version.setStatus(FunctionVersionStatus.DRAFT);
+        when(functionRepository.findById(function.getId())).thenReturn(Optional.of(function));
+        when(versionRepository.findByFunctionDefinitionAndVersion(function, 2)).thenReturn(Optional.of(version));
+        when(versionRepository.save(any(FunctionVersion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(functionRepository.save(any(FunctionDefinition.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(descriptionGenerationService.describeFunction(function, version))
+                .thenReturn("Transforms an input order into a normalized JSON result.");
+
+        service.publishVersion(function.getId(), 2);
+
+        assertThat(function.getDescription())
+                .isEqualTo("Transforms an input order into a normalized JSON result.");
     }
 
     @Test

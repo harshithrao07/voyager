@@ -155,7 +155,7 @@ class WorkflowAiConversationServiceTest {
                 .thenReturn(List.of());
         lenient().when(functionResourceValidator.validate(any(JsonNode.class)))
                 .thenReturn(List.of());
-        lenient().when(resourceCatalogService.buildCatalog())
+        lenient().when(resourceCatalogService.buildCatalog(any()))
                 .thenReturn("FUNCTIONS:\nNone registered.\nMCP TOOLS:\nNone registered.");
         lenient().when(resourceCatalogService.buildFunctionCreationContext())
                 .thenReturn("AI DEFAULT FUNCTION LANGUAGE:\n- 71 — Python");
@@ -504,7 +504,7 @@ class WorkflowAiConversationServiceTest {
         when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
         when(messageRepository.findByConversationOrderByCreatedAtAsc(any()))
                 .thenReturn(List.of());
-        when(resourceCatalogService.buildCatalog()).thenReturn("""
+        when(resourceCatalogService.buildCatalog(any())).thenReturn("""
                 FUNCTIONS:
                 - voyager://function/normalize-order@v1
                 MCP TOOLS:
@@ -543,7 +543,7 @@ class WorkflowAiConversationServiceTest {
     void ordersCatalogAsAStablePrefixAndTurnContextLastForKvCaching() {
         when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
         when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
-        when(resourceCatalogService.buildCatalog()).thenReturn("""
+        when(resourceCatalogService.buildCatalog(any())).thenReturn("""
                 FUNCTIONS:
                 - voyager://function/normalize-order@v1
                 """);

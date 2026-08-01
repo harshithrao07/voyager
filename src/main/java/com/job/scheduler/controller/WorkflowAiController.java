@@ -1,7 +1,7 @@
 package com.job.scheduler.controller;
 
-import com.job.scheduler.dto.WorkflowGenerationRequestDTO;
-import com.job.scheduler.dto.WorkflowGenerationResponseDTO;
+import com.job.scheduler.dto.*;
+import com.job.scheduler.service.WorkflowAiAuthoringService;
 import com.job.scheduler.service.WorkflowGenerationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class WorkflowAiController {
 
     private final WorkflowGenerationService workflowGenerationService;
+    private final WorkflowAiAuthoringService workflowAiAuthoringService;
 
     @PostMapping("/generate")
     @Operation(summary = "Generate ASL Workflow from Natural Language", description = "Uses LLM to convert a natural language instruction into a JSONata-compatible ASL workflow definition.")
@@ -30,4 +31,22 @@ public class WorkflowAiController {
         }
         return ResponseEntity.ok(response);
     }
+
+    @PostMapping("/authoring/explain")
+    @Operation(summary = "Explain an ASL workflow")
+    public WorkflowAiExplanationResponseDTO explain(
+            @Valid @RequestBody WorkflowAiAuthoringRequestDTO request
+    ) {
+        return workflowAiAuthoringService.explain(request.definition(), request.modelConfigId());
+    }
+
+    @PostMapping("/authoring/pre-activation-review")
+    @Operation(summary = "Review an ASL workflow for activation risks")
+    public WorkflowPreActivationReviewResponseDTO reviewBeforeActivation(
+            @Valid @RequestBody WorkflowAiAuthoringRequestDTO request
+    ) {
+        return workflowAiAuthoringService.reviewBeforeActivation(
+                request.definition(), request.modelConfigId());
+    }
+
 }

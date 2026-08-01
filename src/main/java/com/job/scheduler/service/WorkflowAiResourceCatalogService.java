@@ -8,6 +8,7 @@ import com.job.scheduler.entity.McpTool;
 import com.job.scheduler.enums.FunctionStatus;
 import com.job.scheduler.enums.McpServerStatus;
 import com.job.scheduler.enums.McpTrustLevel;
+import com.job.scheduler.enums.ResourceEmbeddingType;
 import com.job.scheduler.repository.FunctionDefinitionRepository;
 import com.job.scheduler.repository.McpToolRepository;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /** Builds the live Task-resource catalog supplied to workflow-generation models. */
@@ -37,33 +39,85 @@ public class WorkflowAiResourceCatalogService {
     private final McpToolRepository mcpToolRepository;
     private final FunctionRuntimePolicy functionRuntimePolicy;
     private final ObjectMapper objectMapper;
+    private final WorkflowAiEmbeddingService embeddingService;
 
+    private static final String CATALOG_TEMPLATE = """
+            Match every requested action against the descriptions below. A matching entry is
+            mandatory: create a Task with the exact URI shown, never a Pass state, shortened
+            name, alias, or invented resource. A WRITE or DESTRUCTIVE MCP resource must keep
+            the shown trust query parameter. Each MCP args object is the Task Arguments shape:
+            use those exact top-level keys with JSONata values and do not wrap them in payload
+            unless payload is itself listed. MCP business results are nested under
+            $states.result.structuredContent.
+
+            SYSTEM RESOURCES:
+            - voyager://system/webhook args: {url:string, method:string optional default POST,
+              headers:object<string,string> optional, body:any optional}. Supported methods are
+              GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS. Put request headers in the
+              headers object; do not invent top-level header fields.
+            - voyager://system/send-email args: {to:string, subject:string, body:string}
+
+            FUNCTIONS:
+            %s
+
+            MCP TOOLS:
+            %s
+            """;
+
+    /** Full-detail catalog (every resource). Used when no turn intent is available. */
     public String buildCatalog() {
-        return """
-                Match every requested action against the descriptions below. A matching entry is
-                mandatory: create a Task with the exact URI shown, never a Pass state, shortened
-                name, alias, or invented resource. A WRITE or DESTRUCTIVE MCP resource must keep
-                the shown trust query parameter. Each MCP args object is the Task Arguments shape:
-                use those exact top-level keys with JSONata values and do not wrap them in payload
-                unless payload is itself listed. MCP business results are nested under
-                $states.result.structuredContent.
+        return buildCatalog(null);
+    }
 
-                SYSTEM RESOURCES:
-                - voyager://system/webhook args: {url:string, method:string optional default POST,
-                  headers:object<string,string> optional, body:any optional}. Supported methods are
-                  GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS. Put request headers in the
-                  headers object; do not invent top-level header fields.
-                - voyager://system/send-email args: {to:string, subject:string, body:string}
+    /**
+     * Catalog for a turn, tiered by relevance to {@code intent}. When embedding-based retrieval is
+     * active (enabled, an embedding model is registered, and the catalog is large enough), only the
+     * top-k resources nearest the intent carry full detail — MCP argument schemas and descriptions;
+     * the rest render as a one-line index so the model still sees the complete menu. Below the size
+     * threshold, on a blank intent, or if retrieval yields nothing, every resource keeps full detail
+     * (identical to {@link #buildCatalog()}).
+     *
+     * <p>Note: tiering makes the catalog vary per turn, so it no longer sits in the byte-identical
+     * cacheable prompt prefix. That trade is deliberate — retrieval only engages for catalogs large
+     * enough that the token saving outweighs the lost KV-cache reuse.
+     */
+    public String buildCatalog(String intent) {
+        List<FunctionDefinition> functions = enabledFunctions();
+        List<McpTool> tools = enabledMcpTools();
 
-                FUNCTIONS:
-                %s
+        Set<String> detailedFunctionIds = null; // null => every resource is detailed
+        Set<String> detailedMcpIds = null;
+        if (intent != null && !intent.isBlank()
+                && embeddingService.retrievalActive(functions.size() + tools.size())) {
+            Set<String> relevantFunctions = embeddingService
+                    .selectRelevantResourceIds(ResourceEmbeddingType.FUNCTION, intent);
+            Set<String> relevantMcp = embeddingService
+                    .selectRelevantResourceIds(ResourceEmbeddingType.MCP_TOOL, intent);
+            // An empty result means retrieval failed or matched nothing; keep that type fully
+            // detailed rather than silently dropping resources the model might need.
+            detailedFunctionIds = relevantFunctions.isEmpty() ? null : relevantFunctions;
+            detailedMcpIds = relevantMcp.isEmpty() ? null : relevantMcp;
+        }
 
-                MCP TOOLS:
-                %s
-                """.formatted(
-                buildFunctionsDocumentation(),
-                buildMcpToolsDocumentation()
+        return CATALOG_TEMPLATE.formatted(
+                buildFunctionsDocumentation(functions, detailedFunctionIds),
+                buildMcpToolsDocumentation(tools, detailedMcpIds)
         );
+    }
+
+    private List<FunctionDefinition> enabledFunctions() {
+        return functionRepository.findByStatusNotOrderByUpdatedAtDesc(FunctionStatus.ARCHIVED)
+                .stream()
+                .filter(function -> function.getStatus() == FunctionStatus.ENABLED
+                        && function.getActiveVersion() != null)
+                .toList();
+    }
+
+    private List<McpTool> enabledMcpTools() {
+        return mcpToolRepository.findByEnabledTrue().stream()
+                .filter(tool -> tool.getMcpServer() != null
+                        && tool.getMcpServer().getStatus() == McpServerStatus.ENABLED)
+                .toList();
     }
 
     /**
@@ -100,33 +154,52 @@ public class WorkflowAiResourceCatalogService {
         }
     }
 
+    /** Full-detail function documentation for every enabled function. */
     String buildFunctionsDocumentation() {
-        List<FunctionDefinition> functions = functionRepository
-                .findByStatusNotOrderByUpdatedAtDesc(FunctionStatus.ARCHIVED);
+        return buildFunctionsDocumentation(enabledFunctions(), null);
+    }
+
+    /** Full-detail MCP tool documentation for every enabled tool. */
+    String buildMcpToolsDocumentation() {
+        return buildMcpToolsDocumentation(enabledMcpTools(), null);
+    }
+
+    /**
+     * @param detailedIds resource ids that render with full detail; {@code null} means every
+     *                    function is detailed. Functions are cheap one-liners, so the index tier
+     *                    only drops the description.
+     */
+    String buildFunctionsDocumentation(
+            List<FunctionDefinition> functions,
+            Set<String> detailedIds
+    ) {
         StringBuilder documentation = new StringBuilder();
         for (FunctionDefinition function : functions) {
-            if (function.getStatus() != FunctionStatus.ENABLED
-                    || function.getActiveVersion() == null) {
-                continue;
-            }
             documentation.append("- voyager://function/")
                     .append(function.getName())
                     .append("@v")
                     .append(function.getActiveVersion());
-            appendDescription(documentation, function.getDescription());
+            if (isDetailed(detailedIds, function.getId())) {
+                appendDescription(documentation, function.getDescription());
+            }
             documentation.append('\n');
         }
         return documentation.isEmpty() ? "None registered." : documentation.toString().trim();
     }
 
-    String buildMcpToolsDocumentation() {
-        List<McpTool> tools = mcpToolRepository.findByEnabledTrue();
+    /**
+     * @param detailedIds resource ids that render with full detail (argument schema + description);
+     *                    {@code null} means every tool is detailed. Index-tier tools keep only the
+     *                    URI and trust marker so the model still sees the tool exists, without the
+     *                    (often large) argument schema.
+     */
+    String buildMcpToolsDocumentation(
+            List<McpTool> tools,
+            Set<String> detailedIds
+    ) {
         StringBuilder documentation = new StringBuilder();
         for (McpTool tool : tools) {
             McpServer server = tool.getMcpServer();
-            if (server == null || server.getStatus() != McpServerStatus.ENABLED) {
-                continue;
-            }
             McpTrustLevel trustLevel = server.getTrustLevel() == null
                     ? McpTrustLevel.UNTRUSTED
                     : server.getTrustLevel();
@@ -139,14 +212,20 @@ public class WorkflowAiResourceCatalogService {
                 documentation.append("?trust=").append(trustLevel);
             }
             documentation.append(" [trust: ").append(trustLevel).append(']');
-            String arguments = flattenJsonSchema(tool.getInputSchema());
-            if (!"{}".equals(arguments)) {
-                documentation.append(" args: ").append(arguments);
+            if (isDetailed(detailedIds, tool.getId())) {
+                String arguments = flattenJsonSchema(tool.getInputSchema());
+                if (!"{}".equals(arguments)) {
+                    documentation.append(" args: ").append(arguments);
+                }
+                appendDescription(documentation, tool.getDescription());
             }
-            appendDescription(documentation, tool.getDescription());
             documentation.append('\n');
         }
         return documentation.isEmpty() ? "None registered." : documentation.toString().trim();
+    }
+
+    private boolean isDetailed(Set<String> detailedIds, UUID resourceId) {
+        return detailedIds == null || detailedIds.contains(resourceId.toString());
     }
 
     /**

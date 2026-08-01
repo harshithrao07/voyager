@@ -5,45 +5,13 @@ import {
   deleteAiModel,
   listAiModels,
   listAllAiModels,
+  setAiModelDefault,
   setAiModelEnabled,
-  type AiStructuredOutputMode,
+  type AiModelRole,
 } from '../../api';
+import { aiModelFromDto, endpointHost, type ModelDto } from './aiModelMapping';
 import { cloudProviderPreset } from './modelProviders';
 import type { AiModel, EndpointModelGroup, ModelSettingsTab } from './types';
-
-type ModelDto = {
-  id: string;
-  displayName: string;
-  providerType: 'OPENAI_COMPATIBLE_LOCAL' | 'OPENAI_COMPATIBLE_API';
-  baseUrl: string;
-  modelName: string;
-  enabled?: boolean;
-  defaultModel?: boolean;
-  hasCredential?: boolean;
-  structuredOutputMode?: AiStructuredOutputMode;
-};
-
-function aiModelFromDto(model: ModelDto): AiModel {
-  return {
-    id: model.id,
-    label: model.displayName || model.modelName,
-    endpoint: model.baseUrl,
-    modelName: model.modelName,
-    provider: model.providerType === 'OPENAI_COMPATIBLE_API' ? 'api' : 'local',
-    enabled: model.enabled,
-    defaultModel: model.defaultModel,
-    hasCredential: model.hasCredential,
-    structuredOutputMode: model.structuredOutputMode,
-  };
-}
-
-function endpointHost(endpoint: string) {
-  try {
-    return new URL(endpoint).host;
-  } catch {
-    return endpoint.replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '');
-  }
-}
 
 /**
  * Self-contained AI model management: the list of configured models, the add-model forms, and the
@@ -60,6 +28,7 @@ export function useAiModelManagement() {
 
   const [discoverEndpoint, setDiscoverEndpoint] = useState('');
   const [localModelName, setLocalModelName] = useState('');
+  const [localModelRole, setLocalModelRole] = useState<AiModelRole>('CHAT');
   const [localCredentialRef, setLocalCredentialRef] = useState('');
   const [modelActionMessage, setModelActionMessage] = useState<string | null>(null);
   const [modelActionSuccess, setModelActionSuccess] = useState<boolean | null>(null);
@@ -113,10 +82,12 @@ export function useAiModelManagement() {
       const created = await createAiModel({
         displayName: modelName,
         providerType: 'OPENAI_COMPATIBLE_LOCAL',
+        role: localModelRole,
         baseUrl: endpoint,
         modelName,
         credential: localCredentialRef.trim() || null,
-        defaultModel: allModels.length === 0,
+        // First model of its role becomes that role's default (the backend also backfills).
+        defaultModel: !allModels.some((model) => (model.role ?? 'CHAT') === localModelRole),
       });
       await refreshModelLists();
       setModelActionMessage(`Connected ${created.displayName || created.modelName}.`);
@@ -203,6 +174,20 @@ export function useAiModelManagement() {
     }
   };
 
+  const setSingleModelDefault = async (model: AiModel) => {
+    if (model.defaultModel) return;
+    setManagingModels(true);
+    try {
+      await setAiModelDefault(model.id);
+      await refreshModelLists();
+      toast.success(`${model.label} is now the default ${(model.role ?? 'CHAT').toLowerCase()} model`);
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to set default model.');
+    } finally {
+      setManagingModels(false);
+    }
+  };
+
   const deleteSingleModel = async (model: AiModel) => {
     setManagingModels(true);
     try {
@@ -256,6 +241,8 @@ export function useAiModelManagement() {
     setDiscoverEndpoint,
     localModelName,
     setLocalModelName,
+    localModelRole,
+    setLocalModelRole,
     addLocalModel,
     addingModel,
     localCredentialRef,
@@ -282,5 +269,6 @@ export function useAiModelManagement() {
     updateEndpointEnabled,
     deleteSingleModel,
     updateSingleModelEnabled,
+    setSingleModelDefault,
   };
 }

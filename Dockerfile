@@ -13,7 +13,15 @@ FROM eclipse-temurin:17-jre-alpine
 
 WORKDIR /app
 
-RUN addgroup -S scheduler && adduser -S scheduler -G scheduler
+RUN apk add --no-cache nodejs npm \
+    && addgroup -S scheduler \
+    && adduser -S scheduler -G scheduler \
+    && mkdir -p /app/.npm \
+    && chown -R scheduler:scheduler /app/.npm
+
+# Registry-provided STDIO servers commonly use npx. Keep its runtime cache in a
+# location writable by the unprivileged application user.
+ENV NPM_CONFIG_CACHE=/app/.npm
 
 LABEL org.opencontainers.image.source="https://github.com/harshithrao07/voyager"
 

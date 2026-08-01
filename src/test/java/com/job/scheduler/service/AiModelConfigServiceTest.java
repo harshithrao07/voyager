@@ -4,6 +4,7 @@ import com.job.scheduler.dto.AiModelConfigDTO;
 import com.job.scheduler.dto.AiModelConfigRequestDTO;
 import com.job.scheduler.entity.AiModelConfig;
 import com.job.scheduler.enums.AiModelProviderType;
+import com.job.scheduler.enums.AiModelRole;
 import com.job.scheduler.repository.AiModelConfigRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -54,6 +55,7 @@ class AiModelConfigServiceTest {
         AiModelConfigDTO result = service.createModel(new AiModelConfigRequestDTO(
                 "Cloud model",
                 AiModelProviderType.OPENAI_COMPATIBLE_API,
+                AiModelRole.CHAT,
                 "https://api.example.com/v1/",
                 "cloud-model",
                 "sk-super-secret",
@@ -84,6 +86,7 @@ class AiModelConfigServiceTest {
         AiModelConfigDTO result = service.createModel(new AiModelConfigRequestDTO(
                 "Renamed model",
                 AiModelProviderType.OPENAI_COMPATIBLE_API,
+                AiModelRole.CHAT,
                 "https://api.example.com/v1",
                 "cloud-model",
                 null,
@@ -105,6 +108,7 @@ class AiModelConfigServiceTest {
         AiModelConfigDTO result = service.createModel(new AiModelConfigRequestDTO(
                 "Renamed model",
                 AiModelProviderType.OPENAI_COMPATIBLE_API,
+                AiModelRole.CHAT,
                 "https://api.example.com/v1",
                 "cloud-model",
                 "",
@@ -120,6 +124,7 @@ class AiModelConfigServiceTest {
         assertThatThrownBy(() -> service.createModel(new AiModelConfigRequestDTO(
                 "Bad model",
                 AiModelProviderType.OPENAI_COMPATIBLE_API,
+                AiModelRole.CHAT,
                 "file:///tmp/models",
                 "cloud-model",
                 null,
@@ -127,6 +132,84 @@ class AiModelConfigServiceTest {
         )))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Base URL must be a valid HTTP or HTTPS endpoint");
+    }
+
+    @Test
+    void defaultModelIsScopedPerRole() {
+        AiModelConfig chatDefault = new AiModelConfig();
+        chatDefault.setId(UUID.randomUUID());
+        chatDefault.setRole(AiModelRole.CHAT);
+        chatDefault.setDefaultModel(true);
+        chatDefault.setBaseUrl("http://localhost:11434/v1");
+        chatDefault.setModelName("qwen3:8b");
+
+        when(repository.findByBaseUrlAndModelName(
+                "http://localhost:11434/v1",
+                "nomic-embed-text"
+        )).thenReturn(Optional.empty());
+        when(repository.findAll()).thenReturn(java.util.List.of(chatDefault));
+
+        AiModelConfigDTO result = service.createModel(new AiModelConfigRequestDTO(
+                "Embedder",
+                AiModelProviderType.OPENAI_COMPATIBLE_LOCAL,
+                AiModelRole.EMBEDDING,
+                "http://localhost:11434/v1",
+                "nomic-embed-text",
+                null,
+                true
+        ));
+
+        assertThat(result.role()).isEqualTo(AiModelRole.EMBEDDING);
+        assertThat(result.defaultModel()).isTrue();
+        // Registering an EMBEDDING default must not demote the CHAT default.
+        assertThat(chatDefault.isDefaultModel()).isTrue();
+    }
+
+    @Test
+    void setDefaultModelDemotesOnlySameRolePeers() {
+        UUID targetId = UUID.randomUUID();
+        AiModelConfig target = new AiModelConfig();
+        target.setId(targetId);
+        target.setRole(AiModelRole.EMBEDDING);
+        target.setEnabled(true);
+        target.setDefaultModel(false);
+
+        AiModelConfig otherEmbedding = new AiModelConfig();
+        otherEmbedding.setId(UUID.randomUUID());
+        otherEmbedding.setRole(AiModelRole.EMBEDDING);
+        otherEmbedding.setEnabled(true);
+        otherEmbedding.setDefaultModel(true);
+
+        AiModelConfig chatDefault = new AiModelConfig();
+        chatDefault.setId(UUID.randomUUID());
+        chatDefault.setRole(AiModelRole.CHAT);
+        chatDefault.setEnabled(true);
+        chatDefault.setDefaultModel(true);
+
+        when(repository.findById(targetId)).thenReturn(Optional.of(target));
+        when(repository.findAll())
+                .thenReturn(java.util.List.of(target, otherEmbedding, chatDefault));
+
+        AiModelConfigDTO result = service.setDefaultModel(targetId);
+
+        assertThat(result.defaultModel()).isTrue();
+        assertThat(target.isDefaultModel()).isTrue();
+        assertThat(otherEmbedding.isDefaultModel()).isFalse();  // demoted (same role)
+        assertThat(chatDefault.isDefaultModel()).isTrue();       // untouched (different role)
+    }
+
+    @Test
+    void setDefaultModelRejectsDisabledModel() {
+        UUID modelId = UUID.randomUUID();
+        AiModelConfig disabled = new AiModelConfig();
+        disabled.setId(modelId);
+        disabled.setRole(AiModelRole.EMBEDDING);
+        disabled.setEnabled(false);
+        when(repository.findById(modelId)).thenReturn(Optional.of(disabled));
+
+        assertThatThrownBy(() -> service.setDefaultModel(modelId))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Enable the model");
     }
 
     private AiModelConfig existingModel(String credentialEncrypted) {

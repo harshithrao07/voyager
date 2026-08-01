@@ -2555,7 +2555,7 @@ public class WorkflowAiConversationService {
         // prefix (Ollama, vLLM, SGLang) only re-evaluates the new tail. Everything that changes per
         // turn — stage, task, latest ASL, settings — is emitted last, after the chat history, where it
         // also lands closest to where the model starts generating.
-        String catalogContext = generalTurn ? null : resourceCatalogContext();
+        String catalogContext = generalTurn ? null : resourceCatalogContext(intentMessage);
         String turnContext = turnContext(conversation, task);
         String exactIdentifiers = exactSourceIdentifiers(effectiveHistory);
         if (exactIdentifiers != null) {
@@ -2660,9 +2660,9 @@ public class WorkflowAiConversationService {
      * The resource catalog block. Stable across turns unless the registry itself changes, so it is
      * emitted as its own leading message to stay inside the cacheable prompt prefix.
      */
-    private String resourceCatalogContext() {
+    private String resourceCatalogContext(String intent) {
         return "Available Voyager Task resources (current registry):\n"
-                + resourceCatalogService.buildCatalog();
+                + resourceCatalogService.buildCatalog(intent);
     }
 
     /**

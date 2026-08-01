@@ -5,7 +5,9 @@ import com.job.scheduler.enums.AiModelProviderType;
 import com.job.scheduler.enums.AiStructuredOutputMode;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -159,6 +161,23 @@ public class WorkflowAiModelResolver {
                 .apiKey(credential(config))
                 .modelName(config.getModelName())
                 .timeout(requestTimeout())
+                .logRequests(false)
+                .logResponses(false)
+                .build();
+    }
+
+    /**
+     * Builds an embedding client against the same OpenAI-compatible endpoint used for chat.
+     * Local servers (Ollama, llama.cpp, vLLM) and Cloudflare all serve {@code /embeddings};
+     * the resource-embedding catalog uses this to vectorize functions and MCP tools.
+     */
+    public EmbeddingModel resolveEmbeddingModel(AiModelConfig config) {
+        return OpenAiEmbeddingModel.builder()
+                .baseUrl(config.getBaseUrl())
+                .apiKey(credential(config))
+                .modelName(config.getModelName())
+                .timeout(requestTimeout())
+                .maxRetries(0)
                 .logRequests(false)
                 .logResponses(false)
                 .build();
