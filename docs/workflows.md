@@ -79,9 +79,10 @@ model setup, persistence, context, summarization, retry, and API behavior is doc
 
 ![Create page with the AI generator](images/workflows/02-create-ai-generator.png)
 
-The AI path needs at least one model endpoint configured (the model picker's **+** opens Settings;
-local Ollama/llama.cpp/vLLM endpoints and OpenAI-compatible cloud providers are supported). Provider
-keys are entered as values and stored encrypted, never as secret-reference names. The two tiles below
+The AI path needs at least one model endpoint configured (the model picker's **+** opens the AI
+Settings surface; local Ollama/llama.cpp/vLLM endpoints and OpenAI-compatible cloud providers are
+supported — see [AI Models](ai-models.md)). Provider keys are entered as values and stored encrypted,
+never as secret-reference names. The two tiles below
 the composer also matter for the manual path: **Import from template** loads an ASL JSON file straight
 into the manual editor, and **Explore examples** offers ready-made prompts.
 

@@ -21,44 +21,15 @@ with its messages, generated JSON, canvas positions, and settings restored.
 
 ## Configure a model
 
-Open the model picker in the composer and select **+** to open **Settings**. Voyager supports two
-families of OpenAI-compatible endpoints:
+Pick the model for a conversation from the model picker in the composer. Selecting **+** opens the
+full model-management surface — the same one hosted on the **AI Settings** page in the sidebar — where
+you add local and cloud OpenAI-compatible models, discover a provider's catalog, set the default chat
+and embedding models, and rank models.
 
-| Family | Intended use | Examples |
-|---|---|---|
-| **Local endpoint** | Models reachable from the Voyager backend | Ollama, llama.cpp, vLLM, LM Studio |
-| **Cloud provider endpoint** | Hosted OpenAI-compatible APIs | DeepSeek, OpenAI, OpenRouter, Groq, Custom |
-
-### Local endpoints
-
-Under **Add Local Models**, enter the API base URL, the exact model identifier accepted by the
-server, and an optional API key or token, then select **Add**. Voyager registers that one model
-directly. It does not assume the server implements a model-list endpoint, so the same flow works for
-Ollama, llama.cpp, vLLM, LM Studio, and other OpenAI-compatible servers.
-
-Use `host.docker.internal`, not `localhost`, when the backend runs in Docker and the model server
-runs on the host.
-
-### Cloud endpoints
-
-Under **Add API Models**, choose a provider preset, verify the endpoint, enter the exact model name,
-paste the optional API key, and select **Add**. Registration does not call `/models`; this supports
-providers such as Cloudflare whose OpenAI-compatible inference endpoint does not expose that route.
-
-The API key field contains the actual value. It is not a secret name or reference. Voyager encrypts
-the value before database storage and never returns it to the browser. See [Secrets](secrets.md).
-
-### Added models
-
-The **Added Models** tab groups models by endpoint. From there you can:
-
-- enable or disable all models behind an endpoint;
-- enable or disable one model;
-- copy the endpoint URL; or
-- delete the registered endpoint models.
-
-Disabled models stay in the registry but do not appear in the chat model picker. An **Encrypted
-key** badge means the endpoint has a stored credential; it never reveals the value.
+The composer picker lists enabled **chat** models; embedding models power the resource catalog and are
+managed on the same page. Full details, including catalog discovery and automatic role detection, are
+in [AI Models](ai-models.md). Model credentials are the actual secret values, encrypted before
+storage and never returned to the browser — see [Secrets](secrets.md).
 
 ## Start and resume conversations
 
@@ -173,7 +144,7 @@ path because compatible providers do not consistently combine constrained decodi
 
 ## What the assistant can use
 
-Every turn receives a fresh catalog of resources that exist in Voyager at that moment:
+Every build turn is grounded against the resources that exist in Voyager at that moment:
 
 - `voyager://system/webhook`, including `method`, `headers`, and `body` arguments;
 - `voyager://system/send-email`;
@@ -186,6 +157,33 @@ The resource catalog includes function descriptions and MCP tool argument schema
 resource is mandatory: the assistant is instructed not to replace an available Task with a Pass
 state or invent an unregistered URI. Save-time validation still checks every generated function and
 MCP reference before the workflow can be saved or activated.
+
+For catalogs at or above the configured tool-calling threshold, Voyager does not place that entire
+catalog in the initial model prompt. It instead exposes two bounded, read-only tools:
+
+- `search_catalog` returns at most eight relevant structured resource records, using embedding
+  retrieval when available and lexical ranking otherwise; and
+- `validate_asl` runs the language, JSONata dialect, runtime-capability, MCP-resource, and
+  function-resource validators over a candidate definition.
+
+The loop allows at most six rounds and ten calls, rejects identical repeated calls, and requires a
+tool call before the first final attempt and after every rejected final. Voyager accepts ASL only
+when the exact final JSON tree passes validation and every Task URI was returned by catalog search.
+It preserves the existing response parsing and repair pipeline. Endpoints that explicitly reject tool calling
+fall back to the prompt catalog. Small catalogs keep the single-call prompt path because a tool
+round would usually cost more tokens than it saves. Tools never create or publish functions;
+missing functions continue through the approval-gated resource proposal and qualification flow.
+If an OpenAI-compatible provider accepts but ignores required tool choice, Voyager performs the
+bounded catalog search itself, injects the same compact structured result, and continues the
+server-side validation loop; provider compliance is never trusted as an acceptance condition.
+
+Each assistant message persists whole-turn observability: aggregate tokens across every model pass,
+native and automatic tool calls, status, latency, match/issue count, rejected finals, and fallback
+reason. It also estimates the input-token difference between repeating the prompt catalog and using
+the compact tool schemas. The chat shows live catalog-search and ASL-validation stages and exposes
+the persisted trace beneath the completed reply. The model evaluation suite runs the tool case for
+each selected registered model and grades bounded execution, grounded selection, and exact final
+validation.
 
 When a capability is missing, the assistant enters `RESOURCES_PROPOSED`. The **Resources needed
 first** card is stored and rendered as an attachment on the assistant message that proposed it; it
@@ -384,17 +382,9 @@ Each socket turn uses two user subscriptions on the same connection:
 
 Subscribe to both before sending, so a fast first token is not missed.
 
-AI model registry base path: `/app/v1/ai`
-
-| Method and path | Purpose |
-|---|---|
-| `GET /models` | List enabled models shown in the composer. |
-| `GET /models/all` | List enabled and disabled models for Settings. |
-| `POST /models` | Add one model and optional write-only `credential`. |
-| `POST /models/test` | Compatibility API for clients that explicitly want an OpenAI-style model-list probe; the Settings UI does not use it. |
-| `POST /models/discover` | Compatibility API for clients whose endpoint advertises models; the Settings UI does not use it. |
-| `PATCH` or `POST /models/{id}/enabled` | Enable or disable one model. |
-| `DELETE /models/{id}` | Remove one model configuration. |
+AI model registry base path: `/app/v1/ai`. The composer picker uses `GET /models` to list enabled
+chat models; the full model-management, discovery, and ranking API is documented in
+[AI Models — HTTP API](ai-models.md#http-api).
 
 ## Operator configuration
 
@@ -403,6 +393,8 @@ AI model registry base path: `/app/v1/ai`
 | `scheduler.workflow-ai.context.max-estimated-tokens` | `WORKFLOW_AI_MAX_CONTEXT_TOKENS` | `12000` | Total estimated prompt budget before compaction. |
 | `scheduler.workflow-ai.context.recent-estimated-tokens` | `WORKFLOW_AI_RECENT_CONTEXT_TOKENS` | `4000` | Target budget retained as verbatim recent turns. |
 | `scheduler.workflow-ai.context.summary-max-characters` | `WORKFLOW_AI_SUMMARY_MAX_CHARACTERS` | `6000` | Maximum persisted summary length. |
+| `scheduler.workflow-ai.tool-calling.enabled` | `WORKFLOW_AI_TOOL_CALLING_ENABLED` | `true` | Use bounded catalog-search and ASL-validation tools for large catalogs. |
+| `scheduler.workflow-ai.tool-calling.min-catalog-size` | `WORKFLOW_AI_TOOL_CALLING_MIN_CATALOG_SIZE` | `12` | Minimum live resource count before tool calling replaces the prompt catalog. |
 
 Token estimates are deliberately model-independent and character based, so the same compaction logic
 works across local and hosted OpenAI-compatible models without a provider-specific tokenizer.

@@ -1,6 +1,6 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { AlertCircle, Bot, Brain, ChevronDown, Loader2, RefreshCw, Sparkles } from 'lucide-react';
+import { AlertCircle, Bot, Brain, ChevronDown, Loader2, RefreshCw, Sparkles, Square } from 'lucide-react';
 import { chatMarkdownComponents } from './chatMarkdown';
 import type { ChatMessage } from './types';
 
@@ -45,6 +45,9 @@ export function SidebarAiChat({
   expandedThinkingMessageIds,
   onToggleThinking,
   regeneratingMessageId,
+  regenerationStage,
+  regenerationStartedAt,
+  onCancelRegeneration,
   onRegenerateMessage,
   renderMessageAttachment,
 }: {
@@ -57,6 +60,9 @@ export function SidebarAiChat({
   expandedThinkingMessageIds: Set<string>;
   onToggleThinking: (messageId: string) => void;
   regeneratingMessageId: string | null;
+  regenerationStage: string | null;
+  regenerationStartedAt: number | null;
+  onCancelRegeneration: () => void;
   onRegenerateMessage: (message: ChatMessage) => void;
   renderMessageAttachment?: (message: ChatMessage) => ReactNode;
 }) {
@@ -115,6 +121,9 @@ export function SidebarAiChat({
                 onToggleThinking={() => onToggleThinking(message.id)}
                 canRegenerate={message.id === retryableMessageId}
                 regenerating={regeneratingMessageId === message.id}
+                regenerationStage={regeneratingMessageId === message.id ? regenerationStage : null}
+                regenerationStartedAt={regeneratingMessageId === message.id ? regenerationStartedAt : null}
+                onCancelRegeneration={onCancelRegeneration}
                 onRegenerate={() => onRegenerateMessage(message)}
                 attachment={renderMessageAttachment?.(message)}
               />
@@ -142,6 +151,9 @@ function SidebarChatMessage({
   onToggleThinking,
   canRegenerate,
   regenerating,
+  regenerationStage,
+  regenerationStartedAt,
+  onCancelRegeneration,
   onRegenerate,
   attachment,
 }: {
@@ -150,6 +162,9 @@ function SidebarChatMessage({
   onToggleThinking: () => void;
   canRegenerate: boolean;
   regenerating: boolean;
+  regenerationStage: string | null;
+  regenerationStartedAt: number | null;
+  onCancelRegeneration: () => void;
   onRegenerate: () => void;
   attachment?: ReactNode;
 }) {
@@ -217,22 +232,99 @@ function SidebarChatMessage({
           <MessageTimestamp createdAt={message.createdAt} align="left" />
         )}
 
+        {!streaming && message.toolTelemetry?.toolLoopUsed && (
+          <details className="mt-1.5 text-[10px] text-on-surface-variant">
+            <summary className="cursor-pointer font-mono-sm">
+              Tools: {message.toolTelemetry.calls.length} call(s) · {message.toolTelemetry.modelCalls} model pass(es)
+              {message.toolTelemetry.estimatedNetInputTokensSaved > 0
+                ? ` · ~${message.toolTelemetry.estimatedNetInputTokensSaved} input tokens saved`
+                : ''}
+            </summary>
+            <div className="mt-1 space-y-0.5 border-l border-border-subtle pl-2 font-mono-sm">
+              {message.toolTelemetry.calls.map((call, index) => (
+                <div key={`${call.name}-${index}`}>
+                  {call.name} · {call.mode.toLowerCase()} · {call.status} · {call.durationMs}ms
+                </div>
+              ))}
+              {message.toolTelemetry.fallbackReason && (
+                <div>fallback · {message.toolTelemetry.fallbackReason}</div>
+              )}
+            </div>
+          </details>
+        )}
+
         {attachment && <div className="mt-3">{attachment}</div>}
 
-        {!streaming && canRegenerate && (
+        {!streaming && regenerating && (
+          <RetryProgress
+            stage={regenerationStage}
+            startedAt={regenerationStartedAt}
+            onCancel={onCancelRegeneration}
+          />
+        )}
+
+        {!streaming && canRegenerate && !regenerating && (
           <button
             type="button"
             onClick={onRegenerate}
-            disabled={regenerating}
             className="mt-1.5 flex h-6 items-center gap-1.5 rounded-[3px] px-1.5 font-mono-sm text-[10px] text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
             title="Regenerate this reply"
           >
-            {regenerating
-              ? <Loader2 className="animate-spin" size={11} />
-              : <RefreshCw size={11} />}
+            <RefreshCw size={11} />
             Retry
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+function RetryProgress({
+  stage,
+  startedAt,
+  onCancel,
+}: {
+  stage: string | null;
+  startedAt: number | null;
+  onCancel: () => void;
+}) {
+  const [now, setNow] = useState(startedAt ?? 0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const elapsedSeconds = startedAt == null
+    ? 0
+    : Math.max(0, Math.floor((now - startedAt) / 1000));
+  const elapsed = elapsedSeconds >= 60
+    ? `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`
+    : `${elapsedSeconds}s`;
+
+  return (
+    <div
+      data-testid="workflow-ai-retry-progress"
+      className="mt-2 rounded-DEFAULT border border-primary/25 bg-primary/5 px-2.5 py-2"
+    >
+      <div className="flex items-center gap-2">
+        <Loader2 className="shrink-0 animate-spin text-primary" size={12} />
+        <span className="min-w-0 flex-1 truncate font-mono-sm text-[10px] text-on-surface">
+          {stage || 'Retrying response'}
+        </span>
+        <span className="shrink-0 font-mono-sm text-[9px] tabular-nums text-on-surface-variant">
+          {elapsed}
+        </span>
+        <button
+          type="button"
+          onClick={onCancel}
+          data-testid="workflow-ai-retry-stop"
+          title="Stop retry"
+          aria-label="Stop retry"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[3px] text-on-surface-variant transition-colors hover:bg-status-error/10 hover:text-status-error"
+        >
+          <Square size={10} fill="currentColor" />
+        </button>
       </div>
     </div>
   );

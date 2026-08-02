@@ -115,6 +115,18 @@ public class ApiExceptionHandler {
         return build(HttpStatus.BAD_GATEWAY, "MCP_CONNECTION_ERROR", exception.getMessage(), request);
     }
 
+    @ExceptionHandler(McpRemoteHttpException.class)
+    public ResponseEntity<ApiErrorDTO> handleMcpRemoteHttp(
+            McpRemoteHttpException exception,
+            HttpServletRequest request
+    ) {
+        HttpStatus status = HttpStatus.resolve(exception.getStatusCode());
+        if (status == null || !status.isError()) {
+            status = HttpStatus.BAD_GATEWAY;
+        }
+        return build(status, "MCP_REMOTE_HTTP_ERROR", exception.getMessage(), request);
+    }
+
     /**
      * Saving a workflow that grants WRITE/DESTRUCTIVE trust to an MCP tool without confirmation.
      * The elevated tools ride along in {@code fieldErrors} so the client can list them and retry

@@ -40,6 +40,7 @@ import com.job.scheduler.workflow.asl.validation.AslValidationIssue;
 import com.job.scheduler.workflow.asl.validation.AslValidationResult;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
@@ -61,6 +62,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -113,6 +115,10 @@ class WorkflowAiConversationServiceTest {
     @Mock
     private WorkflowAiTrustReviewService trustReviewService;
     @Mock
+    private WorkflowSolutionCacheService solutionCacheService;
+    @Mock
+    private LangfuseTracingService langfuseTracingService;
+    @Mock
     private ChatModel chatModel;
 
     private WorkflowAiConversationService service;
@@ -138,6 +144,8 @@ class WorkflowAiConversationServiceTest {
                 proposedFunctionSafetyValidator,
                 functionQualificationService,
                 trustReviewService,
+                solutionCacheService,
+                langfuseTracingService,
                 objectMapper
         );
         modelConfig = new AiModelConfig();
@@ -200,6 +208,24 @@ class WorkflowAiConversationServiceTest {
                 "create a workflow that sends a daily digest"
         );
         assertThat(buildTurn).isFalse();
+    }
+
+    @Test
+    void createWorkflowPromptExplicitlyRequiresAnArtifact() {
+        WorkflowAiConversation conversation = new WorkflowAiConversation();
+        conversation.setInitialInstruction(
+                "Create an unscheduled workflow that reads README.md using the exact registered "
+                        + "Voyager filesystem Task resource and then succeeds."
+        );
+
+        Boolean required = ReflectionTestUtils.invokeMethod(
+                service,
+                "artifactRequired",
+                conversation,
+                conversation.getInitialInstruction()
+        );
+
+        assertThat(required).isTrue();
     }
 
     @Test
@@ -275,6 +301,363 @@ class WorkflowAiConversationServiceTest {
         verify(chatModel).chat(promptCaptor.capture());
         assertThat(promptCaptor.getValue().toString())
                 .contains("User date/time context: 2026-06-28T09:00:00+05:30");
+    }
+
+    @Test
+    void largeCatalogUsesSearchAndValidationToolsBeforeFinalResponse() {
+        ReflectionTestUtils.setField(service, "toolCallingEnabled", true);
+        ReflectionTestUtils.setField(service, "toolCallingMinCatalogSize", 12);
+        when(resourceCatalogService.resourceCount()).thenReturn(20);
+        when(resourceCatalogService.estimatePromptCatalogTokens("send email")).thenReturn(900);
+        when(resourceCatalogService.searchCatalog("send email", 5)).thenReturn(List.of(
+                new WorkflowAiResourceCatalogService.CatalogSearchResult(
+                        "voyager://system/send-email", "SYSTEM", "Send an email",
+                        "{to:string, subject:string, body:string}", "WRITE")
+        ));
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
+
+        ToolExecutionRequest search = ToolExecutionRequest.builder()
+                .id("search-1")
+                .name("search_catalog")
+                .arguments("{\"query\":\"send email\",\"limit\":5}")
+                .build();
+        ToolExecutionRequest validate = ToolExecutionRequest.builder()
+                .id("validate-1")
+                .name("validate_asl")
+                .arguments("""
+                        {"definition":{"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}}
+                        """)
+                .build();
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(
+                aiResponse(AiMessage.from(search)),
+                aiResponse(AiMessage.from(validate)),
+                aiResponse(AiMessage.from("""
+                        {"stage":"ASL_READY","message":"Ready.","aslDefinition":{"StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}}
+                        """))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "send email", modelConfig.getId(), null, null);
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(response.assistantMessage().toolTelemetry()).isNotNull();
+        assertThat(response.assistantMessage().toolTelemetry().toolLoopUsed()).isTrue();
+        assertThat(response.assistantMessage().toolTelemetry().modelCalls()).isEqualTo(3);
+        assertThat(response.assistantMessage().toolTelemetry().nativeToolCalls()).isEqualTo(2);
+        assertThat(response.assistantMessage().toolTelemetry().calls())
+                .extracting(call -> call.name())
+                .containsExactly("search_catalog", "validate_asl", "validate_asl");
+        assertThat(response.assistantMessage().toolTelemetry().automaticToolCalls()).isEqualTo(1);
+        assertThat(response.assistantMessage().toolTelemetry().estimatedNetInputTokensSaved())
+                .isPositive();
+        verify(resourceCatalogService).searchCatalog("send email", 5);
+        verify(resourceCatalogService, never()).buildCatalog(any());
+        verify(aslDefinitionValidator, atLeastOnce()).validate(any(JsonNode.class));
+        ArgumentCaptor<ChatRequest> requests = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModel, times(3)).chat(requests.capture());
+        assertThat(requests.getAllValues().get(0).toolSpecifications())
+                .extracting(specification -> specification.name())
+                .containsExactly("search_catalog", "validate_asl");
+        assertThat(requests.getAllValues().get(2).messages().toString())
+                .contains("voyager://system/send-email")
+                .contains("\"valid\":true");
+    }
+
+    @Test
+    void matchingFilesystemTaskRejectsReadmeFunctionProposalAndProducesGroundedAsl() {
+        ReflectionTestUtils.setField(service, "toolCallingEnabled", true);
+        ReflectionTestUtils.setField(service, "toolCallingMinCatalogSize", 12);
+        String prompt = "Create an unscheduled workflow that reads README.md using the exact "
+                + "registered Voyager filesystem Task resource and then succeeds.";
+        String resourceUri = "voyager://mcp/filesystem/read_text_file";
+        when(resourceCatalogService.resourceCount()).thenReturn(20);
+        when(resourceCatalogService.estimatePromptCatalogTokens(prompt)).thenReturn(900);
+        when(resourceCatalogService.searchCatalog(prompt, 8)).thenReturn(List.of(
+                new WorkflowAiResourceCatalogService.CatalogSearchResult(
+                        resourceUri,
+                        "MCP_TOOL",
+                        "Read the complete contents of a text file",
+                        "{path:string}",
+                        "READ_ONLY"
+                )
+        ));
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(modelResolver.preferredStructuredOutputMode(modelConfig))
+                .thenReturn(AiStructuredOutputMode.JSON_OBJECT);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
+
+        String functionProposal = """
+                {"stage":"RESOURCES_PROPOSED","message":"I will create a reader.",
+                 "resourcePlan":{"functions":[{"name":"read-readme","description":"Read README",
+                 "languageId":71,"sourceCode":"print('{}')","rationale":"Read a file"}],
+                 "mcpRequirements":[]}}
+                """;
+        String groundedDefinition = """
+                {"StartAt":"ReadReadme","States":{
+                  "ReadReadme":{"Type":"Task",
+                    "Resource":"voyager://mcp/filesystem/read_text_file",
+                    "Arguments":{"path":"README.md"},"Next":"Done"},
+                  "Done":{"Type":"Succeed"}}}
+                """.trim();
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(
+                aiResponse(AiMessage.from(functionProposal)),
+                aiResponse(AiMessage.from("{\"stage\":\"ASL_READY\",\"message\":\"Ready.\","
+                        + "\"aslDefinition\":" + groundedDefinition + "}"))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                prompt, modelConfig.getId(), null, null);
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(response.resourcePlan()).isNull();
+        assertThat(response.aslDefinition().path("States").path("ReadReadme")
+                .path("Resource").asText()).isEqualTo(resourceUri);
+        assertThat(response.validationIssues()).isEmpty();
+        assertThat(response.assistantMessage().toolTelemetry().rejectedFinals()).isEqualTo(1);
+        assertThat(response.assistantMessage().toolTelemetry().automaticToolCalls()).isEqualTo(2);
+        assertThat(response.assistantMessage().toolTelemetry().calls())
+                .extracting(call -> call.name())
+                .containsExactly("search_catalog", "validate_asl");
+        ArgumentCaptor<ChatRequest> requests = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModel, times(2)).chat(requests.capture());
+        assertThat(requests.getAllValues().get(1).messages().toString())
+                .contains("MATCHING_RESOURCE_AVAILABLE")
+                .contains(resourceUri);
+    }
+
+    @Test
+    void toolLoopDeterministicallyGroundsSingleInventedResourceFromCatalog() {
+        ReflectionTestUtils.setField(service, "toolCallingEnabled", true);
+        ReflectionTestUtils.setField(service, "toolCallingMinCatalogSize", 12);
+        when(resourceCatalogService.resourceCount()).thenReturn(20);
+        when(resourceCatalogService.searchCatalog(eq("read file"), anyInt())).thenReturn(List.of(
+                new WorkflowAiResourceCatalogService.CatalogSearchResult(
+                        "voyager://mcp/filesystem/read_file", "MCP_TOOL", "Read a file",
+                        "{path:string}", "READ_ONLY")
+        ));
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
+
+        String invalidDefinition = """
+                {"StartAt":"Read","States":{"Read":{"Type":"Task","Resource":"voyager://mcp/filesystem/read_file/v1","Arguments":{"path":"/mcp-files/input.txt"},"End":true}}}
+                """.trim();
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(aiResponse(AiMessage.from(
+                "{\"stage\":\"ASL_READY\",\"message\":\"Ready\",\"aslDefinition\":"
+                        + invalidDefinition + "}"
+        )));
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "read file", modelConfig.getId(), null, null);
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(response.aslDefinition().path("States").path("Read").path("Resource").asText())
+                .isEqualTo("voyager://mcp/filesystem/read_file");
+        assertThat(response.assistantMessage().toolTelemetry().automaticToolCalls()).isEqualTo(3);
+        assertThat(response.assistantMessage().toolTelemetry().rejectedFinals()).isZero();
+        assertThat(response.assistantMessage().toolTelemetry().calls())
+                .extracting(call -> call.name())
+                .containsExactly("search_catalog", "ground_resource", "validate_asl");
+        assertThat(response.assistantMessage().toolTelemetry().fallbackReason())
+                .isEqualTo("PROVIDER_IGNORED_REQUIRED_TOOL_CHOICE");
+        ArgumentCaptor<ChatRequest> requests = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModel).chat(requests.capture());
+        assertThat(requests.getAllValues().get(0).toolChoice()).isEqualTo(
+                dev.langchain4j.model.chat.request.ToolChoice.REQUIRED);
+    }
+
+    @Test
+    void groundingAddsUnambiguousRequiredPathFromPrompt() {
+        ReflectionTestUtils.setField(service, "toolCallingEnabled", true);
+        ReflectionTestUtils.setField(service, "toolCallingMinCatalogSize", 12);
+        String prompt = "Create an unscheduled workflow that reads README.md using the exact "
+                + "registered Voyager filesystem Task resource and then succeeds.";
+        String resourceUri = "voyager://mcp/filesystem/read_text_file";
+        when(resourceCatalogService.resourceCount()).thenReturn(20);
+        when(resourceCatalogService.searchCatalog(eq(prompt), anyInt())).thenReturn(List.of(
+                new WorkflowAiResourceCatalogService.CatalogSearchResult(
+                        resourceUri,
+                        "MCP_TOOL",
+                        "Read the complete contents of a text file",
+                        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},"
+                                + "\"required\":[\"path\"]}",
+                        "READ_ONLY"
+                )
+        ));
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
+
+        String candidate = """
+                {"stage":"ASL_READY","message":"Ready","aslDefinition":{
+                  "StartAt":"Read","States":{
+                    "Read":{"Type":"Task","Resource":"voyager://task/fs-read@v1","Next":"Done"},
+                    "Done":{"Type":"Succeed"}}}}
+                """;
+        when(chatModel.chat(any(ChatRequest.class)))
+                .thenReturn(aiResponse(AiMessage.from(candidate)));
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                prompt, modelConfig.getId(), null, null);
+
+        JsonNode task = response.aslDefinition().path("States").path("Read");
+        assertThat(response.validationIssues()).isEmpty();
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(task.path("Resource").asText()).isEqualTo(resourceUri);
+        assertThat(task.path("Arguments").path("path").asText()).isEqualTo("README.md");
+        assertThat(response.assistantMessage().toolTelemetry().calls())
+                .extracting(call -> call.name())
+                .containsExactly("search_catalog", "ground_resource", "validate_asl");
+        assertThat(response.assistantMessage().toolTelemetry().calls().get(1).status())
+                .contains("REPLACED:1_RESOURCE")
+                .contains("ADDED:1_ARGUMENT");
+        verify(chatModel, times(1)).chat(any(ChatRequest.class));
+    }
+
+    @Test
+    void explicitWorkflowRequestRepairsProgressOnlyReplyWithoutRetry() {
+        ReflectionTestUtils.setField(service, "toolCallingEnabled", true);
+        ReflectionTestUtils.setField(service, "toolCallingMinCatalogSize", 12);
+        String prompt = "Create an unscheduled workflow that reads README.md using the exact "
+                + "registered Voyager filesystem Task resource and then succeeds.";
+        String resourceUri = "voyager://mcp/filesystem/read_text_file";
+        when(resourceCatalogService.resourceCount()).thenReturn(20);
+        when(resourceCatalogService.searchCatalog(eq(prompt), anyInt())).thenReturn(List.of(
+                new WorkflowAiResourceCatalogService.CatalogSearchResult(
+                        resourceUri, "MCP_TOOL", "Read text file",
+                        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},"
+                                + "\"required\":[\"path\"]}",
+                        "READ_ONLY"
+                )
+        ));
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(modelResolver.preferredStructuredOutputMode(modelConfig))
+                .thenReturn(AiStructuredOutputMode.JSON_OBJECT);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
+        String progressOnly = """
+                {"stage":"COLLECTING_WORKFLOW_DETAILS",
+                 "message":"Fetching the necessary function to read files..."}
+                """;
+        String repaired = """
+                {"stage":"RESOURCES_PROPOSED","message":"Ready","aslDefinition":{
+                  "StartAt":"Read","States":{
+                    "Read":{"Type":"Task","Resource":"voyager://mcp/filesystem/read_text_file",
+                      "Arguments":{"path":"README.md"},"Next":"Done"},
+                    "Done":{"Type":"Succeed"}}},
+                 "resourcePlan":{"functions":[],"mcpRequirements":[{
+                   "capability":"read-readme","reason":"Existing capability",
+                   "suggestedToolName":"Read README","trustLevelHint":"READ_ONLY"}]}}
+                """;
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(
+                aiResponse(AiMessage.from(progressOnly)),
+                aiResponse(AiMessage.from(repaired))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                prompt, modelConfig.getId(), null, null);
+
+        assertThat(response.validationIssues()).isEmpty();
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(response.aslDefinition().path("States").path("Read")
+                .path("Arguments").path("path").asText()).isEqualTo("README.md");
+        assertThat(response.assistantMessage().toolTelemetry().calls())
+                .extracting(call -> call.name())
+                .containsExactly("search_catalog", "validate_asl");
+        verify(chatModel, times(2)).chat(any(ChatRequest.class));
+    }
+
+    @Test
+    void toolLoopHandsDuplicateInvalidCandidateToOrdinaryRepairBeforeStopping() {
+        ReflectionTestUtils.setField(service, "toolCallingEnabled", true);
+        ReflectionTestUtils.setField(service, "toolCallingMinCatalogSize", 12);
+        when(resourceCatalogService.resourceCount()).thenReturn(20);
+        when(resourceCatalogService.searchCatalog(eq("build invalid workflow"), anyInt()))
+                .thenReturn(List.of());
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(modelResolver.preferredStructuredOutputMode(modelConfig))
+                .thenReturn(AiStructuredOutputMode.JSON_OBJECT);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
+        when(aslDefinitionValidator.validate(any(JsonNode.class))).thenReturn(
+                new AslValidationResult(List.of(new AslValidationIssue(
+                        "$.StartAt",
+                        AslValidationCategory.ASL,
+                        "START_AT_UNKNOWN",
+                        "StartAt must name a state"
+                )))
+        );
+        String repeated = """
+                {"stage":"ASL_READY","message":"Ready","aslDefinition":{
+                  "StartAt":"Missing","States":{"Done":{"Type":"Succeed"}}}}
+                """;
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(
+                aiResponse(AiMessage.from(repeated)),
+                aiResponse(AiMessage.from(repeated)),
+                aiResponse(AiMessage.from(repeated))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "build invalid workflow", modelConfig.getId(), null, null);
+
+        assertThat(response.validationIssues()).isNotEmpty();
+        assertThat(response.assistantMessage().toolTelemetry().modelCalls()).isEqualTo(3);
+        assertThat(response.assistantMessage().toolTelemetry().rejectedFinals()).isEqualTo(2);
+        assertThat(response.assistantMessage().toolTelemetry().fallbackReason())
+                .isEqualTo("DUPLICATE_INVALID_RESPONSE");
+        verify(chatModel, times(3)).chat(any(ChatRequest.class));
+    }
+
+    @Test
+    void ordinaryRepairCanRecoverAfterDuplicateInvalidToolLoopCandidate() {
+        ReflectionTestUtils.setField(service, "toolCallingEnabled", true);
+        ReflectionTestUtils.setField(service, "toolCallingMinCatalogSize", 12);
+        when(resourceCatalogService.resourceCount()).thenReturn(20);
+        when(resourceCatalogService.searchCatalog(eq("build workflow"), anyInt()))
+                .thenReturn(List.of());
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(modelResolver.preferredStructuredOutputMode(modelConfig))
+                .thenReturn(AiStructuredOutputMode.JSON_OBJECT);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
+        when(aslDefinitionValidator.validate(any(JsonNode.class))).thenAnswer(invocation -> {
+            JsonNode definition = invocation.getArgument(0);
+            if ("Missing".equals(definition.path("StartAt").asText())) {
+                return new AslValidationResult(List.of(new AslValidationIssue(
+                        "$.StartAt",
+                        AslValidationCategory.ASL,
+                        "START_AT_UNKNOWN",
+                        "StartAt must name a state"
+                )));
+            }
+            return new AslValidationResult(List.of());
+        });
+        String repeatedInvalid = """
+                {"stage":"ASL_READY","message":"Ready","aslDefinition":{
+                  "StartAt":"Missing","States":{"Done":{"Type":"Succeed"}}}}
+                """;
+        String repaired = """
+                {"stage":"ASL_READY","message":"Ready","aslDefinition":{
+                  "StartAt":"Done","States":{"Done":{"Type":"Succeed"}}}}
+                """;
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(
+                aiResponse(AiMessage.from(repeatedInvalid)),
+                aiResponse(AiMessage.from(repeatedInvalid)),
+                aiResponse(AiMessage.from(repaired))
+        );
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "build workflow", modelConfig.getId(), null, null);
+
+        assertThat(response.stage()).isEqualTo(WorkflowAiConversationStage.ASL_READY);
+        assertThat(response.validationIssues()).isEmpty();
+        assertThat(response.aslDefinition().path("StartAt").asText()).isEqualTo("Done");
+        assertThat(response.assistantMessage().toolTelemetry().modelCalls()).isEqualTo(3);
+        assertThat(response.assistantMessage().toolTelemetry().fallbackReason()).isNull();
+        verify(chatModel, times(3)).chat(any(ChatRequest.class));
     }
 
     @Test
@@ -549,7 +932,7 @@ class WorkflowAiConversationServiceTest {
                 """);
         when(chatModel.chat(anyList())).thenReturn(aiResponse(
                 AiMessage.from("""
-                        {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"ok"}
+                        {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"Which order should I normalize?"}
                         """)
         ));
 
@@ -1454,7 +1837,7 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.aslDefinition().path("StartAt").stringValue()).isEqualTo("Done");
         assertThat(objectMapper.readTree(conversation.getDraftAsl()).path("StartAt").stringValue())
                 .isEqualTo("Done");
-        verify(chatModel, times(3)).chat(anyList());
+        verify(chatModel, times(2)).chat(anyList());
     }
 
     @Test
@@ -3081,7 +3464,7 @@ class WorkflowAiConversationServiceTest {
         assertThat(response.assistantMessage().content())
                 .startsWith("I couldn't apply the generated change");
         assertThat(conversation.getResourcePlan()).isEqualTo(originalPlan);
-        verify(chatModel, times(3)).chat(anyList());
+        verify(chatModel, times(2)).chat(anyList());
     }
 
     @Test

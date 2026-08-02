@@ -18,6 +18,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -33,7 +35,11 @@ public class WorkflowAiResourceCatalogService {
     private static final Set<String> MATCH_STOP_WORDS = Set.of(
             "a", "an", "and", "for", "from", "in", "of", "on", "or", "the", "to", "with",
             "access", "api", "capability", "current", "data", "information", "result",
-            "results", "service", "tool"
+            "results", "service", "tool", "create", "exact", "registered", "scheduler",
+            "scheduled", "state", "task", "unscheduled", "use", "using", "voyager", "workflow",
+            "catalog", "complete", "example", "function", "generated", "has", "live",
+            "match", "matches", "matching", "mcp", "missing", "not", "propose", "proposal",
+            "resource", "that", "when", "your"
     );
     private final FunctionDefinitionRepository functionRepository;
     private final McpToolRepository mcpToolRepository;
@@ -103,6 +109,135 @@ public class WorkflowAiResourceCatalogService {
                 buildFunctionsDocumentation(functions, detailedFunctionIds),
                 buildMcpToolsDocumentation(tools, detailedMcpIds)
         );
+    }
+
+    /** Number of live resources that would otherwise be sent in the prompt catalog. */
+    public int resourceCount() {
+        return 2 + enabledFunctions().size() + enabledMcpTools().size();
+    }
+
+    /** Approximate tokens the complete prompt-catalog block would consume for this intent. */
+    public int estimatePromptCatalogTokens(String intent) {
+        String catalog = "Available Voyager Task resources (current registry):\n"
+                + buildCatalog(intent);
+        return 4 + (catalog.length() + 3) / 4;
+    }
+
+    /**
+     * Returns a small structured result set for model tool-calling. Unlike {@link #buildCatalog},
+     * resources outside the result set consume no prompt tokens. Embedding retrieval supplies the
+     * candidate boost when available; lexical scoring is the precision gate. Embeddings may reorder
+     * lexically related entries, but cannot turn an unrelated nearest neighbour into a match. That
+     * keeps an empty result meaningful evidence that Voyager lacks the requested capability.
+     */
+    public List<CatalogSearchResult> searchCatalog(String query, int requestedLimit) {
+        String intent = query == null ? "" : query.trim();
+        int limit = Math.max(1, Math.min(requestedLimit, 8));
+        List<FunctionDefinition> functions = enabledFunctions();
+        List<McpTool> tools = enabledMcpTools();
+        Set<String> relevantFunctions = embeddingService.retrievalActive(functions.size() + tools.size())
+                ? embeddingService.selectRelevantResourceIds(ResourceEmbeddingType.FUNCTION, intent)
+                : Set.of();
+        Set<String> relevantMcp = embeddingService.retrievalActive(functions.size() + tools.size())
+                ? embeddingService.selectRelevantResourceIds(ResourceEmbeddingType.MCP_TOOL, intent)
+                : Set.of();
+
+        List<ScoredCatalogResult> candidates = new ArrayList<>();
+        candidates.add(scored(new CatalogSearchResult(
+                "voyager://system/webhook", "SYSTEM", "Call an HTTP webhook",
+                "{url:string, method:string optional default POST, headers:object<string,string> optional, body:any optional}",
+                "READ"), intent, false));
+        candidates.add(scored(new CatalogSearchResult(
+                "voyager://system/send-email", "SYSTEM", "Send an email",
+                "{to:string, subject:string, body:string}", "WRITE"), intent, false));
+        for (FunctionDefinition function : functions) {
+            CatalogSearchResult result = new CatalogSearchResult(
+                    "voyager://function/" + function.getName() + "@v" + function.getActiveVersion(),
+                    "FUNCTION", function.getDescription(), "{}", "LOCAL");
+            candidates.add(scored(result, intent, function.getId() != null
+                    && relevantFunctions.contains(function.getId().toString())));
+        }
+        for (McpTool tool : tools) {
+            McpTrustLevel trust = tool.getMcpServer().getTrustLevel() == null
+                    ? McpTrustLevel.UNTRUSTED : tool.getMcpServer().getTrustLevel();
+            CatalogSearchResult result = new CatalogSearchResult(
+                    mcpResourceUri(tool), "MCP_TOOL", tool.getDescription(),
+                    compactSchema(tool.getInputSchema()), trust.name());
+            candidates.add(scored(result, intent, tool.getId() != null
+                    && relevantMcp.contains(tool.getId().toString())));
+        }
+        int strongestMatch = candidates.stream()
+                .mapToInt(ScoredCatalogResult::matchScore)
+                .max()
+                .orElse(0);
+        return candidates.stream()
+                .filter(candidate -> strongestMatch > 0
+                        && candidate.matchScore() == strongestMatch)
+                .sorted(Comparator.comparingInt(ScoredCatalogResult::score).reversed()
+                        .thenComparing(candidate -> candidate.result().uri()))
+                .limit(limit)
+                .map(ScoredCatalogResult::result)
+                .toList();
+    }
+
+    private ScoredCatalogResult scored(CatalogSearchResult result, String query, boolean embeddingMatch) {
+        Set<String> queryTokens = tokens(query);
+        Set<String> identifierTokens = tokens(result.uri());
+        Set<String> resourceTokens = tokens(String.join(" ",
+                result.uri(), safe(result.description())));
+        int lexical = (int) queryTokens.stream().filter(resourceTokens::contains).count();
+        int fileAdjustment = fileIntentAdjustment(query, result);
+        boolean exactIdentifierIntent = queryTokens.size() == 1
+                && queryTokens.stream().anyMatch(identifierTokens::contains);
+        boolean sufficientEvidence = lexical >= 2
+                || exactIdentifierIntent
+                || (lexical >= 1 && fileAdjustment != 0);
+        int matchScore = sufficientEvidence ? lexical * 10 + fileAdjustment : 0;
+        return new ScoredCatalogResult(
+                result,
+                matchScore + (embeddingMatch ? 1 : 0),
+                matchScore
+        );
+    }
+
+    private int fileIntentAdjustment(String query, CatalogSearchResult result) {
+        String intent = normalize(query);
+        Set<String> intentTokens = tokens(intent);
+        boolean fileActionIntent = intentTokens.stream().anyMatch(Set.of(
+                "find", "list", "load", "open", "read", "save", "search", "write"
+        )::contains);
+        boolean explicitFileIntent = intentTokens.stream().anyMatch(Set.of(
+                "file", "filesystem", "readme"
+        )::contains);
+        boolean textFormatIntent = intentTokens.stream().anyMatch(Set.of(
+                "readme", "markdown", "text", "txt", "json", "yaml", "yml", "csv",
+                "xml", "html", "log", "java", "javascript", "typescript", "python",
+                "properties"
+        )::contains);
+        boolean textFileIntent = explicitFileIntent || (fileActionIntent && textFormatIntent);
+        if (!textFileIntent) {
+            return 0;
+        }
+        String uri = result.uri().toLowerCase(Locale.ROOT);
+        String description = safe(result.description()).toLowerCase(Locale.ROOT);
+        if (uri.contains("read_text_file")) {
+            return 50;
+        }
+        if (uri.contains("read_media_file") || description.contains("deprecated")) {
+            return -50;
+        }
+        return 0;
+    }
+
+    private String compactSchema(String schema) {
+        if (schema == null || schema.isBlank()) {
+            return "{}";
+        }
+        try {
+            return objectMapper.writeValueAsString(objectMapper.readTree(schema));
+        } catch (Exception ignored) {
+            return "{}";
+        }
     }
 
     private List<FunctionDefinition> enabledFunctions() {
@@ -318,8 +453,15 @@ public class WorkflowAiResourceCatalogService {
     private Set<String> tokens(String value) {
         return Arrays.stream(normalize(value).split(" "))
                 .filter(token -> token.length() >= 3)
+                .map(this::singularToken)
                 .filter(token -> !MATCH_STOP_WORDS.contains(token))
                 .collect(Collectors.toSet());
+    }
+
+    private String singularToken(String token) {
+        return token.length() > 3 && token.endsWith("s") && !token.endsWith("ss")
+                ? token.substring(0, token.length() - 1)
+                : token;
     }
 
     private String normalize(String value) {
@@ -334,6 +476,22 @@ public class WorkflowAiResourceCatalogService {
     }
 
     public record McpRequirementMatch(String capability, String resourceUri) {
+    }
+
+    public record CatalogSearchResult(
+            String uri,
+            String type,
+            String description,
+            String argumentsSchema,
+            String trust
+    ) {
+    }
+
+    private record ScoredCatalogResult(
+            CatalogSearchResult result,
+            int score,
+            int matchScore
+    ) {
     }
 
     private void appendDescription(StringBuilder documentation, String description) {

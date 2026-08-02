@@ -15,6 +15,7 @@ import com.job.scheduler.dto.WorkflowAiConversationDetailDTO;
 import com.job.scheduler.dto.WorkflowAiConversationSummaryDTO;
 import com.job.scheduler.dto.WorkflowAiMcpRequirementDTO;
 import com.job.scheduler.dto.WorkflowAiMessageDTO;
+import com.job.scheduler.dto.WorkflowAiToolTelemetryDTO;
 import com.job.scheduler.dto.WorkflowAiResponseDTO;
 import com.job.scheduler.dto.WorkflowAiSaveWorkflowRequestDTO;
 import com.job.scheduler.dto.WorkflowAiTrustReviewDTO;
@@ -46,11 +47,16 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.ResponseFormat;
+import dev.langchain4j.model.chat.request.ToolChoice;
+import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.TokenUsage;
 import jakarta.persistence.EntityNotFoundException;
@@ -99,6 +105,9 @@ public class WorkflowAiConversationService {
     private static final Pattern DISTINCTIVE_IDENTIFIER = Pattern.compile(
             "(?i)\\b(?=[a-z0-9._:/-]{4,}\\b)(?=[a-z0-9._:/-]*[a-z])(?=[a-z0-9._:/-]*[0-9])[a-z0-9._:/-]+\\b"
     );
+    private static final Pattern FILE_PATH_LITERAL = Pattern.compile(
+            "(?i)(?<![a-z0-9_])((?:[a-z]:[\\\\/]|[./])?[a-z0-9_-]+(?:[\\\\/][a-z0-9_. -]+)*\\.[a-z0-9]{1,16})(?![a-z0-9_])"
+    );
     private static final String INVALID_AI_RESPONSE =
             "[AI_RESPONSE] The model response was not valid Voyager workflow JSON.";
     private static final String FAILED_VALIDATION_MESSAGE =
@@ -114,11 +123,19 @@ public class WorkflowAiConversationService {
      */
     private static final long STREAM_IDLE_POLL_SECONDS = 5;
     private static final int GENERAL_CHAT_MAX_OUTPUT_TOKENS = 512;
+    private static final int MAX_TOOL_ROUNDS = 6;
+    private static final int MAX_TOOL_CALLS = 10;
+    private static final int MAX_CATALOG_RESULTS = 8;
     private static final Pattern FUNCTION_NAME_PATTERN = Pattern.compile("^[a-z0-9][a-z0-9-]*$");
     private static final Pattern EXPLICIT_SINGLE_TERMINAL_STATE = Pattern.compile(
             "(?is)\\bexactly\\s+one\\s+(Succeed|Fail)\\s+state\\s+named\\s+"
                     + "[\"']?([A-Za-z][A-Za-z0-9_-]{0,79})[\"']?(?=\\s|[.,;]|$)"
     );
+
+    @Value("${scheduler.workflow-ai.tool-calling.enabled:true}")
+    private boolean toolCallingEnabled;
+    @Value("${scheduler.workflow-ai.tool-calling.min-catalog-size:12}")
+    private int toolCallingMinCatalogSize = 12;
 
     // Cheap heuristic to tell a "just chatting" turn (a greeting or a general question) from a real
     // build request, so a general turn can skip shipping the whole function/MCP catalog to the model
@@ -149,6 +166,9 @@ public class WorkflowAiConversationService {
             "(?is).*(?:\\bexactly\\b.{0,120}\\b(?:state|states|workflow)\\b"
                     + "|\\bpropose\\b.{0,160}\\b(?:function|mcp|capability|resource)\\b"
                     + "|\\buse\\b.{0,80}\\b(?:an?\\s+)?mcp requirement\\b).*"
+    );
+    private static final Pattern WORKFLOW_ARTIFACT_NOUN = Pattern.compile(
+            "(?is).*\\b(?:workflow|state machine|asl|workflow definition)\\b.*"
     );
     private static final Pattern CLARIFICATION_QUESTION = Pattern.compile(
             "(?is)^\\s*(?:which|what|where|when|how|why|do you|would you|could you|"
@@ -357,6 +377,8 @@ public class WorkflowAiConversationService {
     private final WorkflowAiProposedFunctionSafetyValidator proposedFunctionSafetyValidator;
     private final WorkflowAiFunctionQualificationService functionQualificationService;
     private final WorkflowAiTrustReviewService trustReviewService;
+    private final WorkflowSolutionCacheService solutionCacheService;
+    private final LangfuseTracingService langfuseTracingService;
     private final ObjectMapper objectMapper;
 
     public String promptFingerprint() {
@@ -604,6 +626,20 @@ public class WorkflowAiConversationService {
         conversation.setWorkflowId(workflow.id());
         conversation.setStage(WorkflowAiConversationStage.ACCEPTED);
         conversationRepository.saveAndFlush(conversation);
+
+        // Record the validated solution for semantic-cache adaptation of future similar requests.
+        // Only AI-chat workspaces carry a real design instruction; manual drafts do not. Failure-safe
+        // inside the service — a cache write must never fail the save.
+        if (workspaceKind == WorkflowAiWorkspaceKind.AI_CHAT
+                && conversation.getInitialInstruction() != null
+                && !conversation.getInitialInstruction().isBlank()) {
+            solutionCacheService.recordSolution(
+                    conversation.getId(),
+                    workflow.id(),
+                    conversation.getInitialInstruction(),
+                    serialize(requestedWorkflow.definition())
+            );
+        }
         return new WorkflowAiSaveWorkflowResponseDTO(workflow, revision);
     }
 
@@ -759,6 +795,12 @@ public class WorkflowAiConversationService {
             if (bufferContext != null) {
                 startTask += "\n" + bufferContext;
             }
+            // Seed generation with a validated prior workflow for a semantically similar request.
+            // Only on a cold start (no editor ASL to amend); the template is advisory and the result
+            // is still validated against the live catalog, so a stale entry is self-healing.
+            startTask += solutionCacheService.findAdaptation(normalizedInstruction)
+                    .map(adaptation -> "\n" + solutionCacheService.adaptationPromptContext(adaptation))
+                    .orElse("");
         }
         if (userDateTime != null && !userDateTime.isBlank()) {
             startTask += "\nUser date/time context: " + userDateTime.trim();
@@ -1135,6 +1177,42 @@ public class WorkflowAiConversationService {
         );
     }
 
+    /**
+     * Emits one observability trace for a completed turn. Best-effort and failure-safe: recovering
+     * the turn's user input or building the trace must never affect the conversation.
+     */
+    private void traceTurn(
+            WorkflowAiConversation conversation,
+            WorkflowAiMessage assistantMessage,
+            String assistantContent,
+            long durationMs,
+            TokenUsage tokenUsage,
+            AiModelConfig modelConfig
+    ) {
+        try {
+            String userInput = messageRepository
+                    .findFirstByConversationAndRoleOrderByCreatedAtDesc(
+                            conversation, WorkflowAiMessageRole.USER)
+                    .map(WorkflowAiMessage::getContent)
+                    .orElse(null);
+            langfuseTracingService.recordTurn(new LangfuseTracingService.TurnTrace(
+                    conversation.getId() == null ? null : conversation.getId().toString(),
+                    "workflow-ai-turn",
+                    userInput,
+                    assistantContent,
+                    modelConfig == null ? null : modelConfig.getModelName(),
+                    conversation.getStage() == null ? null : conversation.getStage().name(),
+                    promptFingerprint(),
+                    durationMs,
+                    tokenUsage == null ? null : tokenUsage.inputTokenCount(),
+                    tokenUsage == null ? null : tokenUsage.outputTokenCount(),
+                    assistantMessage == null ? null : assistantMessage.getCreatedAt()
+            ));
+        } catch (RuntimeException exception) {
+            log.warn("Turn tracing skipped: {}", exception.getMessage());
+        }
+    }
+
     private WorkflowAiResponseDTO callAssistant(
             WorkflowAiConversation conversation,
             String task
@@ -1173,16 +1251,27 @@ public class WorkflowAiConversationService {
                 modelConfig,
                 prompt.generalTurn() ? GENERAL_CHAT_MAX_OUTPUT_TOKENS : null
         );
-        Instant startedAt = Instant.now();
-        AssistantAttempt attempt = generateAssistantAttempt(
-                model,
-                modelConfig,
-                turnStream,
-                prompt.generalTurn() ? "Thinking" : "Designing the workflow",
-                messages,
-                prompt.generalTurn() ? GENERAL_CHAT_MAX_OUTPUT_TOKENS : null
+        TurnTelemetry telemetry = new TurnTelemetry(
+                prompt.toolCalling(),
+                prompt.promptCatalogTokensPerCall(),
+                prompt.toolCalling()
+                        ? estimatedTokens(workflowToolSpecifications().toString()) : 0
         );
+        Instant startedAt = Instant.now();
+        AssistantAttempt attempt = prompt.toolCalling()
+                ? generateAssistantAttemptWithTools(
+                        model, modelConfig, turnStream, messages, prompt.toolIntent(), telemetry)
+                : generateAssistantAttempt(
+                        model,
+                        modelConfig,
+                        turnStream,
+                        prompt.generalTurn() ? "Thinking" : "Designing the workflow",
+                        messages,
+                        prompt.generalTurn() ? GENERAL_CHAT_MAX_OUTPUT_TOKENS : null,
+                        telemetry
+                );
         attempt = normalizeExplicitSingleTerminalAttempt(conversation, attempt);
+        attempt = normalizeValidGroundedDefinitionAttempt(attempt, telemetry);
         // A plain-chat turn must stay chat-only. Small models, still constrained by the full response
         // schema, often emit a stub aslDefinition ({} or a blank StartAt) even for a greeting; promoting
         // or validating it wrongly drags the turn into ASL_UNDER_REVIEW. Drop any stray artifact here so
@@ -1195,19 +1284,25 @@ public class WorkflowAiConversationService {
                     turnStream,
                     "Reviewing the proposed function",
                     functionCreationReviewPrompt(messages, attempt.cleaned()),
-                    null
+                    null,
+                    telemetry
             );
             attempt = normalizeExplicitSingleTerminalAttempt(conversation, attempt);
+            attempt = normalizeValidGroundedDefinitionAttempt(attempt, telemetry);
         }
-        List<String> validationIssues = validateAssistantAttempt(
+        List<String> validationIssues = validateAssistantAttemptForTurn(
                 conversation,
                 attempt.parsed(),
                 prompt.schedulingRequested(),
                 prompt.generalTurn(),
-                prompt.artifactRequired()
+                prompt.artifactRequired(),
+                telemetry
         );
+        String rejectedAttemptFingerprint = validationIssues.isEmpty()
+                ? null : assistantAttemptFingerprint(attempt);
         for (int generationAttempt = 1;
              !validationIssues.isEmpty()
+                     && !telemetry.repeatedInvalidResponse
                      && generationAttempt < MAX_ASSISTANT_GENERATION_ATTEMPTS;
              generationAttempt++) {
             boolean repairIncludesFunctionContract = !prompt.generalTurn()
@@ -1232,10 +1327,12 @@ public class WorkflowAiConversationService {
                                     validationIssues,
                                     repairIncludesFunctionContract
                             ),
-                    prompt.generalTurn() ? GENERAL_CHAT_MAX_OUTPUT_TOKENS : null
+                    prompt.generalTurn() ? GENERAL_CHAT_MAX_OUTPUT_TOKENS : null,
+                    telemetry
             );
             attempt = normalizeExplicitSingleTerminalAttempt(conversation, attempt);
             attempt = normalizeGeneralChatAttempt(attempt, prompt.generalTurn());
+            attempt = normalizeValidGroundedDefinitionAttempt(attempt, telemetry);
             if (!prompt.generalTurn()
                     && !repairIncludesFunctionContract
                     && attempt.hasFunctionProposalSignal()) {
@@ -1245,17 +1342,35 @@ public class WorkflowAiConversationService {
                         turnStream,
                         "Reviewing the proposed function",
                         functionCreationReviewPrompt(messages, attempt.cleaned()),
-                        null
+                        null,
+                        telemetry
                 );
                 attempt = normalizeExplicitSingleTerminalAttempt(conversation, attempt);
+                attempt = normalizeValidGroundedDefinitionAttempt(attempt, telemetry);
             }
-            validationIssues = validateAssistantAttempt(
+            validationIssues = validateAssistantAttemptForTurn(
                     conversation,
                     attempt.parsed(),
                     prompt.schedulingRequested(),
                     prompt.generalTurn(),
-                    prompt.artifactRequired()
+                    prompt.artifactRequired(),
+                    telemetry
             );
+            String nextFingerprint = validationIssues.isEmpty()
+                    ? null : assistantAttemptFingerprint(attempt);
+            if (nextFingerprint != null
+                    && nextFingerprint.equals(rejectedAttemptFingerprint)) {
+                telemetry.repeatedInvalidResponse = true;
+                telemetry.fallbackReason = "DUPLICATE_INVALID_RESPONSE";
+                if (turnStream != null) {
+                    turnStream.emitStage("Stopped repeated invalid response");
+                }
+                break;
+            }
+            rejectedAttemptFingerprint = nextFingerprint;
+        }
+        if (validationIssues.isEmpty()) {
+            telemetry.acceptFinal();
         }
         long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
         ParsedAssistantResponse parsed = attempt.parsed();
@@ -1300,12 +1415,14 @@ public class WorkflowAiConversationService {
                 modelConfig,
                 attempt.thinkingExtraction().thinkingContent(),
                 durationMs,
-                attempt.modelResponse().tokenUsage(),
+                telemetry.tokenUsage(),
                 attempt.modelResponse().finishReason() == null
                         ? null
                         : attempt.modelResponse().finishReason().name(),
                 regeneratedFromMessage
         );
+        traceTurn(conversation, assistantMessage, assistantContent, durationMs,
+                telemetry.tokenUsage(), modelConfig);
         if (parsed.hasResourcePlan()) {
             if (validationIssues.isEmpty()) {
                 if (resourcePlanOwnerId == null) {
@@ -1336,8 +1453,10 @@ public class WorkflowAiConversationService {
                 // never surface as a new actionable card through the legacy payload fallback.
                 assistantMessage.setMetadataJson(resourcePlanMessageMetadata(null, true));
             }
-            assistantMessage = messageRepository.saveAndFlush(assistantMessage);
         }
+        assistantMessage.setMetadataJson(mergeToolTelemetryMetadata(
+                assistantMessage.getMetadataJson(), telemetry.toDto()));
+        assistantMessage = messageRepository.saveAndFlush(assistantMessage);
 
         return withRawReply(
                 response(
@@ -1384,7 +1503,8 @@ public class WorkflowAiConversationService {
             TurnStream turnStream,
             String stageLabel,
             List<ChatMessage> messages,
-            Integer maxOutputTokens
+            Integer maxOutputTokens,
+            TurnTelemetry telemetry
     ) {
         // Abort before spending another model call if the client cancelled between passes.
         turnRegistry.throwIfCancelled(streamBroker.currentSession());
@@ -1401,6 +1521,7 @@ public class WorkflowAiConversationService {
         } catch (RuntimeException exception) {
             throw new IllegalStateException(modelCallFailureMessage(exception), exception);
         }
+        telemetry.recordModel(modelResponse, false);
         String raw = requireModelReply(modelResponse);
         ThinkingExtraction thinkingExtraction = extractThinking(raw);
         String cleaned = stripMarkdown(thinkingExtraction.answer());
@@ -1410,6 +1531,642 @@ public class WorkflowAiConversationService {
                 thinkingExtraction,
                 parseAssistantResponse(cleaned)
         );
+    }
+
+    /**
+     * A weak structured-output model may fill every optional response branch at once. When its
+     * concrete ASL is already executable and every Task URI was discovered this turn, that
+     * definition is the authoritative result; redundant plans must not turn a VALID machine into a
+     * rejected response envelope.
+     */
+    private AssistantAttempt normalizeValidGroundedDefinitionAttempt(
+            AssistantAttempt attempt,
+            TurnTelemetry telemetry
+    ) {
+        if (attempt == null || !telemetry.enforceToolGrounding) {
+            return attempt;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(attempt.cleaned());
+            if (!(root instanceof ObjectNode normalized)) {
+                return attempt;
+            }
+            // Read the raw field before ParsedAssistantResponse applies the RESOURCES_PROPOSED
+            // contract, which intentionally hides ASL while a real resource still needs provisioning.
+            // Here the live catalog proves that no provisioning is needed.
+            JsonNode definition = normalizeAslDefinition(normalized.get("aslDefinition"));
+            if (!looksLikeAsl(definition) || !validateExecutableDefinition(definition).isEmpty()) {
+                return attempt;
+            }
+            Set<String> resources = new LinkedHashSet<>();
+            collectTaskResources(definition, resources);
+            if (resources.isEmpty()
+                    || !telemetry.discoveredResourceUris.containsAll(resources)) {
+                return attempt;
+            }
+            boolean contradictoryArtifacts = normalized.hasNonNull("resourcePlan")
+                    || normalized.hasNonNull("finalPlan")
+                    || normalized.hasNonNull("draftWorkflowPayload")
+                    || !"ASL_READY".equals(normalized.path("stage").asText());
+            if (!contradictoryArtifacts) {
+                return attempt;
+            }
+            normalized.put("stage", "ASL_READY");
+            normalized.remove("resourcePlan");
+            normalized.remove("finalPlan");
+            normalized.remove("draftWorkflowPayload");
+            normalized.set("aslDefinition", definition);
+            String cleaned = serialize(normalized);
+            return new AssistantAttempt(
+                    attempt.modelResponse(),
+                    cleaned,
+                    attempt.thinkingExtraction(),
+                    parseAssistantResponse(cleaned)
+            );
+        } catch (Exception exception) {
+            log.debug("Could not normalize redundant workflow response artifacts", exception);
+            return attempt;
+        }
+    }
+
+    /**
+     * Bounded read-only agent loop. Tool-capable models see only the tool schemas and the selected
+     * catalog records; endpoints that reject tools fall back to the existing prompt catalog.
+     */
+    private AssistantAttempt generateAssistantAttemptWithTools(
+            ChatModel model,
+            AiModelConfig modelConfig,
+            TurnStream turnStream,
+            List<ChatMessage> messages,
+            String toolIntent,
+            TurnTelemetry telemetry
+    ) {
+        int calls = 0;
+        Set<String> seenCalls = new HashSet<>();
+        Set<String> discoveredResourceUris = new HashSet<>();
+        List<WorkflowAiResourceCatalogService.CatalogSearchResult> discoveredCatalogResults =
+                new ArrayList<>();
+        boolean catalogSearchConfirmedNoMatch = false;
+        AssistantAttempt lastFinalAttempt = null;
+        String rejectedFinalFingerprint = null;
+        boolean requireTool = true;
+        boolean providerIgnoredRequiredToolChoice = false;
+        for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            turnRegistry.throwIfCancelled(streamBroker.currentSession());
+            ChatResponse response;
+            try {
+                if (turnStream != null) {
+                    turnStream.emitStage(requireTool ? "Choosing a catalog tool" : "Preparing the workflow");
+                }
+                response = providerIgnoredRequiredToolChoice
+                        ? blockingChat(model, modelConfig, messages, null)
+                        : model.chat(toolChatRequest(messages, requireTool));
+            } catch (RuntimeException exception) {
+                if (!isToolCallingRejection(exception)) {
+                    throw exception;
+                }
+                log.info("AI endpoint rejected tool calling; using prompt catalog fallback: {}",
+                        exception.getMessage());
+                telemetry.fallbackReason = "TOOLS_REJECTED";
+                telemetry.enforceToolGrounding = false;
+                messages.add(1, SystemMessage.systemMessage(resourceCatalogContext(null)));
+                messages.add(SystemMessage.systemMessage(
+                        "This endpoint does not support tools. Use the supplied prompt catalog "
+                                + "and continue with the ordinary workflow response contract."
+                ));
+                return generateAssistantAttempt(
+                        model, modelConfig, turnStream, "Designing the workflow", messages, null,
+                        telemetry);
+            }
+            telemetry.recordModel(response, true, !providerIgnoredRequiredToolChoice);
+
+            AiMessage aiMessage = response.aiMessage();
+            if (aiMessage == null || !aiMessage.hasToolExecutionRequests()) {
+                if (requireTool) {
+                    if (turnStream != null) {
+                        turnStream.emitStage("Searching the catalog");
+                    }
+                    long toolStartedAt = System.nanoTime();
+                    List<WorkflowAiResourceCatalogService.CatalogSearchResult> matches =
+                            resourceCatalogService.searchCatalog(toolIntent, MAX_CATALOG_RESULTS);
+                    catalogSearchConfirmedNoMatch |= matches.isEmpty();
+                    telemetry.catalogSearchConfirmedNoMatch = catalogSearchConfirmedNoMatch;
+                    telemetry.trace("search_catalog", "AUTOMATIC", "OK:" + matches.size()
+                                    + "_MATCHES", toolStartedAt, matches.size());
+                    telemetry.automaticToolCalls++;
+                    telemetry.fallbackReason = "PROVIDER_IGNORED_REQUIRED_TOOL_CHOICE";
+                    discoveredResourceUris.addAll(matches.stream()
+                            .map(WorkflowAiResourceCatalogService.CatalogSearchResult::uri)
+                            .toList());
+                    mergeCatalogResults(discoveredCatalogResults, matches);
+                    telemetry.discoveredResourceUris.addAll(discoveredResourceUris);
+                    log.info("Workflow AI provider ignored required tool choice; "
+                                    + "executed search_catalog automatically status=OK:{}_MATCHES",
+                            matches.size());
+                    String automaticSearchPayload = serialize(java.util.Map.of("matches", matches));
+                    telemetry.addToolResult(automaticSearchPayload);
+                    messages.add(SystemMessage.systemMessage(
+                            "The provider did not emit its required tool call. Voyager executed "
+                                    + "search_catalog automatically. Use only these exact results:\n"
+                                    + automaticSearchPayload
+                    ));
+                    messages.add(SystemMessage.systemMessage(
+                            "Voyager will now validate each final candidate automatically. Return "
+                                    + "only the complete Voyager JSON response; do not describe or call tools."
+                    ));
+                    providerIgnoredRequiredToolChoice = true;
+                    requireTool = false;
+                }
+                String raw = requireModelReply(response);
+                ThinkingExtraction thinking = extractThinking(raw);
+                String cleaned = stripMarkdown(thinking.answer());
+                AssistantAttempt finalAttempt = new AssistantAttempt(
+                        response, cleaned, thinking, parseAssistantResponse(cleaned));
+                long groundingStartedAt = System.nanoTime();
+                GroundingResult grounding = groundSingleCatalogResource(
+                        finalAttempt, discoveredCatalogResults, toolIntent);
+                finalAttempt = grounding.attempt();
+                if (grounding.replacements() > 0 || grounding.argumentsAdded() > 0) {
+                    String groundingStatus = "REPLACED:" + grounding.replacements()
+                            + "_RESOURCE";
+                    if (grounding.argumentsAdded() > 0) {
+                        groundingStatus += "_ADDED:" + grounding.argumentsAdded() + "_ARGUMENT";
+                    }
+                    telemetry.trace(
+                            "ground_resource",
+                            "AUTOMATIC",
+                            groundingStatus,
+                            groundingStartedAt,
+                            grounding.replacements() + grounding.argumentsAdded()
+                    );
+                    telemetry.automaticToolCalls++;
+                    if (turnStream != null) {
+                        turnStream.emitStage("Grounding the Task resource");
+                    }
+                }
+                boolean finalDefinitionCandidate = finalAttempt.parsed().hasDefinitionCandidate();
+                long validationStartedAt = finalDefinitionCandidate ? System.nanoTime() : 0;
+                if (finalDefinitionCandidate && turnStream != null) {
+                    turnStream.emitStage("Validating ASL");
+                }
+                List<String> enforcementIssues = toolFinalResponseIssues(
+                        finalAttempt.parsed(), discoveredResourceUris,
+                        catalogSearchConfirmedNoMatch);
+                if (finalDefinitionCandidate) {
+                    telemetry.trace(
+                            "validate_asl",
+                            "AUTOMATIC",
+                            enforcementIssues.isEmpty()
+                                    ? "VALID"
+                                    : "INVALID:" + enforcementIssues.size() + "_ISSUES",
+                            validationStartedAt,
+                            enforcementIssues.size()
+                    );
+                    telemetry.automaticToolCalls++;
+                    telemetry.validatedAttemptFingerprints.add(
+                            assistantAttemptFingerprint(finalAttempt));
+                }
+                if (enforcementIssues.isEmpty()) {
+                    return finalAttempt;
+                }
+                telemetry.rejectedFinals++;
+                lastFinalAttempt = finalAttempt;
+                log.info("Workflow AI final response rejected by tool-loop enforcement: {}",
+                        enforcementIssues);
+                String fingerprint = assistantAttemptFingerprint(finalAttempt);
+                if (fingerprint.equals(rejectedFinalFingerprint)) {
+                    telemetry.fallbackReason = "DUPLICATE_INVALID_RESPONSE";
+                    if (turnStream != null) {
+                        turnStream.emitStage("Stopped repeated invalid response");
+                    }
+                    break;
+                }
+                rejectedFinalFingerprint = fingerprint;
+                messages.add(aiMessage);
+                messages.add(UserMessage.userMessage("""
+                        Your proposed final response cannot be accepted yet.
+                        Correct every issue below, search again when a Resource URI was not returned
+                        by search_catalog, then call validate_asl on the exact corrected definition
+                        before returning the complete final response.
+
+                        %s
+                        """.formatted(String.join("\n", enforcementIssues))));
+                requireTool = !providerIgnoredRequiredToolChoice;
+                continue;
+            }
+
+            messages.add(aiMessage);
+            requireTool = false;
+            for (ToolExecutionRequest request : aiMessage.toolExecutionRequests()) {
+                calls++;
+                if (calls > MAX_TOOL_CALLS) {
+                    throw new IllegalStateException("The AI exceeded the tool-call limit for one turn");
+                }
+                String signature = request.name() + "\n" + request.arguments();
+                WorkflowToolResult result;
+                long toolStartedAt = System.nanoTime();
+                if (seenCalls.add(signature)) {
+                    if (turnStream != null) {
+                        turnStream.emitStage("search_catalog".equals(request.name())
+                                ? "Searching the catalog" : "Validating ASL");
+                    }
+                    result = executeWorkflowTool(request);
+                    discoveredResourceUris.addAll(result.resourceUris());
+                    mergeCatalogResults(discoveredCatalogResults, result.catalogResults());
+                    telemetry.discoveredResourceUris.addAll(result.resourceUris());
+                    if ("search_catalog".equals(request.name()) && result.resultCount() == 0) {
+                        catalogSearchConfirmedNoMatch = true;
+                        telemetry.catalogSearchConfirmedNoMatch = true;
+                    }
+                } else {
+                    result = new WorkflowToolResult(
+                            serialize(java.util.Map.of(
+                                    "error", "DUPLICATE_TOOL_CALL",
+                                    "message", "Use the earlier identical result instead of calling again."
+                            )), Set.of(), List.of(), "DUPLICATE", 0);
+                }
+                long durationMs = TimeUnit.NANOSECONDS.toMillis(
+                        System.nanoTime() - toolStartedAt);
+                log.info("Workflow AI tool call name={} status={} durationMs={}",
+                        request.name(), result.status(), durationMs);
+                telemetry.nativeToolCalls++;
+                telemetry.calls.add(new WorkflowAiToolTelemetryDTO.ToolCall(
+                        request.name(), "NATIVE", result.status(), durationMs, result.resultCount()));
+                telemetry.addToolResult(result.payload());
+                messages.add(ToolExecutionResultMessage.from(request, result.payload()));
+            }
+        }
+        if (lastFinalAttempt != null) {
+            telemetry.fallbackReason = telemetry.fallbackReason == null
+                    ? "TOOL_ROUND_LIMIT" : telemetry.fallbackReason;
+            // The ordinary deterministic repair pipeline gets the last candidate and its concrete
+            // issues. It still cannot persist anything until validateAssistantAttempt succeeds.
+            return lastFinalAttempt;
+        }
+        throw new IllegalStateException("The AI did not finish within the tool-round limit");
+    }
+
+    /**
+     * Replaces one invented Task resource with the one exact catalog result selected for this turn.
+     * The rewrite is deliberately narrow: the candidate must contain only one distinct Task URI and
+     * the catalog search must have produced exactly one URI. Multi-resource workflows still go back
+     * through the model/validator because guessing which Task maps to which result would be unsafe.
+     */
+    private GroundingResult groundSingleCatalogResource(
+            AssistantAttempt attempt,
+            List<WorkflowAiResourceCatalogService.CatalogSearchResult> discoveredCatalogResults,
+            String toolIntent
+    ) {
+        List<WorkflowAiResourceCatalogService.CatalogSearchResult> uniqueResults =
+                discoveredCatalogResults.stream()
+                        .filter(Objects::nonNull)
+                        .collect(java.util.stream.Collectors.toMap(
+                                WorkflowAiResourceCatalogService.CatalogSearchResult::uri,
+                                result -> result,
+                                (first, ignored) -> first,
+                                java.util.LinkedHashMap::new
+                        ))
+                        .values().stream().toList();
+        if (attempt == null
+                || !attempt.parsed().hasDefinitionCandidate()
+                || uniqueResults.size() != 1) {
+            return new GroundingResult(attempt, 0, 0);
+        }
+        try {
+            JsonNode root = objectMapper.readTree(attempt.cleaned());
+            List<ObjectNode> taskNodes = new ArrayList<>();
+            collectTaskNodes(root, taskNodes);
+            Set<String> candidateResources = taskNodes.stream()
+                    .map(node -> node.path("Resource"))
+                    .filter(JsonNode::isTextual)
+                    .map(JsonNode::asText)
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+            WorkflowAiResourceCatalogService.CatalogSearchResult catalogResult = uniqueResults.get(0);
+            String groundedResource = catalogResult.uri();
+            if (candidateResources.size() != 1) {
+                return new GroundingResult(attempt, 0, 0);
+            }
+            String inventedResource = candidateResources.iterator().next();
+            int replacements = 0;
+            int argumentsAdded = 0;
+            for (ObjectNode taskNode : taskNodes) {
+                if (inventedResource.equals(taskNode.path("Resource").asText())) {
+                    if (!groundedResource.equals(inventedResource)) {
+                        taskNode.put("Resource", groundedResource);
+                        replacements++;
+                    }
+                    argumentsAdded += addUnambiguousRequiredPathArgument(
+                            taskNode, catalogResult, toolIntent);
+                }
+            }
+            if (replacements == 0 && argumentsAdded == 0) {
+                return new GroundingResult(attempt, 0, 0);
+            }
+            String grounded = serialize(root);
+            log.info("Workflow AI grounded invented Task Resource {} to exact catalog URI {}",
+                    inventedResource, groundedResource);
+            return new GroundingResult(
+                    new AssistantAttempt(
+                            attempt.modelResponse(),
+                            grounded,
+                            attempt.thinkingExtraction(),
+                            parseAssistantResponse(grounded)
+                    ),
+                    replacements,
+                    argumentsAdded
+            );
+        } catch (Exception exception) {
+            log.debug("Could not deterministically ground the final Task resource", exception);
+            return new GroundingResult(attempt, 0, 0);
+        }
+    }
+
+    private void mergeCatalogResults(
+            List<WorkflowAiResourceCatalogService.CatalogSearchResult> target,
+            List<WorkflowAiResourceCatalogService.CatalogSearchResult> additions
+    ) {
+        if (additions == null || additions.isEmpty()) {
+            return;
+        }
+        Set<String> existingUris = target.stream()
+                .map(WorkflowAiResourceCatalogService.CatalogSearchResult::uri)
+                .collect(java.util.stream.Collectors.toSet());
+        additions.stream()
+                .filter(Objects::nonNull)
+                .filter(result -> existingUris.add(result.uri()))
+                .forEach(target::add);
+    }
+
+    private int addUnambiguousRequiredPathArgument(
+            ObjectNode taskNode,
+            WorkflowAiResourceCatalogService.CatalogSearchResult catalogResult,
+            String toolIntent
+    ) {
+        if (!schemaRequiresStringArgument(catalogResult.argumentsSchema(), "path")) {
+            return 0;
+        }
+        JsonNode currentArguments = taskNode.get("Arguments");
+        if (currentArguments != null && !currentArguments.isObject()) {
+            return 0;
+        }
+        if (currentArguments != null && currentArguments.has("path")) {
+            return 0;
+        }
+        Set<String> pathLiterals = new LinkedHashSet<>();
+        Matcher matcher = FILE_PATH_LITERAL.matcher(toolIntent == null ? "" : toolIntent);
+        while (matcher.find()) {
+            pathLiterals.add(matcher.group(1));
+        }
+        if (pathLiterals.size() != 1) {
+            return 0;
+        }
+        ObjectNode arguments = currentArguments instanceof ObjectNode object
+                ? object
+                : taskNode.putObject("Arguments");
+        arguments.put("path", pathLiterals.iterator().next());
+        return 1;
+    }
+
+    private boolean schemaRequiresStringArgument(String schemaText, String argumentName) {
+        if (schemaText == null || schemaText.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode schema = objectMapper.readTree(schemaText);
+            boolean required = schema.path("required").isArray()
+                    && java.util.stream.StreamSupport.stream(
+                            schema.path("required").spliterator(), false)
+                    .anyMatch(node -> argumentName.equals(node.asText()));
+            JsonNode property = schema.path("properties").path(argumentName);
+            return required && "string".equals(property.path("type").asText());
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private void collectTaskNodes(JsonNode node, List<ObjectNode> taskNodes) {
+        if (node == null) {
+            return;
+        }
+        if (node.isObject()) {
+            if ("Task".equals(node.path("Type").asText())
+                    && node.path("Resource").isTextual()) {
+                taskNodes.add((ObjectNode) node);
+            }
+            node.properties().forEach(entry -> collectTaskNodes(entry.getValue(), taskNodes));
+        } else if (node.isArray()) {
+            node.forEach(child -> collectTaskNodes(child, taskNodes));
+        }
+    }
+
+    private String assistantAttemptFingerprint(AssistantAttempt attempt) {
+        if (attempt == null) {
+            return "";
+        }
+        JsonNode definition = attempt.parsed().aslDefinition() != null
+                ? attempt.parsed().aslDefinition()
+                : attempt.parsed().draftWorkflowPayload() == null
+                        ? null : attempt.parsed().draftWorkflowPayload().definition();
+        if (definition != null) {
+            return serialize(definition);
+        }
+        try {
+            return serialize(objectMapper.readTree(attempt.cleaned()));
+        } catch (Exception ignored) {
+            return attempt.cleaned() == null ? "" : attempt.cleaned().trim();
+        }
+    }
+
+    private ChatRequest toolChatRequest(List<ChatMessage> messages, boolean requireTool) {
+        ChatRequest.Builder request = ChatRequest.builder()
+                .messages(messages)
+                .toolSpecifications(workflowToolSpecifications());
+        if (requireTool) {
+            request.toolChoice(ToolChoice.REQUIRED);
+        }
+        return request.build();
+    }
+
+    private List<ToolSpecification> workflowToolSpecifications() {
+        ToolSpecification searchCatalog = ToolSpecification.builder()
+                .name("search_catalog")
+                .description("Search live Voyager Task resources. Use returned URI and argument schema exactly.")
+                .parameters(JsonObjectSchema.builder()
+                        .addStringProperty("query", "Natural-language capability to find")
+                        .addIntegerProperty("limit", "Maximum matches, from 1 to 8")
+                        .required("query")
+                        .additionalProperties(false)
+                        .build())
+                .build();
+        ToolSpecification validateAsl = ToolSpecification.builder()
+                .name("validate_asl")
+                .description("Validate a complete JSONata-only Voyager ASL definition, runtime support, and resources.")
+                .parameters(JsonObjectSchema.builder()
+                        .addProperty("definition", JsonObjectSchema.builder()
+                                .description("Complete ASL machine with StartAt and States")
+                                .additionalProperties(true)
+                                .build())
+                        .required("definition")
+                        .additionalProperties(false)
+                        .build())
+                .build();
+        return List.of(searchCatalog, validateAsl);
+    }
+
+    private WorkflowToolResult executeWorkflowTool(ToolExecutionRequest request) {
+        try {
+            JsonNode arguments = objectMapper.readTree(request.arguments());
+            return switch (request.name()) {
+                case "search_catalog" -> {
+                    String query = requireText(arguments.path("query").asText(null), "query");
+                    int limit = arguments.path("limit").isIntegralNumber()
+                            ? arguments.path("limit").asInt() : MAX_CATALOG_RESULTS;
+                    List<WorkflowAiResourceCatalogService.CatalogSearchResult> matches =
+                            resourceCatalogService.searchCatalog(query, limit);
+                    Set<String> uris = matches.stream()
+                            .map(WorkflowAiResourceCatalogService.CatalogSearchResult::uri)
+                            .collect(java.util.stream.Collectors.toSet());
+                    yield new WorkflowToolResult(
+                            serialize(java.util.Map.of("matches", matches)),
+                            uris, matches, "OK:" + matches.size() + "_MATCHES", matches.size());
+                }
+                case "validate_asl" -> {
+                    JsonNode definition = arguments.get("definition");
+                    if (definition == null || !definition.isObject()) {
+                        yield new WorkflowToolResult(serialize(java.util.Map.of(
+                                "valid", false,
+                                "issues", List.of("[ASL] DEFINITION_REQUIRED at $: definition must be an object")
+                                )), Set.of(), List.of(), "INVALID", 0);
+                    }
+                    List<String> issues = validateExecutableDefinition(definition);
+                    yield new WorkflowToolResult(
+                            serialize(java.util.Map.of("valid", issues.isEmpty(), "issues", issues)),
+                            Set.of(), List.of(),
+                            issues.isEmpty() ? "VALID" : "INVALID:" + issues.size() + "_ISSUES",
+                            issues.size());
+                }
+                default -> new WorkflowToolResult(serialize(java.util.Map.of(
+                                "error", "UNKNOWN_TOOL", "message", "Unsupported tool: " + request.name())),
+                        Set.of(), List.of(), "UNKNOWN_TOOL", 0);
+            };
+        } catch (Exception exception) {
+            return new WorkflowToolResult(serialize(java.util.Map.of(
+                            "error", "INVALID_TOOL_ARGUMENTS",
+                            "message", exception.getMessage() == null
+                                    ? "Tool arguments were invalid" : exception.getMessage()
+                    )), Set.of(), List.of(), "INVALID_ARGUMENTS", 0);
+        }
+    }
+
+    private List<String> toolFinalResponseIssues(
+            ParsedAssistantResponse parsed,
+            Set<String> discoveredResourceUris,
+            boolean catalogSearchConfirmedNoMatch
+    ) {
+        if (!parsed.structured()) {
+            return List.of("[TOOL_LOOP] INVALID_FINAL_RESPONSE at $: return one complete Voyager JSON response");
+        }
+        JsonNode definition = parsed.aslDefinition() != null
+                ? parsed.aslDefinition()
+                : parsed.draftWorkflowPayload() == null
+                        ? null : parsed.draftWorkflowPayload().definition();
+        if (definition == null) {
+            if (parsed.hasResourcePlan() && !catalogSearchConfirmedNoMatch) {
+                if (discoveredResourceUris.isEmpty()) {
+                    return List.of("[TOOL_LOOP] CATALOG_NOT_SEARCHED at $.resourcePlan: call search_catalog for the proposed missing capability before creating a resource");
+                }
+                return List.of(
+                        "[TOOL_LOOP] MATCHING_RESOURCE_AVAILABLE at $.resourcePlan: "
+                                + "do not propose a function or MCP requirement while matching "
+                                + "registered Tasks are available. Generate ASL with one of these "
+                                + "exact searched URIs: "
+                                + discoveredResourceUris.stream().sorted().toList()
+                );
+            }
+            return List.of();
+        }
+
+        List<String> issues = new ArrayList<>(validateExecutableDefinition(definition));
+        // This is intentionally re-run on the exact parsed final tree even when the model already
+        // called validate_asl. Provider tool-choice enforcement is not reliable for smaller local
+        // models, so acceptance depends on Voyager's validator, never on model compliance.
+        Set<String> taskResources = new LinkedHashSet<>();
+        collectTaskResources(definition, taskResources);
+        taskResources.stream()
+                .filter(resource -> !discoveredResourceUris.contains(resource))
+                .forEach(resource -> issues.add(
+                        "[TOOL_LOOP] RESOURCE_NOT_SEARCHED at $: search_catalog did not return " + resource));
+        return issues.stream().distinct().toList();
+    }
+
+    private List<String> validateAssistantAttemptForTurn(
+            WorkflowAiConversation conversation,
+            ParsedAssistantResponse parsed,
+            boolean schedulingRequested,
+            boolean generalTurn,
+            boolean artifactRequired,
+            TurnTelemetry telemetry
+    ) {
+        long validationStartedAt = System.nanoTime();
+        List<String> issues = new ArrayList<>(validateAssistantAttempt(
+                conversation, parsed, schedulingRequested, generalTurn, artifactRequired));
+        if (telemetry.enforceToolGrounding) {
+            issues.addAll(toolFinalResponseIssues(
+                    parsed,
+                    telemetry.discoveredResourceUris,
+                    telemetry.catalogSearchConfirmedNoMatch
+            ));
+        }
+        List<String> distinctIssues = issues.stream().distinct().toList();
+        if (telemetry.enforceToolGrounding && parsed.hasDefinitionCandidate()) {
+            JsonNode definition = parsed.aslDefinition() != null
+                    ? parsed.aslDefinition()
+                    : parsed.draftWorkflowPayload().definition();
+            String fingerprint = serialize(definition);
+            if (telemetry.validatedAttemptFingerprints.add(fingerprint)) {
+                telemetry.trace(
+                        "validate_asl",
+                        "AUTOMATIC",
+                        distinctIssues.isEmpty()
+                                ? "VALID"
+                                : "INVALID:" + distinctIssues.size() + "_ISSUES",
+                        validationStartedAt,
+                        distinctIssues.size()
+                );
+                telemetry.automaticToolCalls++;
+            }
+        }
+        return distinctIssues;
+    }
+
+    private void collectTaskResources(JsonNode node, Set<String> resources) {
+        if (node == null) {
+            return;
+        }
+        if (node.isObject()) {
+            if ("Task".equals(node.path("Type").asText()) && node.path("Resource").isTextual()) {
+                resources.add(node.path("Resource").asText());
+            }
+            node.properties().forEach(entry -> collectTaskResources(entry.getValue(), resources));
+        } else if (node.isArray()) {
+            node.forEach(child -> collectTaskResources(child, resources));
+        }
+    }
+
+    private boolean isToolCallingRejection(RuntimeException exception) {
+        for (Throwable current = exception; current != null; current = current.getCause()) {
+            String message = current.getMessage() == null
+                    ? "" : current.getMessage().toLowerCase(Locale.ROOT);
+            if (message.contains("tool_choice")
+                    || message.contains("tool calling")
+                    || message.contains("tool_calls")
+                    || message.contains("tools is not supported")
+                    || message.contains("unknown field: tools")
+                    || message.contains("unrecognized field \"tools\"")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1875,6 +2632,11 @@ public class WorkflowAiConversationService {
             });
 
             return awaitCompletion(completion, lastActivityAt, firstTokenSeen, blockingModel, messages);
+        }
+
+        private void emitStage(String stageLabel) {
+            pass++;
+            streamBroker.emitStage(sessionId, conversationId, stageLabel, pass);
         }
 
         private ChatRequest streamingRequest(List<ChatMessage> messages) {
@@ -2518,7 +3280,10 @@ public class WorkflowAiConversationService {
             List<ChatMessage> messages,
             boolean generalTurn,
             boolean schedulingRequested,
-            boolean artifactRequired
+            boolean artifactRequired,
+            boolean toolCalling,
+            String toolIntent,
+            int promptCatalogTokensPerCall
     ) {
     }
 
@@ -2546,6 +3311,13 @@ public class WorkflowAiConversationService {
                 conversation,
                 intentMessage
         );
+        boolean useToolCalling = !generalTurn
+                && toolCallingEnabled
+                && resourceCatalogService.resourceCount() >= toolCallingMinCatalogSize;
+        if (useToolCalling) {
+            log.info("Workflow AI tool loop enabled for turn; catalog threshold={}",
+                    toolCallingMinCatalogSize);
+        }
         // A plain-chat turn uses the slim prompt (so a small model stops deflecting into "what's the
         // workflow name?") and skips the catalog entirely. Building turns get the full builder prompt.
         String systemPrompt = generalTurn ? GENERAL_CHAT_SYSTEM_PROMPT : SYSTEM_PROMPT;
@@ -2555,8 +3327,20 @@ public class WorkflowAiConversationService {
         // prefix (Ollama, vLLM, SGLang) only re-evaluates the new tail. Everything that changes per
         // turn — stage, task, latest ASL, settings — is emitted last, after the chat history, where it
         // also lands closest to where the model starts generating.
-        String catalogContext = generalTurn ? null : resourceCatalogContext(intentMessage);
+        String catalogContext = generalTurn || useToolCalling
+                ? null : resourceCatalogContext(intentMessage);
+        int promptCatalogTokensPerCall = useToolCalling
+                ? resourceCatalogService.estimatePromptCatalogTokens(intentMessage) : 0;
         String turnContext = turnContext(conversation, task);
+        if (useToolCalling) {
+            turnContext += """
+
+                    Resource discovery is tool-driven for this turn. Use search_catalog for every
+                    external action instead of inventing a Resource URI. Before returning ASL, call
+                    validate_asl with the exact final definition and correct every reported issue.
+                    These tools are read-only; function creation still belongs in resourcePlan.
+                    """;
+        }
         String exactIdentifiers = exactSourceIdentifiers(effectiveHistory);
         if (exactIdentifiers != null) {
             turnContext += "\nExact source identifiers (verbatim):\n" + exactIdentifiers;
@@ -2595,7 +3379,10 @@ public class WorkflowAiConversationService {
                 messages,
                 generalTurn,
                 schedulingRequested(conversation, intentMessage),
-                artifactRequired(conversation, intentMessage)
+                artifactRequired(conversation, intentMessage),
+                useToolCalling,
+                intentMessage,
+                promptCatalogTokensPerCall
         );
     }
 
@@ -2653,7 +3440,9 @@ public class WorkflowAiConversationService {
 
     private boolean matchesExplicitArtifactRequest(String value) {
         String text = optionalText(value);
-        return text != null && EXPLICIT_ARTIFACT_REQUEST.matcher(text).matches();
+        return text != null && (EXPLICIT_ARTIFACT_REQUEST.matcher(text).matches()
+                || (BUILD_IMPERATIVE_OPENER.matcher(text).matches()
+                        && WORKFLOW_ARTIFACT_NOUN.matcher(text).matches()));
     }
 
     /**
@@ -3412,6 +4201,7 @@ public class WorkflowAiConversationService {
                         ? null
                         : message.getRegeneratedFromMessage().getId(),
                 readMessageResourcePlan(message),
+                readMessageToolTelemetry(message),
                 message.getCreatedAt()
         );
     }
@@ -3487,6 +4277,36 @@ public class WorkflowAiConversationService {
             metadata.put("resourcePlanSuppressed", true);
         }
         return serialize(metadata);
+    }
+
+    private String mergeToolTelemetryMetadata(
+            String existingMetadata,
+            WorkflowAiToolTelemetryDTO telemetry
+    ) {
+        try {
+            JsonNode existing = existingMetadata == null || existingMetadata.isBlank()
+                    ? null : objectMapper.readTree(existingMetadata);
+            ObjectNode metadata = existing != null && existing.isObject()
+                    ? (ObjectNode) existing : objectMapper.createObjectNode();
+            metadata.set("toolTelemetry", objectMapper.valueToTree(telemetry));
+            return objectMapper.writeValueAsString(metadata);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Could not persist tool telemetry", exception);
+        }
+    }
+
+    private WorkflowAiToolTelemetryDTO readMessageToolTelemetry(WorkflowAiMessage message) {
+        if (message.getMetadataJson() == null || message.getMetadataJson().isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(message.getMetadataJson()).path("toolTelemetry");
+            return node.isMissingNode() || node.isNull()
+                    ? null : objectMapper.treeToValue(node, WorkflowAiToolTelemetryDTO.class);
+        } catch (Exception exception) {
+            log.debug("Could not read workflow tool telemetry", exception);
+            return null;
+        }
     }
 
     private WorkflowAiResourcePlanDTO normalizeResourcePlan(
@@ -3953,6 +4773,132 @@ public class WorkflowAiConversationService {
                     && cleaned.contains("\"functions\"")
                     && (cleaned.contains("\"sourceCode\"")
                     || cleaned.contains("\"languageId\""));
+        }
+    }
+
+    private record WorkflowToolResult(
+            String payload,
+            Set<String> resourceUris,
+            List<WorkflowAiResourceCatalogService.CatalogSearchResult> catalogResults,
+            String status,
+            int resultCount
+    ) {
+    }
+
+    private record GroundingResult(
+            AssistantAttempt attempt,
+            int replacements,
+            int argumentsAdded
+    ) {
+    }
+
+    private static final class TurnTelemetry {
+        private final boolean toolLoopUsed;
+        private final int promptCatalogTokensPerCall;
+        private final int toolSchemaTokensPerCall;
+        private int modelCalls;
+        private int toolModelCalls;
+        private int nativeToolCalls;
+        private int automaticToolCalls;
+        private int rejectedFinals;
+        private int inputTokens;
+        private int outputTokens;
+        private int totalTokens;
+        private int toolSchemaModelCalls;
+        private int currentToolResultTokens;
+        private int resentToolResultTokens;
+        private boolean hasTokenUsage;
+        private String fallbackReason;
+        private boolean enforceToolGrounding;
+        private boolean catalogSearchConfirmedNoMatch;
+        private boolean repeatedInvalidResponse;
+        private final Set<String> discoveredResourceUris = new HashSet<>();
+        private final Set<String> validatedAttemptFingerprints = new HashSet<>();
+        private final List<WorkflowAiToolTelemetryDTO.ToolCall> calls = new ArrayList<>();
+
+        private TurnTelemetry(
+                boolean toolLoopUsed,
+                int promptCatalogTokensPerCall,
+                int toolSchemaTokensPerCall
+        ) {
+            this.toolLoopUsed = toolLoopUsed;
+            this.enforceToolGrounding = toolLoopUsed;
+            this.promptCatalogTokensPerCall = promptCatalogTokensPerCall;
+            this.toolSchemaTokensPerCall = toolSchemaTokensPerCall;
+        }
+
+        private void acceptFinal() {
+            repeatedInvalidResponse = false;
+            if ("DUPLICATE_INVALID_RESPONSE".equals(fallbackReason)
+                    || "TOOL_ROUND_LIMIT".equals(fallbackReason)) {
+                fallbackReason = null;
+            }
+        }
+
+        private void recordModel(ChatResponse response, boolean toolModelCall) {
+            recordModel(response, toolModelCall, false);
+        }
+
+        private void recordModel(
+                ChatResponse response,
+                boolean toolModelCall,
+                boolean toolSchemaIncluded
+        ) {
+            modelCalls++;
+            if (toolModelCall) {
+                toolModelCalls++;
+                resentToolResultTokens += currentToolResultTokens;
+            }
+            if (toolSchemaIncluded) {
+                toolSchemaModelCalls++;
+            }
+            TokenUsage usage = response == null ? null : response.tokenUsage();
+            if (usage == null) {
+                return;
+            }
+            hasTokenUsage = true;
+            inputTokens += value(usage.inputTokenCount());
+            outputTokens += value(usage.outputTokenCount());
+            totalTokens += usage.totalTokenCount() == null
+                    ? value(usage.inputTokenCount()) + value(usage.outputTokenCount())
+                    : usage.totalTokenCount();
+        }
+
+        private void addToolResult(String payload) {
+            if (payload != null && !payload.isBlank()) {
+                currentToolResultTokens += 4 + (payload.length() + 3) / 4;
+            }
+        }
+
+        private void trace(String name, String mode, String status, long startedAt, int resultCount) {
+            calls.add(new WorkflowAiToolTelemetryDTO.ToolCall(
+                    name,
+                    mode,
+                    status,
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt),
+                    resultCount
+            ));
+        }
+
+        private TokenUsage tokenUsage() {
+            return hasTokenUsage ? new TokenUsage(inputTokens, outputTokens, totalTokens) : null;
+        }
+
+        private WorkflowAiToolTelemetryDTO toDto() {
+            int estimatedSaved = toolLoopUsed
+                    ? Math.max(0, promptCatalogTokensPerCall * toolModelCalls
+                            - toolSchemaTokensPerCall * toolSchemaModelCalls
+                            - resentToolResultTokens)
+                    : 0;
+            return new WorkflowAiToolTelemetryDTO(
+                    toolLoopUsed, modelCalls, toolModelCalls, nativeToolCalls,
+                    automaticToolCalls, rejectedFinals, inputTokens, outputTokens, totalTokens,
+                    promptCatalogTokensPerCall, toolSchemaTokensPerCall, estimatedSaved,
+                    fallbackReason, List.copyOf(calls));
+        }
+
+        private static int value(Integer value) {
+            return value == null ? 0 : value;
         }
     }
 

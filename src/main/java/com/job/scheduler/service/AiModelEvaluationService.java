@@ -319,6 +319,7 @@ public class AiModelEvaluationService {
                 case "asl" -> gradeAsl(response, metrics);
                 case "mcp" -> gradeMcp(response, metrics);
                 case "function" -> gradeFunction(response, metrics);
+                case "tool_calling" -> gradeToolCalling(response, metrics);
                 case "safety" -> {
                     gradeSafety(response, metrics);
                     gradeMcp(response, metrics);
@@ -502,6 +503,35 @@ public class AiModelEvaluationService {
         gradeSafety(response, metrics);
     }
 
+    private void gradeToolCalling(
+            WorkflowAiResponseDTO response,
+            Map<String, MetricResult> metrics
+    ) {
+        var telemetry = response.assistantMessage() == null
+                ? null : response.assistantMessage().toolTelemetry();
+        boolean used = telemetry != null && telemetry.toolLoopUsed();
+        metrics.put("tool_loop_used", used
+                ? MetricResult.success()
+                : MetricResult.failure("The turn did not use the bounded tool loop."));
+        metrics.put("tool_native_or_fallback", used
+                        && (telemetry.nativeToolCalls() > 0 || telemetry.automaticToolCalls() > 0)
+                ? MetricResult.success()
+                : MetricResult.failure("No native or automatic catalog tool call was recorded."));
+        metrics.put("tool_loop_bounded", used && telemetry.toolModelCalls() <= 6
+                ? MetricResult.success()
+                : MetricResult.failure("The tool loop was absent or exceeded six model rounds."));
+        metrics.put("tool_final_validation_clean", used
+                        && response.validationIssues() != null
+                        && response.validationIssues().isEmpty()
+                ? MetricResult.success()
+                : MetricResult.failure("The tool-driven final response did not pass exact validation."));
+        boolean hasGroundedTask = resources(response.aslDefinition()).stream()
+                .anyMatch(resource -> resource.startsWith("voyager://"));
+        metrics.put("tool_selection_grounded", used && hasGroundedTask
+                ? MetricResult.success()
+                : MetricResult.failure("No grounded Voyager Task URI was returned."));
+    }
+
     private void gradeSafety(
             WorkflowAiResponseDTO response,
             Map<String, MetricResult> metrics
@@ -649,6 +679,17 @@ public class AiModelEvaluationService {
                 response.validationIssues() == null ? -1 : response.validationIssues().size()
         );
         summary.put("hasAsl", response.aslDefinition() != null);
+        if (response.assistantMessage() != null
+                && response.assistantMessage().toolTelemetry() != null) {
+            var telemetry = response.assistantMessage().toolTelemetry();
+            summary.put("toolLoopUsed", telemetry.toolLoopUsed());
+            summary.put("nativeToolCalls", telemetry.nativeToolCalls());
+            summary.put("automaticToolCalls", telemetry.automaticToolCalls());
+            summary.put("toolModelCalls", telemetry.toolModelCalls());
+            summary.put("toolRejectedFinals", telemetry.rejectedFinals());
+            summary.put("toolFallbackReason", telemetry.fallbackReason());
+            summary.put("estimatedNetInputTokensSaved", telemetry.estimatedNetInputTokensSaved());
+        }
         summary.put(
                 "proposedFunctionCount",
                 response.resourcePlan() == null

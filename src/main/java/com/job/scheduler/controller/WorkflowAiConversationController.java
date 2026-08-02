@@ -19,6 +19,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.Header;
+import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.annotation.SendToUser;
@@ -257,6 +258,20 @@ public class WorkflowAiConversationController {
                         request.modelConfigId(),
                         request.definition(),
                         request.definitionText()
+        ));
+    }
+
+    @MessageMapping("/workflow-ai/messages/{messageId}/regenerate")
+    @SendToUser("/queue/workflow-ai")
+    public WorkflowAiResponseDTO regenerateMessageSocket(
+            @DestinationVariable UUID messageId,
+            @Payload WorkflowAiRegenerateRequestDTO request,
+            @Header("simpSessionId") String sessionId
+    ) {
+        return streamBroker.withSession(sessionId, () ->
+                workflowAiConversationService.regenerateMessage(
+                        messageId,
+                        request == null ? null : request.modelConfigId()
                 ));
     }
 

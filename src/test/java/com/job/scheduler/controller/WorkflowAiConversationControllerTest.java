@@ -4,6 +4,7 @@ import com.job.scheduler.dto.WorkflowAiChatRequestDTO;
 import com.job.scheduler.dto.WorkflowAiConversationDetailDTO;
 import com.job.scheduler.dto.WorkflowAiConversationSummaryDTO;
 import com.job.scheduler.dto.WorkflowAiReviewAslRequestDTO;
+import com.job.scheduler.dto.WorkflowAiRegenerateRequestDTO;
 import com.job.scheduler.dto.WorkflowAiStartRequestDTO;
 import com.job.scheduler.dto.WorkflowAiResponseDTO;
 import com.job.scheduler.dto.WorkflowAiAcceptPlanRequestDTO;
@@ -362,6 +363,18 @@ class WorkflowAiConversationControllerTest {
 
         assertThat(controller.continueConversationSocket(request, SESSION_ID).conversationName())
                 .isEqualTo("Pipeline");
+    }
+
+    @Test
+    void regenerateMessageSocketDelegatesToService() {
+        UUID messageId = UUID.randomUUID();
+        UUID modelConfigId = UUID.randomUUID();
+        WorkflowAiRegenerateRequestDTO request =
+                new WorkflowAiRegenerateRequestDTO(modelConfigId);
+        when(service.regenerateMessage(messageId, modelConfigId)).thenReturn(response("Pipeline"));
+
+        assertThat(controller.regenerateMessageSocket(messageId, request, SESSION_ID)
+                .conversationName()).isEqualTo("Pipeline");
     }
 
     @Test

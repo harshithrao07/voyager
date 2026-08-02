@@ -12,7 +12,7 @@ export function AiSettingsPage() {
   const management = useAiModelManagement();
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-1 flex-col p-4 md:p-6">
+    <div className="flex h-full min-h-0 w-full flex-1 flex-col">
       <div className="flex min-h-0 flex-1">
         <ModelSettingsModal
           embedded
@@ -27,6 +27,8 @@ export function AiSettingsPage() {
           localModelRole={management.localModelRole}
           onLocalModelRoleChange={management.setLocalModelRole}
           onAddLocalModel={management.addLocalModel}
+          onDiscoverLocalModels={management.discoverLocalModels}
+          discoveringModels={management.discoveringModels}
           addingModel={management.addingModel}
           localCredentialRef={management.localCredentialRef}
           onLocalCredentialRefChange={management.setLocalCredentialRef}
@@ -42,6 +44,8 @@ export function AiSettingsPage() {
           apiCredentialRef={management.apiCredentialRef}
           onApiCredentialRefChange={management.setApiCredentialRef}
           onAddApiModel={management.addApiModel}
+          onDiscoverApiModelList={management.discoverApiModelList}
+          onAddSelectedApiModels={management.addSelectedApiModels}
           apiActionMessage={management.apiActionMessage}
           apiActionSuccess={management.apiActionSuccess}
           endpointGroups={management.endpointGroups}

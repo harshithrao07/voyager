@@ -1,5 +1,6 @@
 package com.job.scheduler.controller;
 
+import com.job.scheduler.dto.AiModelAvailableDTO;
 import com.job.scheduler.dto.AiModelConfigDTO;
 import com.job.scheduler.dto.AiModelConfigRequestDTO;
 import com.job.scheduler.dto.AiModelDiscoverRequestDTO;
@@ -61,6 +62,16 @@ public class AiModelController {
         return ResponseEntity.ok(aiModelConfigService.testLocalModel(request));
     }
 
+    @PostMapping("/models/available")
+    public ResponseEntity<List<AiModelAvailableDTO>> listAvailableModels(
+            @Valid @RequestBody AiModelDiscoverRequestDTO request
+    ) {
+        return ResponseEntity.ok(aiModelConfigService.listAvailableModels(
+                request.baseUrl(),
+                request.credential()
+        ));
+    }
+
     @PostMapping("/models/discover")
     public ResponseEntity<List<AiModelConfigDTO>> discoverModels(
             @Valid @RequestBody AiModelDiscoverRequestDTO request
@@ -69,7 +80,8 @@ public class AiModelController {
                 request.baseUrl(),
                 request.credential(),
                 request.providerType(),
-                request.role()
+                request.role(),
+                request.modelNames()
         ));
     }
 

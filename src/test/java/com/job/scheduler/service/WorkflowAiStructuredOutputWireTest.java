@@ -6,6 +6,9 @@ import com.sun.net.httpserver.HttpServer;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ToolChoice;
+import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -19,6 +22,47 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class WorkflowAiStructuredOutputWireTest {
     private static final String KEY = "xYZP4KD/T0APHH/9GMLiO9vt8D/GFCJXwLzh5ALiGV0=";
+
+    @Test
+    void sendsRequiredToolChoiceOnTheWire() throws Exception {
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] body = """
+                    {"id":"completion-1","object":"chat.completion","created":1,"model":"wire-model",
+                     "choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            AiModelConfig config = new AiModelConfig();
+            config.setProviderType(AiModelProviderType.OPENAI_COMPATIBLE_LOCAL);
+            config.setBaseUrl("http://localhost:" + server.getAddress().getPort() + "/v1");
+            config.setModelName("wire-model");
+            ChatModel model = new WorkflowAiModelResolver(new SecretCipher(KEY)).resolve(config);
+            model.chat(ChatRequest.builder()
+                    .messages(List.of(UserMessage.from("search")))
+                    .toolSpecifications(ToolSpecification.builder()
+                            .name("search_catalog")
+                            .parameters(JsonObjectSchema.builder()
+                                    .addStringProperty("query").required("query").build())
+                            .build())
+                    .toolChoice(ToolChoice.REQUIRED)
+                    .build());
+
+            JsonNode sent = new ObjectMapper().readTree(requestBody.get());
+            assertThat(sent.path("tool_choice").asText()).isEqualTo("required");
+            assertThat(sent.path("tools").get(0).path("function").path("name").asText())
+                    .isEqualTo("search_catalog");
+        } finally {
+            server.stop(0);
+        }
+    }
 
     @Test
     void sendsTheOpenAiStrictJsonSchemaEnvelopeOnTheWire() throws Exception {

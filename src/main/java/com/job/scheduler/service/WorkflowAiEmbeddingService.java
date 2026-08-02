@@ -1,6 +1,7 @@
 package com.job.scheduler.service;
 
 import com.job.scheduler.entity.AiModelConfig;
+import com.job.scheduler.entity.EmbeddingVector;
 import com.job.scheduler.entity.ResourceEmbedding;
 import com.job.scheduler.enums.ResourceEmbeddingType;
 import com.job.scheduler.repository.ResourceEmbeddingRepository;
@@ -20,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
@@ -45,9 +47,6 @@ public class WorkflowAiEmbeddingService {
 
     @Value("${scheduler.workflow-ai.embedding.enabled:true}")
     private boolean enabled;
-
-    @Value("${scheduler.workflow-ai.embedding.dimensions:768}")
-    private int dimensions;
 
     @Value("${scheduler.workflow-ai.embedding.min-catalog-size:12}")
     private int minCatalogSize;
@@ -105,10 +104,16 @@ public class WorkflowAiEmbeddingService {
             EmbeddingModel embeddingModel = modelResolver.resolveEmbeddingModel(model.get());
             Response<Embedding> response = embeddingModel.embed(text);
             float[] vector = response.content().vector();
-            if (vector.length != dimensions) {
-                log.warn("Embedding model {} returned {} dims, expected {}; skipping",
-                        model.get().getModelName(), vector.length, dimensions);
+            if (vector.length > EmbeddingVector.DIMENSIONS) {
+                log.warn("Embedding model {} returned {} dims, exceeds max {}; skipping",
+                        model.get().getModelName(), vector.length, EmbeddingVector.DIMENSIONS);
                 return Optional.empty();
+            }
+            // Zero-pad shorter model outputs up to the fixed column width. Trailing zeros do not
+            // affect cosine distance, so any model of DIMENSIONS or fewer stays comparable without a
+            // schema change. Arrays.copyOf fills the extra slots with 0f.
+            if (vector.length < EmbeddingVector.DIMENSIONS) {
+                vector = Arrays.copyOf(vector, EmbeddingVector.DIMENSIONS);
             }
             return Optional.of(vector);
         } catch (RuntimeException exception) {
@@ -185,7 +190,7 @@ public class WorkflowAiEmbeddingService {
         embedding.setResourceId(resourceId);
         embedding.setEmbedding(vector.get());
         embedding.setEmbeddingModel(modelName);
-        embedding.setDimensions(dimensions);
+        embedding.setDimensions(EmbeddingVector.DIMENSIONS);
         embedding.setSourceHash(hash);
         embedding.setEmbeddedAt(Instant.now());
         embeddingRepository.save(embedding);

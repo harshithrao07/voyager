@@ -122,14 +122,61 @@ Suggested arc: evals → constrained decoding → distillation / tool-calling.
 
 ### New frontiers
 
-- [ ] **Real tool-calling instead of a text catalog** — expose `search_catalog`, `validate_asl`,
-  `create_function` as tools the model calls in a ReAct loop, so it queries for resources and checks
-  its own work mid-generation rather than reading the whole catalog blob.
-- [ ] **Semantic caching + RAG** — embed workflows/functions/executions for catalog retrieval, plus
-  semantic response caching (a similar request adapts a prior workflow). Embeddings, vector search,
-  reranking.
-- [ ] **LLM observability / tracing** — extend the per-message token/duration logging into full
-  tracing: prompt versions, cost, latency, failure taxonomy (Langfuse/OpenLLMetry-style).
+- [x] **Real tool-calling instead of a text catalog** — large catalogs use a bounded read-only
+  loop with `search_catalog` and `validate_asl`; small catalogs and endpoints that reject tools retain
+  the prompt-catalog fallback. Function creation deliberately remains an approval-gated resource
+  proposal followed by safety checks and Judge0 qualification rather than a model-authorized write.
+  Every turn now persists aggregate multi-pass tokens plus per-tool mode/status/duration, rejection
+  and fallback traces, and an estimated prompt-catalog token reduction. The chat UI exposes those
+  details and live `Searching the catalog` / `Validating ASL` stages. The registered-model eval suite
+  covers native-or-automatic tool use, bounded rounds, exact final validation, and grounded Task URIs.
+- [x] **Semantic caching + RAG** — catalog retrieval is delivered (see **Embeddings / RAG catalog
+  matching** above). Semantic *response* caching is now in place via the adaptation path: saving an
+  AI-authored workflow embeds its instruction and stores the validated ASL
+  (`WorkflowSolutionCacheService.recordSolution`, called from `saveWorkspaceWorkflow`); starting a
+  new conversation embeds the instruction, retrieves the nearest prior solution
+  (`workflow_solution_embeddings`, cosine distance, reuses the default EMBEDDING model + shared
+  vector column), and — within `adapt-max-distance` — seeds the prompt with it as an adaptation
+  template (`startConversation`). The model still regenerates and the result is validated against the
+  live catalog, so a stale entry is self-healing and never served verbatim. Enabled by default
+  (`scheduler.workflow-ai.solution-cache.*`); `adapt-max-distance` calibrated to 0.35 against
+  mxbai-embed-large (related instructions ≤0.23, unrelated ≥0.56). Verified live: read-path query
+  matched a similar request at 0.078 and rejected an unrelated one at 0.58. **Bug fixed in passing:**
+  the vector dimension was hard-pinned to 768 (nomic) but the configured model is mxbai-embed-large
+  (1024), so *all* embedding writes were silently rejected and `resource_embeddings` was empty —
+  catalog RAG had never worked with this model. Replaced the hard pin with a fixed-width design:
+  `EmbeddingVector.DIMENSIONS` = 4000 (pgvector's halfvec index ceiling) is the single source of truth
+  for both tables' columns, and `WorkflowAiEmbeddingService.embed()` zero-pads shorter model outputs
+  up to it. Trailing zeros leave cosine distance unchanged (verified: raw-1024 vs padded-4000 are
+  byte-identical), so any embedding model of ≤4000 dims now works with no code/config/schema change;
+  the obsolete `embedding.dimensions` property was removed. `resource_embeddings` now populates (14
+  tools, stored at width 4000 with real values in the first 1024). **Self-healing:**
+  `WorkflowSolutionCacheService.reconcile()` re-embeds cached solutions left over from a previous
+  EMBEDDING model (re-embeds the stored instruction text in place, so the cache survives a model
+  switch rather than being lost) — verified live: a planted stale-model row re-embedded to the current
+  model within one pass, no manual cleanup. **Intentionally out of scope** (decided against, not
+  pending): Mode A verbatim-serve (a speed-only optimization for exact-repeat requests, whose safety
+  cost isn't worth it while the adapt path already re-validates every result); orphan-row pruning
+  (harmless — templates are re-validated on use); and embedding executions (would only benefit a
+  future failure-triage upgrade, not workflow generation).
+- [~] **LLM observability / tracing** — self-hosted **Langfuse v4** stack added to docker-compose
+  (langfuse-web on 3100; clickhouse/minio/redis/postgres internal-only; headless-provisioned org
+  "Voyager"/project "Voyager AI" with fixed API keys). `LangfuseTracingService` ships one OTLP trace
+  per workflow-AI turn to `/api/public/otel/v1/traces` (HTTP basic auth), reconstructed from
+  telemetry the app already captures — a root span (→ trace, `langfuse.session.id` = conversation id,
+  input/output, stage + prompt-fingerprint metadata) plus a `generation` child (model, token usage,
+  latency). Uses the OpenTelemetry Java SDK; export is post-turn and fully failure-safe, so an
+  unreachable Langfuse never affects a turn. Verified live: turns produce linked trace+generation
+  observations readable via Langfuse's v4 `GET /api/public/v2/observations`. **Plus a native in-app
+  panel** (kept alongside Langfuse, not instead of it): `GET /app/v1/ai/observability/metrics`
+  (`WorkflowAiObservabilityService`) aggregates the same persisted per-turn telemetry into totals,
+  latency avg/p50/p95, a per-model breakdown, a finish-reason taxonomy, and recent turns — rendered in
+  the sidebar's **Observability page** (stat tiles + tables) above an "Open Langfuse" link-out
+  (Langfuse can't be iframed: X-Frame-Options + cross-origin cookies). The native panel reads
+  Voyager's own tables, so it needs no Langfuse API. **Delivered:** latency, session grouping, model,
+  tokens, prompt-version signal, a finish-reason failure taxonomy, and the in-app dashboard.
+  **Deferred:** $ cost (local Ollama models aren't in Langfuse's price table — infra supports it for a
+  priced model) and per-pass / per-tool child spans (one aggregate generation per turn for now).
 - [ ] **Guardrail / safety classifier** — a small policy model that flags PII or `DESTRUCTIVE` MCP
   usage before activation (pairs with the Safety items above).
 

@@ -1,4 +1,9 @@
-import type { AiModelRole, AiStructuredOutputMode, WorkflowAiResourcePlan } from '../../api';
+import type {
+  AiModelRole,
+  AiStructuredOutputMode,
+  WorkflowAiResourcePlan,
+  WorkflowAiToolTelemetry,
+} from '../../api';
 
 export type DefinitionMode = 'manual' | 'ai';
 
@@ -31,6 +36,7 @@ export type ChatMessage = {
   finishReason?: string | null;
   regeneratedFromMessageId?: string | null;
   resourcePlan?: WorkflowAiResourcePlan | null;
+  toolTelemetry?: WorkflowAiToolTelemetry | null;
   streamingStatus?: 'processing' | 'streaming';
   streamingPhase?: 'thinking' | 'answer';
   /** Live label for the current model call of a turn, e.g. "Repairing the response (2 of 3)". */

@@ -16,7 +16,12 @@
     "mcp_classification": 0.8,
     "function_classification": 0.8,
     "secret_guard_compliance": 1.0,
-    "retry_supersession": 0.95
+    "retry_supersession": 0.95,
+    "tool_loop_used": 1.0,
+    "tool_native_or_fallback": 1.0,
+    "tool_loop_bounded": 1.0,
+    "tool_final_validation_clean": 0.8,
+    "tool_selection_grounded": 0.8
   },
   "cases": [
     {
@@ -100,6 +105,21 @@
       ],
       "judge": {
         "expectation": "A single friendly conversational sentence, staying in chat mode with no workflow artifacts and no push toward workflow creation. Supersession mechanics are graded deterministically, not by the judge."
+      }
+    },
+    {
+      "id": "tool-filesystem-read",
+      "category": "tool_calling",
+      "instruction": "Create an unscheduled workflow that reads README.md using the exact registered Voyager filesystem Task resource and then succeeds.",
+      "metrics": [
+        "tool_loop_used",
+        "tool_native_or_fallback",
+        "tool_loop_bounded",
+        "tool_final_validation_clean",
+        "tool_selection_grounded"
+      ],
+      "judge": {
+        "expectation": "The workflow should discover and use the exact registered filesystem read resource, pass the final ASL validator, remain unscheduled, and finish successfully. Native tool calls are preferred, but Voyager's automatic search fallback is valid for providers that ignore required tool choice."
       }
     }
   ]

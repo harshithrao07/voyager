@@ -27,6 +27,12 @@ services:
       # Virtual address-space ceiling (RLIMIT_AS) per run. 4 GB lets JVM/Node/Go start.
       JUDGE0_DEFAULT_MEMORY_LIMIT_KB: ${JUDGE0_DEFAULT_MEMORY_LIMIT_KB:-4194304}
       SCHEDULER_WORKER_ID: worker-${HOSTNAME:-host}
+      # LLM observability. The app reaches langfuse-web over the compose network; tracing is
+      # failure-safe, so the app intentionally does NOT depend_on langfuse (boots even if it is down).
+      LANGFUSE_TRACING_ENABLED: ${LANGFUSE_TRACING_ENABLED:-true}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-web:3000}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-8e0021d104267d6987dfc1c5}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-c6e981f141ae18aa64420f80}
     depends_on:
       postgres:
         condition: service_healthy
@@ -247,8 +253,152 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # --- Langfuse (LLM observability) -----------------------------------------------------------
+  # Self-hosted Langfuse v4 stack, adapted from the official docker-compose. All backing services
+  # (postgres/redis/clickhouse/minio) are prefixed langfuse- and kept internal-only to avoid clashing
+  # with Voyager's own postgres/redis and prometheus (9090); only the web UI is published, on 3100.
+  # Voyager pushes one OTLP trace per AI turn to http://langfuse-web:3000/api/public/otel.
+  # The secrets below are DEV-ONLY; override via .env / the deployment secret store for real use.
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:4
+    restart: always
+    depends_on: &langfuse-depends-on
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+    environment: &langfuse-worker-env
+      DATABASE_URL: postgresql://postgres:postgres@langfuse-postgres:5432/postgres
+      SALT: "O8VKILOhm1eFcIAc8D2rFOV4y5roltrM"
+      ENCRYPTION_KEY: "6c7cf619d2f3b8832d5c2cad12f1ac844596b5d77f76795fce55a9f2b7239cd2"
+      TELEMETRY_ENABLED: "true"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: "06bef84eb10f9769f8b02bf6"
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: "3c1dd26900449d767c69e786"
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: "3c1dd26900449d767c69e786"
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      LANGFUSE_S3_BATCH_EXPORT_ENABLED: "false"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: "8dbe5eee92eb921819d537da"
+      REDIS_TLS_ENABLED: "false"
+
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:4
+    restart: always
+    depends_on: *langfuse-depends-on
+    ports:
+      - "3100:3000"
+    environment:
+      <<: *langfuse-worker-env
+      NEXTAUTH_URL: http://localhost:3100
+      NEXTAUTH_SECRET: "IgQl9XCO+RNtZqDtxVTmKD6ID0n6gO68"
+      # Media upload (browser -> minio) is unused for OTLP tracing; point at the internal endpoint.
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      # Headless bootstrap: auto-creates an org/project with fixed API keys so Voyager can be
+      # configured up front and you can sign in without clicking through onboarding.
+      LANGFUSE_INIT_ORG_ID: voyager
+      LANGFUSE_INIT_ORG_NAME: Voyager
+      LANGFUSE_INIT_PROJECT_ID: voyager-ai
+      LANGFUSE_INIT_PROJECT_NAME: Voyager AI
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-8e0021d104267d6987dfc1c5
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-c6e981f141ae18aa64420f80
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@voyager.local}
+      LANGFUSE_INIT_USER_NAME: Admin
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-voyager-admin}
+
+  langfuse-clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:25.12
+    restart: always
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: "06bef84eb10f9769f8b02bf6"
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio
+    restart: always
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: "3c1dd26900449d767c69e786"
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  langfuse-redis:
+    image: docker.io/redis:7
+    restart: always
+    command: >
+      --requirepass 8dbe5eee92eb921819d537da
+      --maxmemory-policy noeviction
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "8dbe5eee92eb921819d537da", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  langfuse-postgres:
+    image: docker.io/postgres:17
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+
 volumes:
   postgres-data:
   redis-data:
   kafka-data:
   judge0-db-data:
+  langfuse_postgres_data:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio_data:
+  langfuse_redis_data:

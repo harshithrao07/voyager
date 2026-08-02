@@ -19,6 +19,7 @@ public record WorkflowAiMessageDTO(
         String finishReason,
         UUID regeneratedFromMessageId,
         WorkflowAiResourcePlanDTO resourcePlan,
+        WorkflowAiToolTelemetryDTO toolTelemetry,
         Instant createdAt
 ) {
 }

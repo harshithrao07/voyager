@@ -105,6 +105,13 @@ export interface AiModelDiscoverRequest {
   credential?: string | null;
   providerType?: 'OPENAI_COMPATIBLE_LOCAL' | 'OPENAI_COMPATIBLE_API';
   role?: AiModelRole;
+  // When set, only these models are onboarded (discover + pick). Omit to onboard every model.
+  modelNames?: string[];
+}
+
+export interface AiModelAvailable {
+  modelName: string;
+  alreadyAdded: boolean;
 }
 
 export interface AiModelEnabledRequest {
@@ -336,7 +343,33 @@ export interface WorkflowAiMessageDTO {
   finishReason?: string | null;
   regeneratedFromMessageId?: string | null;
   resourcePlan?: WorkflowAiResourcePlan | null;
+  toolTelemetry?: WorkflowAiToolTelemetry | null;
   createdAt: string;
+}
+
+export interface WorkflowAiToolTelemetry {
+  toolLoopUsed: boolean;
+  modelCalls: number;
+  toolModelCalls: number;
+  nativeToolCalls: number;
+  automaticToolCalls: number;
+  rejectedFinals: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalTokens: number;
+  promptCatalogTokensPerCall: number;
+  toolSchemaTokensPerCall: number;
+  estimatedNetInputTokensSaved: number;
+  fallbackReason?: string | null;
+  calls: WorkflowAiToolCallTrace[];
+}
+
+export interface WorkflowAiToolCallTrace {
+  name: string;
+  mode: 'NATIVE' | 'AUTOMATIC';
+  status: string;
+  durationMs: number;
+  resultCount: number;
 }
 
 export interface WorkflowAiConversationDetailDTO extends WorkflowAiConversationSummaryDTO {
@@ -1474,6 +1507,24 @@ export async function discoverAiModels(request: AiModelDiscoverRequest): Promise
   return response.json();
 }
 
+export async function listAvailableAiModels(
+  request: AiModelDiscoverRequest,
+): Promise<AiModelAvailable[]> {
+  const response = await fetch('/app/v1/ai/models/available', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to list models: ${await readError(response)}`);
+  }
+
+  return response.json();
+}
+
 export async function setAiModelEnabled(
   modelId: string,
   request: AiModelEnabledRequest,
@@ -1558,6 +1609,45 @@ export async function getEmbeddingRankingLatest(): Promise<EmbeddingRankingRun |
   }
   const text = await response.text();
   return text ? (JSON.parse(text) as EmbeddingRankingRun) : null;
+}
+
+export type WorkflowAiObservabilityModelBreakdown = {
+  model: string;
+  turns: number;
+  totalTokens: number;
+  avgLatencyMs: number;
+};
+
+export type WorkflowAiObservabilityFinishReason = { reason: string; count: number };
+
+export type WorkflowAiObservabilityRecentTurn = {
+  createdAt: string;
+  model: string;
+  durationMs: number | null;
+  totalTokens: number | null;
+  finishReason: string;
+};
+
+export type WorkflowAiObservability = {
+  windowDays: number;
+  totalTurns: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalTokens: number;
+  avgLatencyMs: number;
+  p50LatencyMs: number;
+  p95LatencyMs: number;
+  byModel: WorkflowAiObservabilityModelBreakdown[];
+  finishReasons: WorkflowAiObservabilityFinishReason[];
+  recent: WorkflowAiObservabilityRecentTurn[];
+};
+
+export async function getWorkflowAiObservability(days = 30): Promise<WorkflowAiObservability> {
+  const response = await fetch(`/app/v1/ai/observability/metrics?days=${days}`);
+  if (!response.ok) {
+    throw new Error(`Failed to load observability metrics: ${await readError(response)}`);
+  }
+  return response.json();
 }
 
 export async function deleteAiModel(modelId: string): Promise<void> {
@@ -1858,26 +1948,20 @@ export async function provisionWorkflowAiResources(
   return response.json();
 }
 
-export async function regenerateWorkflowAiMessage(
+export function regenerateWorkflowAiMessage(
   messageId: string,
   request: WorkflowAiRegenerateRequest,
+  onEvent?: (event: WorkflowAiStreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<WorkflowAiResponse> {
-  const response = await fetch(`/app/v1/workflow-ai/messages/${messageId}/regenerate`, {
-    method: 'POST',
-    // A retry is persisted by the backend. Let the small request outlive a page refresh so the
-    // server can finish and the reloaded conversation can recover the regenerated message.
-    keepalive: true,
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to regenerate message: ${await readError(response)}`);
-  }
-
-  return response.json();
+  // Regeneration uses the same streamed transport as ordinary turns. This exposes repair stages,
+  // keeps heart-beat liveness, and lets closing/aborting the socket cancel the server-side turn.
+  return sendWorkflowAiSocket(
+    `/app/workflow-ai/messages/${encodeURIComponent(messageId)}/regenerate`,
+    request,
+    onEvent,
+    signal,
+  );
 }
 
 export type McpTransport = 'HTTP' | 'STDIO';

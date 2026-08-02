@@ -6,6 +6,7 @@ import com.job.scheduler.enums.McpServerStatus;
 import com.job.scheduler.enums.McpTransport;
 import com.job.scheduler.enums.McpTrustLevel;
 import com.job.scheduler.exception.McpConnectionException;
+import com.job.scheduler.exception.McpRemoteHttpException;
 import com.job.scheduler.repository.McpServerRepository;
 import io.modelcontextprotocol.client.transport.McpHttpClientTransportAuthorizationException;
 import jakarta.persistence.EntityNotFoundException;
@@ -110,6 +111,48 @@ class McpClientServiceTest {
         assertThat(mcpClientService.isAuthenticationFailure(
                 new IllegalStateException("other failure")
         )).isFalse();
+    }
+
+    @Test
+    void preservesRemoteAuthorizationStatusForTheApiResponse() {
+        HttpResponse.ResponseInfo unauthorized = responseInfo(401);
+        var authorization = new McpHttpClientTransportAuthorizationException(
+                "Authorization error when sending message",
+                null,
+                unauthorized
+        );
+        McpServer server = server(McpServerStatus.ENABLED, McpAuthType.NONE);
+
+        Throwable mapped = mcpClientService.mapConnectionError(
+                server,
+                new RuntimeException("Client failed to initialize", authorization)
+        );
+
+        assertThat(mapped)
+                .isInstanceOf(McpRemoteHttpException.class)
+                .hasMessage("MCP server 'local-tools' returned 401 Unauthorized. The server is "
+                        + "configured with no authentication; configure the authentication required "
+                        + "by the remote MCP server and retry.");
+        assertThat(((McpRemoteHttpException) mapped).getStatusCode()).isEqualTo(401);
+    }
+
+    private HttpResponse.ResponseInfo responseInfo(int statusCode) {
+        return new HttpResponse.ResponseInfo() {
+            @Override
+            public int statusCode() {
+                return statusCode;
+            }
+
+            @Override
+            public HttpHeaders headers() {
+                return HttpHeaders.of(Map.of(), (name, value) -> true);
+            }
+
+            @Override
+            public HttpClient.Version version() {
+                return HttpClient.Version.HTTP_1_1;
+            }
+        };
     }
 
     @Test

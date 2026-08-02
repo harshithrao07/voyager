@@ -24,8 +24,8 @@ import java.util.UUID;
  * One embedding vector for a catalog resource (a function or an MCP tool), used for
  * retrieval-augmented catalog matching. Keyed by {@code (resourceType, resourceId)}; the
  * {@code sourceHash} lets the embedder skip resources whose embedded text and model are
- * unchanged. The vector column is pinned to 768 dimensions (nomic-embed-text) to match the
- * pgvector column and its HNSW cosine index.
+ * unchanged. The vector column is a fixed {@link EmbeddingVector#DIMENSIONS}-wide pgvector column;
+ * model outputs are zero-padded up to it, so any model of that dimension or fewer is comparable.
  */
 @Entity
 @Getter
@@ -42,7 +42,7 @@ import java.util.UUID;
         )
 )
 public class ResourceEmbedding {
-    public static final int DIMENSIONS = 768;
+    public static final int DIMENSIONS = EmbeddingVector.DIMENSIONS;
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)

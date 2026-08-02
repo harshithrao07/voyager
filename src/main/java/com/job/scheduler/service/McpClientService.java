@@ -5,6 +5,7 @@ import com.job.scheduler.enums.McpAuthType;
 import com.job.scheduler.enums.McpServerStatus;
 import com.job.scheduler.enums.McpTransport;
 import com.job.scheduler.exception.McpConnectionException;
+import com.job.scheduler.exception.McpRemoteHttpException;
 import com.job.scheduler.repository.McpServerRepository;
 import io.modelcontextprotocol.client.McpAsyncClient;
 import io.modelcontextprotocol.client.McpClient;
@@ -130,9 +131,29 @@ public class McpClientService {
      * every other error (and already-mapped ones) passes through unchanged. The
      * common "command not found" case is caught earlier by the pre-flight check.
      */
-    private Throwable mapConnectionError(McpServer server, Throwable error) {
+    Throwable mapConnectionError(McpServer server, Throwable error) {
         if (error instanceof McpConnectionException) {
             return error;
+        }
+        McpHttpClientTransportAuthorizationException authorization =
+                findAuthorizationFailure(error);
+        if (authorization != null && authorization.getResponseInfo() != null) {
+            int statusCode = authorization.getResponseInfo().statusCode();
+            String reason = switch (statusCode) {
+                case 401 -> "Unauthorized";
+                case 403 -> "Forbidden";
+                default -> "HTTP error";
+            };
+            String guidance = server.getAuthType() == null || server.getAuthType() == McpAuthType.NONE
+                    ? "The server is configured with no authentication; configure the authentication "
+                            + "required by the remote MCP server and retry."
+                    : "The configured credentials were rejected; update them and retry.";
+            return new McpRemoteHttpException(
+                    statusCode,
+                    "MCP server '" + server.getServerId() + "' returned " + statusCode + " "
+                            + reason + ". " + guidance,
+                    error
+            );
         }
         if (server.getTransport() == McpTransport.STDIO && isStdioStartupFailure(error)) {
             return new McpConnectionException(
@@ -143,6 +164,20 @@ public class McpClientService {
                     error);
         }
         return error;
+    }
+
+    private McpHttpClientTransportAuthorizationException findAuthorizationFailure(
+            Throwable error
+    ) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof McpHttpClientTransportAuthorizationException authorization) {
+                return authorization;
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return null;
     }
 
     private boolean isStdioStartupFailure(Throwable error) {

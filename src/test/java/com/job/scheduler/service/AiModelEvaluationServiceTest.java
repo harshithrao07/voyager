@@ -141,6 +141,7 @@ class AiModelEvaluationServiceTest {
                         "STOP",
                         null,
                         null,
+                        null,
                         Instant.now()
                 ),
                 "{\"stage\":\"COLLECTING_WORKFLOW_DETAILS\",\"message\":\"All good.\"}"
@@ -157,7 +158,7 @@ class AiModelEvaluationServiceTest {
 
         assertEquals(AiModelEvaluationStatus.RUNNING, started.status());
         assertEquals(3, started.repetitions());
-        assertEquals(21, started.totalCases());
+        assertEquals(24, started.totalCases());
         assertEquals(0, started.completedCases());
         assertFalse(started.cancelRequested());
         assertTrue(queuedEvaluation.get() != null);
@@ -227,7 +228,7 @@ class AiModelEvaluationServiceTest {
         assertFalse(completed.result().has("judge"));
         verify(judgeService, never()).judge(any(), any(), any(), any(), anyList(), anyInt());
         ArgumentCaptor<Duration> timeoutCaptor = ArgumentCaptor.forClass(Duration.class);
-        verify(conversationService, times(7)).startEvaluationConversation(
+        verify(conversationService, times(8)).startEvaluationConversation(
                 anyString(), any(), anyString(), timeoutCaptor.capture()
         );
         assertEquals(Duration.ofSeconds(120), timeoutCaptor.getAllValues().get(0));
@@ -339,11 +340,11 @@ class AiModelEvaluationServiceTest {
         JsonNode judge = completed.result().path("judge");
         assertEquals("Judge model", judge.path("displayName").asText());
         assertEquals(4, judge.path("passScore").asInt());
-        assertEquals(7, judge.path("judgedCases").asInt());
-        assertEquals(6, judge.path("scoredCases").asInt());
+        assertEquals(8, judge.path("judgedCases").asInt());
+        assertEquals(7, judge.path("scoredCases").asInt());
         assertEquals(1, judge.path("erroredCases").asInt());
-        assertEquals(4.5, judge.path("meanScore").asDouble());
-        assertEquals(0.8333, judge.path("passRate").asDouble(), 0.0001);
+        assertEquals(4.57, judge.path("meanScore").asDouble(), 0.0001);
+        assertEquals(0.8571, judge.path("passRate").asDouble(), 0.0001);
         assertEquals("STRONG", judge.path("verdict").asText());
         assertEquals(1, judge.path("failures").size());
         assertTrue(judge.path("failures").get(0).asText().startsWith("asl-succeed:"));

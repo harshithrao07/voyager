@@ -10,6 +10,7 @@ import { FunctionsPage } from './pages/FunctionsPage';
 import { McpServersPage } from './pages/McpServersPage';
 import { DocsPage } from './pages/DocsPage';
 import { AiSettingsPage } from './pages/AiSettingsPage';
+import { ObservabilityPage } from './pages/ObservabilityPage';
 import { WorkflowDetailPage, type WorkflowRevision } from './pages/WorkflowDetailPage';
 import {
   activateWorkflowRevision,
@@ -154,6 +155,7 @@ type AppRoute =
   | { page: 'functions' }
   | { page: 'mcp' }
   | { page: 'ai-settings' }
+  | { page: 'observability' }
   | { page: 'docs'; slug?: string };
 
 type WorkspaceDeleteTarget =
@@ -177,6 +179,7 @@ function parseRoute(pathname: string): AppRoute {
   if (normalized === '/functions') return { page: 'functions' };
   if (normalized === '/mcp') return { page: 'mcp' };
   if (normalized === '/ai-settings') return { page: 'ai-settings' };
+  if (normalized === '/observability') return { page: 'observability' };
   if (normalized === '/docs') return { page: 'docs' };
 
   const chatMatch = normalized.match(/^\/c\/([^/]+)$/);
@@ -1357,6 +1360,26 @@ function App() {
             </button>
             <div className="mx-2 my-3 h-px bg-border-subtle" />
             <button
+              onClick={() => navigate('/observability')}
+              className={navItemClass(route.page === 'observability')}
+              aria-label="Observability"
+              title="Observability"
+            >
+              <span className="material-symbols-outlined shrink-0 text-[18px]">monitoring</span>
+              {route.page === 'observability' && navActiveBar}
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>Observability</span>
+            </button>
+            <button
+              onClick={() => navigate('/ai-settings')}
+              className={navItemClass(route.page === 'ai-settings')}
+              aria-label="AI Settings"
+              title="AI Settings"
+            >
+              <span className="material-symbols-outlined shrink-0 text-[18px]">smart_toy</span>
+              {route.page === 'ai-settings' && navActiveBar}
+              <span className={sidebarOpen ? 'inline truncate' : 'hidden'}>AI Settings</span>
+            </button>
+            <button
               onClick={() => navigate('/docs')}
               className={navItemClass(route.page === 'docs')}
               aria-label="Docs"
@@ -1383,7 +1406,7 @@ function App() {
                   </div>
                 ) : (
                   <span className="font-display text-[16px] font-semibold leading-6 text-primary">
-                {route.page === 'functions' ? 'Functions' : route.page === 'mcp' ? 'MCP Servers' : route.page === 'docs' ? 'Docs' : 'Workflow Executions'}
+                {route.page === 'functions' ? 'Functions' : route.page === 'mcp' ? 'MCP Servers' : route.page === 'observability' ? 'Observability' : route.page === 'ai-settings' ? 'AI Settings' : route.page === 'docs' ? 'Docs' : 'Workflow Executions'}
                   </span>
                 )}
               </div>
@@ -1550,6 +1573,8 @@ function App() {
                 <McpServersPage />
               ) : route.page === 'ai-settings' ? (
                 <AiSettingsPage />
+              ) : route.page === 'observability' ? (
+                <ObservabilityPage />
               ) : route.page === 'docs' ? (
                 <DocsPage slug={route.slug} onNavigate={navigate} />
               ) : workflowListLoading ? (

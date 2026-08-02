@@ -56,6 +56,12 @@ const DOC_META: DocMeta[] = [
     summary: 'Register external MCP servers and call their tools from workflows.',
   },
   {
+    slug: 'ai-models',
+    title: 'AI Models',
+    group: 'Guides',
+    summary: 'Add local and cloud models, discover catalogs, set defaults, and rank models.',
+  },
+  {
     slug: 'asl-jsonata',
     title: 'ASL with JSONata',
     group: 'Reference',
@@ -72,6 +78,12 @@ const DOC_META: DocMeta[] = [
     title: 'Secrets',
     group: 'Reference',
     summary: 'Encrypted model and MCP credentials, master key, and migration.',
+  },
+  {
+    slug: 'observability',
+    title: 'AI Observability',
+    group: 'Reference',
+    summary: 'Turn telemetry, latency and token metrics, and Langfuse tracing.',
   },
   {
     slug: 'jenkins',

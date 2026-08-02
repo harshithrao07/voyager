@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, BarChart3, Bot, Check, ChevronDown, CircleDollarSign, Code2, Copy, Globe2, History as HistoryIcon, Info, KeyRound, Link, ListChecks, Loader2, Monitor, Play, Plus, Power, RefreshCw, Scale, Settings2, ShieldCheck, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { Activity, BarChart3, Bot, Check, ChevronDown, CircleDollarSign, Code2, Copy, Globe2, History as HistoryIcon, Info, KeyRound, Link, ListChecks, Loader2, Monitor, Play, Plus, Power, RefreshCw, Scale, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X } from 'lucide-react';
 import {
   cancelAiModelEvaluation,
   listAiModelEvaluationHistory,
@@ -15,6 +15,7 @@ import {
 import { EmbeddingRankingSection } from './EmbeddingRankingSection';
 import { cloudProviderPreset, cloudProviderPresets } from './modelProviders';
 import type { AiModel, EndpointModelGroup, ModelSettingsTab } from './types';
+import type { AiModelAvailable } from '../../api';
 
 type Props = {
   settingsTab: ModelSettingsTab;
@@ -28,6 +29,8 @@ type Props = {
   localModelRole: AiModelRole;
   onLocalModelRoleChange: (value: AiModelRole) => void;
   onAddLocalModel: () => void;
+  onDiscoverLocalModels: () => void;
+  discoveringModels: boolean;
   addingModel: 'local' | 'api' | null;
   localCredentialRef: string;
   onLocalCredentialRefChange: (value: string) => void;
@@ -43,6 +46,8 @@ type Props = {
   apiCredentialRef: string;
   onApiCredentialRefChange: (value: string) => void;
   onAddApiModel: () => void;
+  onDiscoverApiModelList: () => Promise<AiModelAvailable[]>;
+  onAddSelectedApiModels: (modelNames: string[]) => Promise<void>;
   apiActionMessage: string | null;
   apiActionSuccess: boolean | null;
   endpointGroups: EndpointModelGroup[];
@@ -82,6 +87,8 @@ export function ModelSettingsModal({
   localModelRole,
   onLocalModelRoleChange,
   onAddLocalModel,
+  onDiscoverLocalModels,
+  discoveringModels,
   addingModel,
   localCredentialRef,
   onLocalCredentialRefChange,
@@ -97,6 +104,8 @@ export function ModelSettingsModal({
   apiCredentialRef,
   onApiCredentialRefChange,
   onAddApiModel,
+  onDiscoverApiModelList,
+  onAddSelectedApiModels,
   apiActionMessage,
   apiActionSuccess,
   endpointGroups,
@@ -258,14 +267,14 @@ export function ModelSettingsModal({
       ? 'flex h-full min-h-0 w-full flex-col'
       : 'pointer-events-auto fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-6 backdrop-blur-md'}>
       <div className={embedded
-        ? 'flex h-full min-h-0 w-full flex-col overflow-hidden rounded-lg border border-primary/20 bg-surface-lowest'
+        ? 'flex h-full min-h-0 w-full flex-col overflow-hidden bg-surface-lowest'
         : 'flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-primary/20 bg-surface-lowest shadow-[0_24px_90px_rgba(0,0,0,0.65)]'}>
-        <div className="flex h-16 shrink-0 items-center justify-between px-6 shadow-[inset_0_-1px_rgba(255,255,255,0.08)]">
-          <div className="flex items-center gap-2 font-display text-[15px] font-semibold text-primary">
-            <Sparkles size={18} />
-            {embedded ? 'AI Settings' : 'Settings'}
-          </div>
-          {!embedded && (
+        {!embedded && (
+          <div className="flex h-16 shrink-0 items-center justify-between px-6 shadow-[inset_0_-1px_rgba(255,255,255,0.08)]">
+            <div className="flex items-center gap-2 font-display text-[15px] font-semibold text-primary">
+              <Sparkles size={18} />
+              Settings
+            </div>
             <button
               type="button"
               onClick={onClose}
@@ -274,8 +283,8 @@ export function ModelSettingsModal({
             >
               <X size={16} />
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         <div className="grid min-h-0 flex-1 grid-cols-[200px_1fr] overflow-hidden">
           <aside className="bg-surface-container-lowest p-3 shadow-[inset_-1px_0_rgba(255,255,255,0.08)]">
@@ -321,6 +330,8 @@ export function ModelSettingsModal({
                   localModelRole={localModelRole}
                   onLocalModelRoleChange={onLocalModelRoleChange}
                   onAddLocalModel={onAddLocalModel}
+                  onDiscoverLocalModels={onDiscoverLocalModels}
+                  discoveringModels={discoveringModels}
                   addingModel={addingModel}
                   localCredentialRef={localCredentialRef}
                   onLocalCredentialRefChange={onLocalCredentialRefChange}
@@ -340,6 +351,8 @@ export function ModelSettingsModal({
                   apiCredentialRef={apiCredentialRef}
                   onApiCredentialRefChange={onApiCredentialRefChange}
                   onAddApiModel={onAddApiModel}
+                  onDiscoverApiModelList={onDiscoverApiModelList}
+                  onAddSelectedApiModels={onAddSelectedApiModels}
                   apiActionMessage={apiActionMessage}
                   apiActionSuccess={apiActionSuccess}
                   addingModel={addingModel}
@@ -576,6 +589,8 @@ function AddLocalModelsSection({
   localModelRole,
   onLocalModelRoleChange,
   onAddLocalModel,
+  onDiscoverLocalModels,
+  discoveringModels,
   addingModel,
   localCredentialRef,
   onLocalCredentialRefChange,
@@ -590,6 +605,8 @@ function AddLocalModelsSection({
   | 'localModelRole'
   | 'onLocalModelRoleChange'
   | 'onAddLocalModel'
+  | 'onDiscoverLocalModels'
+  | 'discoveringModels'
   | 'addingModel'
   | 'localCredentialRef'
   | 'onLocalCredentialRefChange'
@@ -597,7 +614,7 @@ function AddLocalModelsSection({
   | 'modelActionMessage'
   | 'modelActionSuccess'
 >) {
-  const busy = addingModel !== null;
+  const busy = addingModel !== null || discoveringModels;
   const adding = addingModel === 'local';
 
   return (
@@ -641,7 +658,27 @@ function AddLocalModelsSection({
         </p>
       )}
 
-      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_160px] gap-2">
+      <button
+        type="button"
+        onClick={onDiscoverLocalModels}
+        disabled={busy || !discoverEndpoint.trim()}
+        title="Query this endpoint's model list (e.g. Ollama's tags) and add every model it reports"
+        className="mt-2 flex h-9 w-full items-center justify-center gap-1.5 rounded-DEFAULT border border-primary/30 px-3 text-body-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {discoveringModels ? <Loader2 className="animate-spin" size={14} /> : <ListChecks size={14} />}
+        {discoveringModels ? 'Adding all models…' : 'Add all models from this endpoint'}
+      </button>
+      <p className="mt-1.5 text-[11px] leading-5 text-on-surface-variant">
+        Fetches every model the endpoint reports and adds them — no exact name needed. Embedding models are detected by name; the role above applies to everything else.
+      </p>
+
+      <div className="mt-3 flex items-center gap-3 text-[11px] uppercase text-on-surface-variant/70">
+        <span className="h-px flex-1 bg-border-subtle/60" />
+        or add one by exact name
+        <span className="h-px flex-1 bg-border-subtle/60" />
+      </div>
+
+      <div className="mt-3 grid grid-cols-[minmax(0,1fr)_160px] gap-2">
         <input
           value={localModelName}
           onChange={(event) => onLocalModelNameChange(event.target.value)}
@@ -701,6 +738,8 @@ function AddApiModelsSection({
   apiCredentialRef,
   onApiCredentialRefChange,
   onAddApiModel,
+  onDiscoverApiModelList,
+  onAddSelectedApiModels,
   apiActionMessage,
   apiActionSuccess,
   addingModel,
@@ -715,6 +754,8 @@ function AddApiModelsSection({
   | 'apiCredentialRef'
   | 'onApiCredentialRefChange'
   | 'onAddApiModel'
+  | 'onDiscoverApiModelList'
+  | 'onAddSelectedApiModels'
   | 'apiActionMessage'
   | 'apiActionSuccess'
   | 'addingModel'
@@ -722,6 +763,7 @@ function AddApiModelsSection({
   const providerPreset = cloudProviderPreset(apiProvider);
   const busy = addingModel !== null;
   const adding = addingModel === 'api';
+  const [discoverOpen, setDiscoverOpen] = useState(false);
 
   return (
     <section className="relative rounded-lg border border-primary/20 bg-surface-base p-4">
@@ -792,12 +834,265 @@ function AddApiModelsSection({
         The optional key is encrypted before database storage and is never returned to the browser.
       </p>
 
+      <div className="mt-3 flex items-center gap-3 text-[11px] uppercase text-on-surface-variant/70">
+        <span className="h-px flex-1 bg-border-subtle/60" />
+        or browse the provider's catalog
+        <span className="h-px flex-1 bg-border-subtle/60" />
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setDiscoverOpen(true)}
+        disabled={busy || !apiEndpoint.trim() || !apiCredentialRef.trim()}
+        title={apiCredentialRef.trim()
+          ? "Fetch this provider's model list and pick which ones to add"
+          : 'Enter the API key above first — cloud providers require it to list models'}
+        className="mt-3 flex h-9 w-full items-center justify-center gap-1.5 rounded-DEFAULT border border-primary/30 px-3 text-body-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <ListChecks size={14} />
+        Discover models…
+      </button>
+      <p className="mt-1.5 text-[11px] leading-5 text-on-surface-variant">
+        Lists every model {apiProvider === 'Custom' ? 'the endpoint' : apiProvider} reports, then lets you select the ones to add — handy for large catalogs like OpenRouter. Requires the API key above.
+      </p>
+
       {apiActionMessage && (
         <div className={`mt-2 text-body-sm ${apiActionSuccess ? 'text-status-success' : 'text-status-error'}`}>
           {apiActionMessage}
         </div>
       )}
+
+      {discoverOpen && (
+        <DiscoverApiModelsDialog
+          providerLabel={apiProvider === 'Custom' ? 'this endpoint' : apiProvider}
+          onDiscover={onDiscoverApiModelList}
+          onAdd={onAddSelectedApiModels}
+          onClose={() => setDiscoverOpen(false)}
+        />
+      )}
     </section>
+  );
+}
+
+function DiscoverApiModelsDialog({
+  providerLabel,
+  onDiscover,
+  onAdd,
+  onClose,
+}: {
+  providerLabel: string;
+  onDiscover: () => Promise<AiModelAvailable[]>;
+  onAdd: (modelNames: string[]) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [available, setAvailable] = useState<AiModelAvailable[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const models = await onDiscover();
+      setAvailable(models);
+      setSelected(new Set());
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Could not list the provider models.');
+    } finally {
+      setLoading(false);
+    }
+  }, [onDiscover]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !adding) onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [adding, onClose]);
+
+  const addable = available.filter((model) => !model.alreadyAdded);
+  const normalizedSearch = search.trim().toLowerCase();
+  const filtered = normalizedSearch
+    ? available.filter((model) => model.modelName.toLowerCase().includes(normalizedSearch))
+    : available;
+  const filteredAddable = filtered.filter((model) => !model.alreadyAdded);
+  const allFilteredSelected = filteredAddable.length > 0
+    && filteredAddable.every((model) => selected.has(model.modelName));
+
+  const toggle = (modelName: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(modelName)) next.delete(modelName);
+      else next.add(modelName);
+      return next;
+    });
+  };
+
+  const toggleAllFiltered = () => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (allFilteredSelected) {
+        filteredAddable.forEach((model) => next.delete(model.modelName));
+      } else {
+        filteredAddable.forEach((model) => next.add(model.modelName));
+      }
+      return next;
+    });
+  };
+
+  const confirm = async () => {
+    if (selected.size === 0) return;
+    setAdding(true);
+    try {
+      await onAdd([...selected]);
+      onClose();
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Discover models from ${providerLabel}`}
+      onClick={adding ? undefined : onClose}
+    >
+      <div
+        className="flex max-h-[80vh] w-full max-w-[560px] flex-col overflow-hidden rounded-xl border border-primary/20 bg-surface-container-lowest shadow-[0_30px_80px_rgba(0,0,0,0.5)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-border-subtle p-5 pb-4">
+          <div className="min-w-0">
+            <h3 className="text-[15px] font-semibold text-on-surface">Discover models</h3>
+            <p className="mt-1 text-[12px] leading-5 text-on-surface-variant">
+              Select the models to add from {providerLabel}. Embedding models are detected by name; the rest are added as Chat.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={adding}
+            className="shrink-0 rounded-md p-1 text-on-surface-variant transition-colors hover:text-on-surface disabled:opacity-50"
+            aria-label="Close"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex flex-1 items-center justify-center gap-2 px-5 py-16 font-mono-sm text-mono-sm uppercase text-on-surface-variant">
+            <Loader2 size={16} className="animate-spin text-primary" /> Fetching model list
+          </div>
+        ) : error ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+            <p className="max-w-sm text-body-sm text-status-error">{error}</p>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="flex h-9 items-center gap-2 rounded-DEFAULT border border-primary/30 px-4 text-body-sm font-medium text-primary transition-colors hover:bg-primary/10"
+            >
+              <RefreshCw size={14} /> Retry
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 border-b border-border-subtle px-5 py-3">
+              <div className="relative flex-1">
+                <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant" />
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Filter models"
+                  aria-label="Filter models"
+                  className="h-9 w-full rounded-DEFAULT border border-border-subtle bg-surface-base pl-8 pr-3 font-mono-sm text-[12px] text-on-surface outline-none placeholder:text-on-surface-variant/55 focus:border-primary/60"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={toggleAllFiltered}
+                disabled={filteredAddable.length === 0}
+                className="h-9 shrink-0 rounded-DEFAULT border border-border-subtle px-3 font-mono-sm text-[11px] font-semibold uppercase text-on-surface-variant transition-colors hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {allFilteredSelected ? 'Clear' : 'Select all'}
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-3">
+              {filtered.length === 0 ? (
+                <p className="px-2 py-8 text-center text-body-sm text-on-surface-variant">
+                  {available.length === 0 ? 'No models reported by this provider.' : 'No models match your filter.'}
+                </p>
+              ) : filtered.map((model) => {
+                const isSelected = selected.has(model.modelName);
+                return (
+                  <button
+                    key={model.modelName}
+                    type="button"
+                    onClick={() => !model.alreadyAdded && toggle(model.modelName)}
+                    disabled={model.alreadyAdded}
+                    className={`flex w-full items-center justify-between gap-3 rounded-DEFAULT border px-3 py-2.5 text-left transition-colors ${
+                      model.alreadyAdded
+                        ? 'cursor-not-allowed border-border-subtle/50 bg-surface-container-lowest opacity-60'
+                        : isSelected
+                          ? 'border-primary/50 bg-primary/10'
+                          : 'border-border-subtle/50 bg-surface-base hover:border-primary/30'
+                    }`}
+                  >
+                    <span className="flex min-w-0 items-center gap-2.5">
+                      <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                        isSelected || model.alreadyAdded ? 'border-primary bg-primary text-surface-lowest' : 'border-border-muted text-transparent'
+                      }`}>
+                        <Check size={11} />
+                      </span>
+                      <span className="truncate font-mono-sm text-[12px] text-on-surface">{model.modelName}</span>
+                    </span>
+                    {model.alreadyAdded && (
+                      <span className="shrink-0 font-mono-sm text-[9px] font-semibold uppercase text-on-surface-variant">Added</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border-subtle px-5 py-4">
+              <span className="font-mono-sm text-[11px] text-on-surface-variant">
+                {selected.size} selected · {addable.length} available
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={adding}
+                  className="flex h-9 items-center rounded-DEFAULT border border-border-subtle px-4 text-[12px] text-on-surface-variant transition-colors hover:text-on-surface disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirm()}
+                  disabled={adding || selected.size === 0}
+                  className="flex h-9 items-center gap-2 rounded-DEFAULT bg-primary px-4 text-[12px] font-semibold text-surface-lowest transition-colors hover:bg-primary-fixed disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {adding && <Loader2 size={14} className="animate-spin" />}
+                  {adding ? 'Adding…' : `Add ${selected.size || ''} ${selected.size === 1 ? 'model' : 'models'}`.trim()}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

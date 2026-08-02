@@ -3,10 +3,13 @@ import { toast } from 'sonner';
 import {
   createAiModel,
   deleteAiModel,
+  discoverAiModels,
   listAiModels,
   listAllAiModels,
+  listAvailableAiModels,
   setAiModelDefault,
   setAiModelEnabled,
+  type AiModelAvailable,
   type AiModelRole,
 } from '../../api';
 import { aiModelFromDto, endpointHost, type ModelDto } from './aiModelMapping';
@@ -25,6 +28,7 @@ export function useAiModelManagement() {
   const [expandedEndpoint, setExpandedEndpoint] = useState<string | null>(null);
   const [managingModels, setManagingModels] = useState(false);
   const [addingModel, setAddingModel] = useState<'local' | 'api' | null>(null);
+  const [discoveringModels, setDiscoveringModels] = useState(false);
 
   const [discoverEndpoint, setDiscoverEndpoint] = useState('');
   const [localModelName, setLocalModelName] = useState('');
@@ -103,6 +107,39 @@ export function useAiModelManagement() {
     }
   };
 
+  const discoverLocalModels = async () => {
+    const endpoint = discoverEndpoint.trim();
+    if (!endpoint) {
+      setModelActionMessage('Enter an endpoint to discover its models.');
+      setModelActionSuccess(false);
+      return;
+    }
+    setDiscoveringModels(true);
+    setModelActionMessage(null);
+    setModelActionSuccess(null);
+    try {
+      const discovered = await discoverAiModels({
+        baseUrl: endpoint,
+        providerType: 'OPENAI_COMPATIBLE_LOCAL',
+        role: localModelRole,
+        credential: localCredentialRef.trim() || null,
+      });
+      await refreshModelLists();
+      setModelActionMessage(
+        `Added ${discovered.length} ${discovered.length === 1 ? 'model' : 'models'} from this endpoint (embedding models detected automatically).`,
+      );
+      setModelActionSuccess(true);
+      setLocalModelName('');
+      setLocalCredentialRef('');
+      setSettingsTab('added');
+    } catch (error: any) {
+      setModelActionMessage(error.message || 'Failed to discover models from this endpoint.');
+      setModelActionSuccess(false);
+    } finally {
+      setDiscoveringModels(false);
+    }
+  };
+
   const changeApiProvider = (provider: string) => {
     const preset = cloudProviderPreset(provider);
     setApiProvider(preset.name);
@@ -110,6 +147,50 @@ export function useAiModelManagement() {
     setApiModelName('');
     setApiActionMessage(null);
     setApiActionSuccess(null);
+  };
+
+  const discoverApiModelList = async (): Promise<AiModelAvailable[]> => {
+    const endpoint = apiEndpoint.trim();
+    if (!endpoint) {
+      setApiActionMessage('Enter an endpoint to discover its models.');
+      setApiActionSuccess(false);
+      throw new Error('Enter an endpoint to discover its models.');
+    }
+    setApiActionMessage(null);
+    setApiActionSuccess(null);
+    return listAvailableAiModels({
+      baseUrl: endpoint,
+      providerType: 'OPENAI_COMPATIBLE_API',
+      credential: apiCredentialRef.trim() || null,
+    });
+  };
+
+  const addSelectedApiModels = async (modelNames: string[]) => {
+    const endpoint = apiEndpoint.trim();
+    if (!endpoint || modelNames.length === 0) return;
+    setAddingModel('api');
+    setApiActionMessage(null);
+    setApiActionSuccess(null);
+    try {
+      const added = await discoverAiModels({
+        baseUrl: endpoint,
+        providerType: 'OPENAI_COMPATIBLE_API',
+        role: 'CHAT',
+        credential: apiCredentialRef.trim() || null,
+        modelNames,
+      });
+      await refreshModelLists();
+      setApiActionMessage(`Added ${added.length} ${added.length === 1 ? 'model' : 'models'} from this provider.`);
+      setApiActionSuccess(true);
+      setApiModelName('');
+      setApiCredentialRef('');
+      setSettingsTab('added');
+    } catch (error: any) {
+      setApiActionMessage(error.message || 'Failed to add the selected models.');
+      setApiActionSuccess(false);
+    } finally {
+      setAddingModel(null);
+    }
   };
 
   const addApiModel = async () => {
@@ -244,6 +325,8 @@ export function useAiModelManagement() {
     localModelRole,
     setLocalModelRole,
     addLocalModel,
+    discoverLocalModels,
+    discoveringModels,
     addingModel,
     localCredentialRef,
     setLocalCredentialRef,
@@ -259,6 +342,8 @@ export function useAiModelManagement() {
     apiCredentialRef,
     setApiCredentialRef,
     addApiModel,
+    discoverApiModelList,
+    addSelectedApiModels,
     apiActionMessage,
     apiActionSuccess,
     endpointGroups,

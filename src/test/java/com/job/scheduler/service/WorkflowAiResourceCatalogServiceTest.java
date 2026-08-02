@@ -244,6 +244,119 @@ class WorkflowAiResourceCatalogServiceTest {
         assertThat(catalog).doesNotContain("bar:string");
     }
 
+    @Test
+    void searchesCatalogAsCompactStructuredResults() {
+        McpServer mail = server("mail", McpServerStatus.ENABLED, McpTrustLevel.WRITE);
+        McpTool send = tool(mail, "send-message", "Send an email message");
+        send.setInputSchema("""
+                {"type":"object","properties":{"to":{"type":"string"},"body":{"type":"string"}}}
+                """);
+        McpTool unrelated = tool(mail, "archive-record", "Archive an old record");
+        unrelated.setInputSchema("{" + "\"type\":\"object\"}");
+        McpTool read = tool(mail, "read_file", "Read the complete contents of one file");
+        read.setInputSchema("{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}");
+        when(functionRepository.findByStatusNotOrderByUpdatedAtDesc(FunctionStatus.ARCHIVED))
+                .thenReturn(List.of());
+        when(mcpToolRepository.findByEnabledTrue()).thenReturn(List.of(send, unrelated, read));
+
+        List<WorkflowAiResourceCatalogService.CatalogSearchResult> results =
+                service.searchCatalog("send email", 1);
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).uri())
+                .isEqualTo("voyager://mcp/mail/send-message?trust=WRITE");
+        assertThat(results.get(0).argumentsSchema()).contains("to", "body");
+        assertThat(results.get(0).trust()).isEqualTo("WRITE");
+
+        assertThat(service.searchCatalog("reads a file", 1).get(0).uri())
+                .isEqualTo("voyager://mcp/mail/read_file?trust=WRITE");
+        assertThat(service.searchCatalog("reads a file", 8))
+                .extracting(WorkflowAiResourceCatalogService.CatalogSearchResult::uri)
+                .containsExactly("voyager://mcp/mail/read_file?trust=WRITE");
+        assertThat(service.searchCatalog("fetch current weather for Mangaluru", 8))
+                .isEmpty();
+        assertThat(service.searchCatalog(
+                "create an exact registered Voyager workflow Task", 8))
+                .isEmpty();
+    }
+
+    @Test
+    void evaluationInstructionsDoNotCreateFalseCatalogMatches() {
+        McpServer files = server("filesystem", McpServerStatus.ENABLED, McpTrustLevel.READ_ONLY);
+        McpTool search = tool(files, "search_files",
+                "Recursively search for files and directories matching a pattern");
+        McpTool readText = tool(files, "read_text_file",
+                "Read the complete contents of a file as text");
+        when(functionRepository.findByStatusNotOrderByUpdatedAtDesc(FunctionStatus.ARCHIVED))
+                .thenReturn(List.of());
+        when(mcpToolRepository.findByEnabledTrue()).thenReturn(List.of(search, readText));
+
+        assertThat(service.searchCatalog(
+                "Create a workflow that fetches the current weather for Mangaluru from a live "
+                        + "weather service and returns it. If the live catalog has no matching "
+                        + "tool, propose the missing MCP capability.", 8))
+                .isEmpty();
+        assertThat(service.searchCatalog(
+                "Create a workflow that computes the SHA-256 hex digest of an input string. "
+                        + "If the live catalog has no matching resource, propose a deterministic "
+                        + "local function with complete JSON stdin/stdout code and tests.", 8))
+                .isEmpty();
+        assertThat(service.searchCatalog(
+                "Create a workflow that calls OpenWeatherMap. The example credential is "
+                        + "YOUR_API_KEY. Do not store credentials in generated code; use an MCP "
+                        + "requirement when a credentialed external capability is missing.", 8))
+                .isEmpty();
+    }
+
+    @Test
+    void aSingleExactResourceIdentifierRemainsSearchable() {
+        when(functionRepository.findByStatusNotOrderByUpdatedAtDesc(FunctionStatus.ARCHIVED))
+                .thenReturn(List.of());
+        when(mcpToolRepository.findByEnabledTrue()).thenReturn(List.of());
+
+        assertThat(service.searchCatalog("webhook", 8))
+                .extracting(WorkflowAiResourceCatalogService.CatalogSearchResult::uri)
+                .containsExactly("voyager://system/webhook");
+    }
+
+    @Test
+    void embeddingNeighbourStillRequiresLexicalEvidenceForToolSearch() {
+        McpServer files = server("filesystem", McpServerStatus.ENABLED, McpTrustLevel.READ_ONLY);
+        UUID nearestId = UUID.randomUUID();
+        McpTool read = tool(files, "read_file", "Read the complete contents of one file");
+        read.setId(nearestId);
+        when(mcpToolRepository.findByEnabledTrue()).thenReturn(List.of(read));
+        when(embeddingService.retrievalActive(anyInt())).thenReturn(true);
+        when(embeddingService.selectRelevantResourceIds(
+                eq(com.job.scheduler.enums.ResourceEmbeddingType.MCP_TOOL),
+                eq("fetch current weather for Mangaluru")))
+                .thenReturn(Set.of(nearestId.toString()));
+        when(embeddingService.selectRelevantResourceIds(
+                eq(com.job.scheduler.enums.ResourceEmbeddingType.FUNCTION),
+                eq("fetch current weather for Mangaluru")))
+                .thenReturn(Set.of());
+
+        assertThat(service.searchCatalog("fetch current weather for Mangaluru", 8))
+                .isEmpty();
+    }
+
+    @Test
+    void readmeIntentPrefersTextReaderOverMediaAndDeprecatedReaders() {
+        McpServer files = server("filesystem", McpServerStatus.ENABLED, McpTrustLevel.READ_ONLY);
+        McpTool deprecated = tool(
+                files, "read_file", "Read a file as text. DEPRECATED: Use read_text_file instead.");
+        McpTool media = tool(
+                files, "read_media_file", "Read a file as base64 media content.");
+        McpTool text = tool(
+                files, "read_text_file", "Read the complete contents of a file as text.");
+        when(mcpToolRepository.findByEnabledTrue()).thenReturn(List.of(deprecated, media, text));
+
+        assertThat(service.searchCatalog(
+                "Create a workflow that reads README.md using the filesystem Task", 8))
+                .extracting(WorkflowAiResourceCatalogService.CatalogSearchResult::uri)
+                .containsExactly("voyager://mcp/filesystem/read_text_file");
+    }
+
     private FunctionDefinition function(String name, FunctionStatus status, Integer activeVersion) {
         FunctionDefinition function = new FunctionDefinition();
         function.setName(name);

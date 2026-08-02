@@ -1,5 +1,6 @@
 package com.job.scheduler.service;
 
+import com.job.scheduler.dto.AiModelAvailableDTO;
 import com.job.scheduler.dto.AiModelConfigRequestDTO;
 import com.job.scheduler.dto.AiModelTestRequestDTO;
 import com.job.scheduler.dto.AiModelTestResponseDTO;
@@ -18,8 +19,12 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -130,7 +135,8 @@ public class AiModelConfigService {
             String requestedBaseUrl,
             String requestedCredential,
             AiModelProviderType requestedProviderType,
-            AiModelRole requestedRole
+            AiModelRole requestedRole,
+            List<String> selectedModelNames
     ) {
         String baseUrl = normalizeBaseUrl(requestedBaseUrl);
         AiModelRole role = requestedRole == null ? AiModelRole.CHAT : requestedRole;
@@ -152,6 +158,105 @@ public class AiModelConfigService {
                         ? AiModelProviderType.OPENAI_COMPATIBLE_LOCAL
                         : existingEndpoint.getProviderType();
 
+        List<String> modelIds = fetchModelIds(baseUrl, credential);
+
+        // "Discover + pick": onboard only the caller's selection, preserving endpoint order.
+        if (selectedModelNames != null && !selectedModelNames.isEmpty()) {
+            Set<String> requested = new LinkedHashSet<>(selectedModelNames);
+            modelIds = modelIds.stream().filter(requested::contains).toList();
+            if (modelIds.isEmpty()) {
+                throw new IllegalStateException(
+                        "None of the selected models are available at " + baseUrl + "/models"
+                );
+            }
+        }
+
+        // A listing can mix chat and embedding models (e.g. an Ollama server hosting both), so the
+        // requested role is only a fallback: models whose name clearly identifies an embedding model
+        // are onboarded as EMBEDDING regardless. Each role that has no enabled default yet adopts the
+        // first discovered model of that role as its default.
+        Set<AiModelRole> rolesNeedingDefault = EnumSet.noneOf(AiModelRole.class);
+        for (AiModelRole candidate : AiModelRole.values()) {
+            if (repository.countByEnabledTrueAndRole(candidate) == 0) {
+                rolesNeedingDefault.add(candidate);
+            }
+        }
+        List<AiModelConfigDTO> results = new ArrayList<>();
+
+        for (String modelId : modelIds) {
+            AiModelConfig model = repository.findByBaseUrlAndModelName(baseUrl, modelId)
+                    .orElseGet(AiModelConfig::new);
+            boolean newModel = model.getId() == null;
+            AiModelRole modelRole = inferRole(modelId, role);
+            model.setDisplayName(modelId);
+            model.setProviderType(providerType);
+            model.setRole(modelRole);
+            model.setBaseUrl(baseUrl);
+            model.setModelName(modelId);
+            if (providedCredential != null || newModel) {
+                model.setCredentialEncrypted(encryptedToStore);
+            }
+            model.setEnabled(true);
+            if (rolesNeedingDefault.remove(modelRole)) {
+                model.setDefaultModel(true);
+            } else if (newModel) {
+                model.setDefaultModel(false);
+            }
+            results.add(toDto(repository.save(model)));
+        }
+
+        ensureDefaultModel();
+        return results;
+    }
+
+    /**
+     * Classifies a discovered model by name. Embedding models are recognized by well-known naming
+     * families (anything containing "embed", plus bge / gte / e5 / minilm variants); everything else
+     * falls back to the caller's requested role. Keeps zero-false-positive intent — these tokens do
+     * not appear in chat model names.
+     */
+    private AiModelRole inferRole(String modelId, AiModelRole requestedRole) {
+        String name = modelId.toLowerCase(Locale.ROOT);
+        boolean looksEmbedding = name.contains("embed")
+                || name.contains("bge-") || name.startsWith("bge")
+                || name.contains("gte-") || name.startsWith("gte")
+                || name.contains("all-minilm") || name.contains("minilm")
+                || name.contains("e5-") || name.contains("-e5")
+                || name.contains("paraphrase-");
+        return looksEmbedding ? AiModelRole.EMBEDDING : requestedRole;
+    }
+
+    /**
+     * Lists the models a provider reports at {@code /models} without onboarding any of them —
+     * the read step of the "discover + pick" flow. Reuses the endpoint's stored credential when
+     * one is not supplied, so re-listing an already-added endpoint needs no key re-entry.
+     */
+    @Transactional
+    public List<AiModelAvailableDTO> listAvailableModels(
+            String requestedBaseUrl,
+            String requestedCredential
+    ) {
+        String baseUrl = normalizeBaseUrl(requestedBaseUrl);
+        AiModelConfig existingEndpoint = repository
+                .findFirstByBaseUrlOrderByCreatedAtAsc(baseUrl)
+                .orElse(null);
+        String providedCredential = optionalText(requestedCredential);
+        String credential = providedCredential != null
+                ? providedCredential
+                : existingEndpoint != null
+                        ? secretCipher.decrypt(existingEndpoint.getCredentialEncrypted())
+                        : null;
+
+        List<AiModelAvailableDTO> available = new ArrayList<>();
+        for (String modelId : fetchModelIds(baseUrl, credential)) {
+            boolean alreadyAdded = repository.findByBaseUrlAndModelName(baseUrl, modelId).isPresent();
+            available.add(new AiModelAvailableDTO(modelId, alreadyAdded));
+        }
+        return available;
+    }
+
+    /** Calls the OpenAI-compatible {@code /models} listing and returns the reported model ids. */
+    private List<String> fetchModelIds(String baseUrl, String credential) {
         HttpRequest.Builder modelsRequestBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/models"))
                 .timeout(Duration.ofSeconds(10))
@@ -174,6 +279,12 @@ public class AiModelConfigService {
             );
         }
 
+        if (statusCode == 401 || statusCode == 403) {
+            throw new IllegalStateException(
+                    "Model endpoint rejected the credentials (HTTP " + statusCode
+                            + "). Check the API key for this provider."
+            );
+        }
         if (statusCode < 200 || statusCode >= 300) {
             throw new IllegalStateException(
                     "Model endpoint returned HTTP " + statusCode + " for /models"
@@ -211,34 +322,7 @@ public class AiModelConfigService {
                     "No models found at " + baseUrl + "/models"
             );
         }
-
-        boolean noExistingModels = repository.countByEnabledTrueAndRole(role) == 0;
-        List<AiModelConfigDTO> results = new ArrayList<>();
-
-        for (int i = 0; i < modelIds.size(); i++) {
-            String modelId = modelIds.get(i);
-            AiModelConfig model = repository.findByBaseUrlAndModelName(baseUrl, modelId)
-                    .orElseGet(AiModelConfig::new);
-            boolean newModel = model.getId() == null;
-            model.setDisplayName(modelId);
-            model.setProviderType(providerType);
-            model.setRole(role);
-            model.setBaseUrl(baseUrl);
-            model.setModelName(modelId);
-            if (providedCredential != null || newModel) {
-                model.setCredentialEncrypted(encryptedToStore);
-            }
-            model.setEnabled(true);
-            if (noExistingModels && i == 0) {
-                model.setDefaultModel(true);
-            } else if (newModel) {
-                model.setDefaultModel(false);
-            }
-            results.add(toDto(repository.save(model)));
-        }
-
-        ensureDefaultModel();
-        return results;
+        return modelIds;
     }
 
     /** Promotes a model to the default for its role, demoting its same-role peers. */

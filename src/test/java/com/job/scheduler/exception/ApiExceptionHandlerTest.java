@@ -168,6 +168,22 @@ class ApiExceptionHandlerTest {
     }
 
     @Test
+    void preservesRemoteMcpHttpStatusAndMessage() {
+        var exception = new McpRemoteHttpException(
+                401,
+                "MCP server 'trading' returned 401 Unauthorized. Configure authentication and retry.",
+                new RuntimeException("remote failure")
+        );
+
+        var response = handler.handleMcpRemoteHttp(exception, request);
+
+        assertResponse(response.getBody(), HttpStatus.UNAUTHORIZED, "MCP_REMOTE_HTTP_ERROR");
+        assertThat(response.getBody().message())
+                .isEqualTo("MCP server 'trading' returned 401 Unauthorized. "
+                        + "Configure authentication and retry.");
+    }
+
+    @Test
     void hidesUnexpectedExceptionDetails() {
         ApiErrorDTO body = handler.handleUnexpected(
                 new RuntimeException("database password leaked"),

@@ -80,9 +80,11 @@ the source of truth and are bundled into that in-app documentation UI during the
 - [AI Workflow Generator](docs/ai-workflows.md)
 - [Functions](docs/functions.md)
 - [MCP Servers](docs/mcp.md)
+- [AI Models](docs/ai-models.md)
 - [ASL with JSONata](docs/asl-jsonata.md)
 - [Interpreter Internals](docs/interpreter.md)
 - [Secrets](docs/secrets.md)
+- [AI Observability](docs/observability.md)
 - [Jenkins CI/CD](docs/jenkins.md)
 
 The optional deterministic MCP fixture used by development and AI-generation tests is documented in

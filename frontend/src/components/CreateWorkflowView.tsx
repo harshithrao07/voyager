@@ -7,11 +7,14 @@ import {
   createWorkflow,
   createWorkflowRevision,
   deleteAiModel,
+  discoverAiModels,
   getWorkflowAiConversation,
   getWorkflowAiDraft,
+  isAbortError,
   listFunctions,
   listAllAiModels,
   listAiModels,
+  listAvailableAiModels,
   listMcpServers,
   listMcpKnownTools,
   provisionWorkflowAiResources,
@@ -25,6 +28,7 @@ import {
   setAiModelEnabled,
   TrustConfirmationRequiredError,
   updateWorkflowCanvasLayout,
+  type AiModelAvailable,
   type AiModelRole,
   type ElevatedMcpTool,
   type FunctionDefinitionDTO,
@@ -33,6 +37,7 @@ import {
   type WorkflowAiProposedFunction,
   type WorkflowAiResourcePlan,
   type WorkflowAiResponse,
+  type WorkflowAiStreamEvent,
   type WorkflowAiWorkspaceRequest,
   type WorkflowDefinitionResponseDTO,
   type WorkflowPreActivationWarning,
@@ -105,6 +110,16 @@ function newIdempotencyKey() {
 
 function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2);
+}
+
+function isWorkflowDefinition(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as { StartAt?: unknown; States?: unknown };
+  return typeof candidate.StartAt === 'string'
+    && Boolean(candidate.StartAt.trim())
+    && Boolean(candidate.States)
+    && typeof candidate.States === 'object'
+    && !Array.isArray(candidate.States);
 }
 
 function parseDefinition(value: string) {
@@ -187,20 +202,6 @@ function readPendingMessageRegeneration(
   }
 }
 
-function writePendingMessageRegeneration(
-  conversationId: string,
-  pending: PendingMessageRegeneration,
-) {
-  try {
-    window.sessionStorage.setItem(
-      pendingRegenerationStorageKey(conversationId),
-      JSON.stringify(pending),
-    );
-  } catch {
-    // The retry still works in the current page when browser storage is unavailable.
-  }
-}
-
 function clearPendingMessageRegeneration(conversationId: string, messageId: string) {
   try {
     const pending = readPendingMessageRegeneration(conversationId);
@@ -247,6 +248,7 @@ function chatMessageFromDto(message: WorkflowAiMessageDTO): ChatMessage {
     finishReason: message.finishReason,
     regeneratedFromMessageId: message.regeneratedFromMessageId,
     resourcePlan: message.resourcePlan,
+    toolTelemetry: message.toolTelemetry,
   };
 }
 
@@ -312,6 +314,7 @@ export function CreateWorkflowView({
   const [modelActionMessage, setModelActionMessage] = useState<string | null>(null);
   const [modelActionSuccess, setModelActionSuccess] = useState<boolean | null>(null);
   const [addingModel, setAddingModel] = useState<'local' | 'api' | null>(null);
+  const [discoveringModels, setDiscoveringModels] = useState(false);
   const [discoverEndpoint, setDiscoverEndpoint] = useState('');
   const [expandedEndpoint, setExpandedEndpoint] = useState<string | null>(null);
   const [managingModels, setManagingModels] = useState(false);
@@ -329,6 +332,8 @@ export function CreateWorkflowView({
   const [activeResourcePlanMessageId, setActiveResourcePlanMessageId] = useState<string | null>(null);
   const [activeResourcePlan, setActiveResourcePlan] = useState<WorkflowAiResourcePlan | null>(null);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
+  const [regenerationStage, setRegenerationStage] = useState<string | null>(null);
+  const [regenerationStartedAt, setRegenerationStartedAt] = useState<number | null>(null);
   const [restoredPendingRegeneration, setRestoredPendingRegeneration] =
     useState<PendingMessageRegeneration | null>(null);
   const [saving, setSaving] = useState(false);
@@ -346,7 +351,7 @@ export function CreateWorkflowView({
   const modelPickerRef = useRef<HTMLDivElement | null>(null);
   const instructionTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const regeneratingRef = useRef(false);
-  const pageUnloadingRef = useRef(false);
+  const regenerationAbortRef = useRef<AbortController | null>(null);
   const streamingTimerRefs = useRef<number[]>([]);
   const lastLoadedRouteChatIdRef = useRef<string | null>(null);
   const lastSavedWorkspaceRef = useRef<string | null>(null);
@@ -643,14 +648,6 @@ export function CreateWorkflowView({
     onUnsavedChangesChange?.(hasUnsavedRevisionChanges);
     return () => onUnsavedChangesChange?.(false);
   }, [hasUnsavedRevisionChanges, onUnsavedChangesChange]);
-
-  useEffect(() => {
-    const markPageUnloading = () => {
-      pageUnloadingRef.current = true;
-    };
-    window.addEventListener('beforeunload', markPageUnloading);
-    return () => window.removeEventListener('beforeunload', markPageUnloading);
-  }, []);
 
   useEffect(() => {
     if (!hasUnsavedRevisionChanges) return undefined;
@@ -1106,10 +1103,14 @@ export function CreateWorkflowView({
     if (response.workflowId) {
       setLinkedWorkflowId(response.workflowId);
     }
-    setValidationIssues(response.validationIssues || []);
+    const responseValidationIssues = response.validationIssues || [];
+    setValidationIssues(responseValidationIssues);
     onConversationUpdated?.();
 
-    if (response.aslDefinition) {
+    // A rejected or malformed model candidate must never replace the editor buffer. The backend
+    // normally returns only its last authoritative definition, but this guard also protects the UI
+    // from stale deployments and malformed API payloads.
+    if (responseValidationIssues.length === 0 && isWorkflowDefinition(response.aslDefinition)) {
       setDefinitionText(formatJson(response.aslDefinition));
     }
 
@@ -1123,7 +1124,8 @@ export function CreateWorkflowView({
         setMaxAttempts(response.draftWorkflowPayload.maxAttempts ?? 3);
         setIdempotencyKey(response.draftWorkflowPayload.idempotencyKey || idempotencyKey);
       }
-      if (response.draftWorkflowPayload.definition) {
+      if (responseValidationIssues.length === 0
+          && isWorkflowDefinition(response.draftWorkflowPayload.definition)) {
         setDefinitionText(formatJson(response.draftWorkflowPayload.definition));
       }
     } else if (response.stage === 'PLAN_READY' && !name.trim()) {
@@ -1387,16 +1389,25 @@ export function CreateWorkflowView({
     if (!conversationId || message.role !== 'assistant' || regeneratingRef.current) return;
 
     regeneratingRef.current = true;
+    const controller = new AbortController();
+    regenerationAbortRef.current = controller;
     setRegeneratingMessageId(message.id);
+    setRegenerationStage('Starting retry');
+    setRegenerationStartedAt(Date.now());
     setError(null);
-    writePendingMessageRegeneration(conversationId, {
-      messageId: message.id,
-      startedAt: Date.now(),
-    });
+    const handleRetryEvent = (event: WorkflowAiStreamEvent) => {
+      if (event.type === 'STAGE' && event.stage) {
+        setRegenerationStage(event.stage);
+      } else if (event.type === 'THINKING_DELTA') {
+        setRegenerationStage(`Reasoning (model pass ${event.pass})`);
+      } else if (event.type === 'ANSWER_PROGRESS') {
+        setRegenerationStage(`Checking response (model pass ${event.pass})`);
+      }
+    };
     try {
       const response = await regenerateWorkflowAiMessage(message.id, {
         modelConfigId: modelId || null,
-      });
+      }, handleRetryEvent, controller.signal);
       clearPendingMessageRegeneration(conversationId, message.id);
       // The server appends a fresh message, so swap it in place of the one being retried.
       applyWorkflowAiResponse(response, {
@@ -1404,17 +1415,21 @@ export function CreateWorkflowView({
         animate: true,
       });
     } catch (err: any) {
-      // During a full reload, leave the durable marker intact: the keepalive request is still
-      // running and the next page instance will recover it. Ordinary failures on a live page clear
-      // the marker immediately so Retry becomes available again.
-      if (!pageUnloadingRef.current) {
-        clearPendingMessageRegeneration(conversationId, message.id);
+      clearPendingMessageRegeneration(conversationId, message.id);
+      if (!isAbortError(err)) {
         setError(err.message || 'Failed to regenerate message.');
       }
     } finally {
       regeneratingRef.current = false;
+      regenerationAbortRef.current = null;
       setRegeneratingMessageId(null);
+      setRegenerationStage(null);
+      setRegenerationStartedAt(null);
     }
+  };
+
+  const handleCancelRegeneration = () => {
+    regenerationAbortRef.current?.abort();
   };
 
   const handleProvisionResources = async (functions: WorkflowAiProposedFunction[]) => {
@@ -1705,6 +1720,45 @@ export function CreateWorkflowView({
     }
   };
 
+  const discoverLocalModels = async () => {
+    const endpoint = discoverEndpoint.trim();
+    if (!endpoint) {
+      setModelActionMessage('Enter an endpoint to discover its models.');
+      setModelActionSuccess(false);
+      return;
+    }
+    setDiscoveringModels(true);
+    setModelActionMessage(null);
+    setModelActionSuccess(null);
+    try {
+      const discovered = await discoverAiModels({
+        baseUrl: endpoint,
+        providerType: 'OPENAI_COMPATIBLE_LOCAL',
+        role: localModelRole,
+        credential: localCredential(),
+      });
+      await refreshModelLists();
+      if (localModelRole !== 'EMBEDDING') {
+        const firstChat = discovered.find((model) => (model.role ?? 'CHAT') !== 'EMBEDDING');
+        if (firstChat && models.length === 0) {
+          selectModel(firstChat.id);
+        }
+      }
+      setModelActionMessage(
+        `Added ${discovered.length} ${discovered.length === 1 ? 'model' : 'models'} from this endpoint (embedding models detected automatically).`,
+      );
+      setModelActionSuccess(true);
+      setLocalModelName('');
+      setLocalCredentialRef('');
+      setSettingsTab('added');
+    } catch (err: any) {
+      setModelActionMessage(err.message || 'Failed to discover models from this endpoint.');
+      setModelActionSuccess(false);
+    } finally {
+      setDiscoveringModels(false);
+    }
+  };
+
   const updateEndpointEnabled = async (endpoint: string, enabled: boolean) => {
     const endpointModels = allModels.filter((model) => model.endpoint === endpoint);
     if (endpointModels.length === 0) return;
@@ -1820,6 +1874,54 @@ export function CreateWorkflowView({
       setSettingsTab('added');
     } catch (err: any) {
       setApiActionMessage(err.message || 'Failed to add cloud model.');
+      setApiActionSuccess(false);
+    } finally {
+      setAddingModel(null);
+    }
+  };
+
+  const discoverApiModelList = async (): Promise<AiModelAvailable[]> => {
+    const endpoint = apiEndpoint.trim();
+    if (!endpoint) {
+      setApiActionMessage('Enter an endpoint to discover its models.');
+      setApiActionSuccess(false);
+      throw new Error('Enter an endpoint to discover its models.');
+    }
+    setApiActionMessage(null);
+    setApiActionSuccess(null);
+    return listAvailableAiModels({
+      baseUrl: endpoint,
+      providerType: 'OPENAI_COMPATIBLE_API',
+      credential: apiCredential(),
+    });
+  };
+
+  const addSelectedApiModels = async (modelNames: string[]) => {
+    const endpoint = apiEndpoint.trim();
+    if (!endpoint || modelNames.length === 0) return;
+    setAddingModel('api');
+    setApiActionMessage(null);
+    setApiActionSuccess(null);
+    try {
+      const added = await discoverAiModels({
+        baseUrl: endpoint,
+        providerType: 'OPENAI_COMPATIBLE_API',
+        role: 'CHAT',
+        credential: apiCredential(),
+        modelNames,
+      });
+      await refreshModelLists();
+      const firstChat = added.find((model) => (model.role ?? 'CHAT') !== 'EMBEDDING');
+      if (firstChat && models.length === 0) {
+        selectModel(firstChat.id);
+      }
+      setApiActionMessage(`Added ${added.length} ${added.length === 1 ? 'model' : 'models'} from this provider.`);
+      setApiActionSuccess(true);
+      setApiModelName('');
+      setApiCredentialRef('');
+      setSettingsTab('added');
+    } catch (err: any) {
+      setApiActionMessage(err.message || 'Failed to add the selected models.');
       setApiActionSuccess(false);
     } finally {
       setAddingModel(null);
@@ -1947,7 +2049,11 @@ export function CreateWorkflowView({
       }}
       generating={generating || conversationLoading}
       canGenerate={canGenerate}
-      onCancel={socketGenerating ? handleCancelGeneration : undefined}
+      onCancel={socketGenerating
+        ? handleCancelGeneration
+        : regeneratingMessageId
+          ? handleCancelRegeneration
+          : undefined}
     />
   );
 
@@ -1979,6 +2085,9 @@ export function CreateWorkflowView({
       expandedThinkingMessageIds={expandedThinkingMessageIds}
       onToggleThinking={toggleThinking}
       regeneratingMessageId={regeneratingMessageId}
+      regenerationStage={regenerationStage}
+      regenerationStartedAt={regenerationStartedAt}
+      onCancelRegeneration={handleCancelRegeneration}
       onRegenerateMessage={handleRegenerateMessage}
       renderMessageAttachment={(message) => message.resourcePlan ? (
         <ResourcePlanCard
@@ -2082,6 +2191,8 @@ export function CreateWorkflowView({
           localModelRole={localModelRole}
           onLocalModelRoleChange={setLocalModelRole}
           onAddLocalModel={addLocalModel}
+          onDiscoverLocalModels={discoverLocalModels}
+          discoveringModels={discoveringModels}
           addingModel={addingModel}
           localCredentialRef={localCredentialRef}
           onLocalCredentialRefChange={setLocalCredentialRef}
@@ -2097,6 +2208,8 @@ export function CreateWorkflowView({
           apiCredentialRef={apiCredentialRef}
           onApiCredentialRefChange={setApiCredentialRef}
           onAddApiModel={addApiModel}
+          onDiscoverApiModelList={discoverApiModelList}
+          onAddSelectedApiModels={addSelectedApiModels}
           apiActionMessage={apiActionMessage}
           apiActionSuccess={apiActionSuccess}
           endpointGroups={endpointGroups}

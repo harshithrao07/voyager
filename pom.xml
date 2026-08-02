@@ -180,6 +180,23 @@
 			<artifactId>spring-dotenv</artifactId>
 			<version>4.0.0</version>
 		</dependency>
+		<!--
+		  OpenTelemetry SDK + OTLP/HTTP exporter. Used only to ship one trace per workflow-AI turn to
+		  self-hosted Langfuse (LLM observability), built from telemetry the app already captures.
+		  Versions are managed by opentelemetry-bom.
+		-->
+		<dependency>
+			<groupId>io.opentelemetry</groupId>
+			<artifactId>opentelemetry-api</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.opentelemetry</groupId>
+			<artifactId>opentelemetry-sdk</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.opentelemetry</groupId>
+			<artifactId>opentelemetry-exporter-otlp</artifactId>
+		</dependency>
 	</dependencies>
 	<dependencyManagement>
 		<dependencies>
@@ -201,6 +218,13 @@
 				<groupId>io.modelcontextprotocol.sdk</groupId>
 				<artifactId>mcp-bom</artifactId>
 				<version>2.0.0</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			<dependency>
+				<groupId>io.opentelemetry</groupId>
+				<artifactId>opentelemetry-bom</artifactId>
+				<version>1.45.0</version>
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>
