@@ -58,7 +58,8 @@ public class WorkflowAiResourceCatalogService {
 
             SYSTEM RESOURCES:
             - voyager://system/webhook args: {url:string, method:string optional default POST,
-              headers:object<string,string> optional, body:any optional}. Supported methods are
+              headers:object<string,string> optional, body:any optional,
+              includeExecutionContextHeaders:boolean optional default false}. Supported methods are
               GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS. Put request headers in the
               headers object; do not invent top-level header fields.
             - voyager://system/send-email args: {to:string, subject:string, body:string}
@@ -145,7 +146,7 @@ public class WorkflowAiResourceCatalogService {
         List<ScoredCatalogResult> candidates = new ArrayList<>();
         candidates.add(scored(new CatalogSearchResult(
                 "voyager://system/webhook", "SYSTEM", "Call an HTTP webhook",
-                "{url:string, method:string optional default POST, headers:object<string,string> optional, body:any optional}",
+                "{url:string, method:string optional default POST, headers:object<string,string> optional, body:any optional, includeExecutionContextHeaders:boolean optional default false}",
                 "READ"), intent, false));
         candidates.add(scored(new CatalogSearchResult(
                 "voyager://system/send-email", "SYSTEM", "Send an email",

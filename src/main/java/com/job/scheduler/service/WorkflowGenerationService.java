@@ -45,7 +45,8 @@ public class WorkflowGenerationService {
             
             RESOURCES:
             - voyager://system/webhook: args url(str), method(str optional, default POST),
-              headers(obj<string,string> optional), body(any optional). Supported methods:
+              headers(obj<string,string> optional), body(any optional),
+              includeExecutionContextHeaders(bool optional, default false). Supported methods:
               GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
             - voyager://system/send-email: args to(str), subject(str), body(str)
 

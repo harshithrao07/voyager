@@ -1,0 +1,25 @@
+{
+  "StartAt": "DurableWait",
+  "States": {
+    "DurableWait": {
+      "Type": "Wait",
+      "Seconds": 120,
+      "Next": "CountWait"
+    },
+    "CountWait": {
+      "Type": "Task",
+      "Resource": "voyager://system/webhook",
+      "Arguments": {
+        "url": "http://crash-counter:8080/invocations",
+        "method": "POST",
+        "includeExecutionContextHeaders": true,
+        "body": {
+          "runId": "{% $states.input.runId %}",
+          "workload": "wait",
+          "operationId": "{% $states.context.StateExecutionId %}"
+        }
+      },
+      "End": true
+    }
+  }
+}

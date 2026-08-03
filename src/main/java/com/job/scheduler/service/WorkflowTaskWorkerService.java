@@ -56,7 +56,8 @@ public class WorkflowTaskWorkerService {
                     readJson(context.arguments()),
                     new TaskExecutionContext(
                             context.workflowExecutionId(),
-                            context.stateName()
+                            context.stateName(),
+                            attempt.getId()
                     )
             );
         } catch (TaskResourceException exception) {

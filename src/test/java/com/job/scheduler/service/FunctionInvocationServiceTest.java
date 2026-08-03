@@ -14,6 +14,7 @@ import com.job.scheduler.enums.FunctionVersionStatus;
 import com.job.scheduler.repository.FunctionInvocationRepository;
 import com.job.scheduler.workflow.task.TaskResourceErrors;
 import com.job.scheduler.workflow.task.TaskResourceException;
+import com.job.scheduler.workflow.task.TaskExecutionContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -314,6 +315,45 @@ class FunctionInvocationServiceTest {
                 .isInstanceOf(TaskResourceException.class)
                 .extracting(error -> ((TaskResourceException) error).error())
                 .isEqualTo(TaskResourceErrors.TIMEOUT);
+    }
+
+    @Test
+    void invokeForTaskPersistsTheConcreteStateAttemptId() throws Exception {
+        UUID workflowExecutionId = UUID.randomUUID();
+        UUID attemptId = UUID.randomUUID();
+        when(functionRegistryService.findFunction("tax"))
+                .thenReturn(function);
+        when(functionRegistryService.activeVersion(function)).thenReturn(version);
+        when(judge0Client.createSubmission(any())).thenReturn("token-context");
+        when(judge0Client.getSubmission("token-context")).thenReturn(
+                new Judge0SubmissionResult(
+                        "token-context", 3, "Accepted", "{\"ok\":true}",
+                        "", null, null, 0, null, 0.01, 0.02, 12000L
+                )
+        );
+
+        service.invokeForTask(
+                "tax",
+                null,
+                objectMapper.createObjectNode(),
+                new TaskExecutionContext(
+                        workflowExecutionId,
+                        "CalculateTax",
+                        attemptId
+                )
+        );
+
+        ArgumentCaptor<FunctionInvocation> captor =
+                ArgumentCaptor.forClass(FunctionInvocation.class);
+        verify(invocationRepository, org.mockito.Mockito.atLeastOnce())
+                .save(captor.capture());
+        assertThat(captor.getAllValues())
+                .allSatisfy(invocation -> {
+                    assertThat(invocation.getWorkflowExecutionId())
+                            .isEqualTo(workflowExecutionId);
+                    assertThat(invocation.getStateExecutionAttemptId())
+                            .isEqualTo(attemptId);
+                });
     }
 
     @Test

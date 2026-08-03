@@ -288,6 +288,9 @@ public class FunctionInvocationService {
         invocation.setFunctionVersion(version);
         invocation.setWorkflowExecutionId(runContext.workflowExecutionId());
         invocation.setStateName(runContext.stateName());
+        invocation.setStateExecutionAttemptId(
+                runContext.stateExecutionAttemptId()
+        );
         invocation.setStatus(FunctionInvocationStatus.RUNNING);
         invocation.setInputJson(writeJson(nonNullInput(input)));
         invocation.setStartedAt(startedAt);

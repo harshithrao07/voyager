@@ -1,0 +1,61 @@
+{
+  "StartAt": "MixedMap",
+  "States": {
+    "MixedMap": {
+      "Type": "Map",
+      "Items": [
+        {"delay": 1, "label": "fast-a"},
+        {"delay": 120, "label": "slow-a"},
+        {"delay": 1, "label": "fast-b"},
+        {"delay": 120, "label": "slow-b"}
+      ],
+      "ItemSelector": {
+        "runId": "{% $states.input.runId %}",
+        "delay": "{% $states.context.Map.Item.Value.delay %}",
+        "label": "{% $states.context.Map.Item.Value.label %}"
+      },
+      "MaxConcurrency": 4,
+      "ItemProcessor": {
+        "ProcessorConfig": {"Mode": "INLINE"},
+        "StartAt": "ItemPause",
+        "States": {
+          "ItemPause": {
+            "Type": "Wait",
+            "Seconds": "{% $states.input.delay %}",
+            "Next": "RouteItem"
+          },
+          "RouteItem": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Condition": "{% $states.input.delay = 1 %}",
+                "Next": "FastItemDone"
+              }
+            ],
+            "Default": "CountItem"
+          },
+          "FastItemDone": {
+            "Type": "Succeed"
+          },
+          "CountItem": {
+            "Type": "Task",
+            "Resource": "voyager://system/webhook",
+            "Arguments": {
+              "url": "http://crash-counter:8080/invocations",
+              "method": "POST",
+              "includeExecutionContextHeaders": true,
+              "body": {
+                "runId": "{% $states.input.runId %}",
+                "workload": "map",
+                "label": "{% $states.input.label %}",
+                "operationId": "{% $states.context.StateExecutionId %}"
+              }
+            },
+            "End": true
+          }
+        }
+      },
+      "End": true
+    }
+  }
+}

@@ -1,0 +1,24 @@
+services:
+  crash-counter:
+    image: node:22-alpine
+    command: ["node", "/bench/counter-server.mjs"]
+    environment:
+      PORT: 8080
+      DATA_DIR: /data
+    volumes:
+      - ./crash-recovery/counter-server.mjs:/bench/counter-server.mjs:ro
+      - ./results/crash-recovery-counter:/data
+    ports:
+      - "18082:8080"
+    networks:
+      - voyager
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+networks:
+  voyager:
+    external: true
+    name: voyager_default

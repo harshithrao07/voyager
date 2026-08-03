@@ -24,10 +24,21 @@ public record WebhookPayload(
                 message = "must not contain line breaks"
         ) String> headers,
 
-        JsonNode body
+        JsonNode body,
+
+        Boolean includeExecutionContextHeaders
 ) {
     /** Preserves the original POST-only payload contract for existing callers. */
     public WebhookPayload(String url, JsonNode body) {
-        this(url, null, null, body);
+        this(url, null, null, body, null);
+    }
+
+    public WebhookPayload(
+            String url,
+            String method,
+            Map<String, String> headers,
+            JsonNode body
+    ) {
+        this(url, method, headers, body, null);
     }
 }

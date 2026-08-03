@@ -1,0 +1,40 @@
+{
+  "StartAt": "SleepInJudge0",
+  "States": {
+    "SleepInJudge0": {
+      "Type": "Task",
+      "Resource": "__SLEEPER_RESOURCE__",
+      "Arguments": {
+        "runId": "{% $states.input.runId %}",
+        "sleepSeconds": 3,
+        "workload": "task"
+      },
+      "HeartbeatSeconds": 5,
+      "TimeoutSeconds": 12,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.Timeout", "Function.PlatformError"],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 2,
+          "BackoffRate": 1.0
+        }
+      ],
+      "Next": "CountTask"
+    },
+    "CountTask": {
+      "Type": "Task",
+      "Resource": "voyager://system/webhook",
+      "Arguments": {
+        "url": "http://crash-counter:8080/invocations",
+        "method": "POST",
+        "includeExecutionContextHeaders": true,
+        "body": {
+          "runId": "{% $states.input.runId %}",
+          "workload": "task",
+          "operationId": "{% $states.context.StateExecutionId %}"
+        }
+      },
+      "End": true
+    }
+  }
+}

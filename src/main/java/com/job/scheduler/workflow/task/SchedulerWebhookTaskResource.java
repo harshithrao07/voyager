@@ -13,6 +13,8 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.net.URI;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Task resource for {@code voyager://system/webhook}. Maps HTTP outcomes to the
@@ -37,8 +39,20 @@ public class SchedulerWebhookTaskResource implements TaskResource {
 
     @Override
     public JsonNode execute(URI resource, JsonNode arguments) {
+        return execute(resource, arguments, TaskExecutionContext.NONE);
+    }
+
+    @Override
+    public JsonNode execute(
+            URI resource,
+            JsonNode arguments,
+            TaskExecutionContext context
+    ) {
         WebhookPayload payload =
                 payloadMapper.bind(arguments, WebhookPayload.class);
+        if (Boolean.TRUE.equals(payload.includeExecutionContextHeaders())) {
+            payload = withExecutionContextHeaders(payload, context);
+        }
         try {
             StepResult result = webhookHandler.handle(payload);
             return TaskResourceOutput.of(result);
@@ -58,6 +72,42 @@ public class SchedulerWebhookTaskResource implements TaskResource {
                     exception.getMessage(),
                     exception
             );
+        }
+    }
+
+    private WebhookPayload withExecutionContextHeaders(
+            WebhookPayload payload,
+            TaskExecutionContext context
+    ) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (payload.headers() != null) {
+            headers.putAll(payload.headers());
+        }
+        if (context != null) {
+            putUuid(headers, "X-Voyager-Workflow-Execution-Id",
+                    context.workflowExecutionId());
+            putUuid(headers, "X-Voyager-State-Execution-Attempt-Id",
+                    context.stateExecutionAttemptId());
+            if (context.stateName() != null) {
+                headers.put("X-Voyager-State-Name", context.stateName());
+            }
+        }
+        return new WebhookPayload(
+                payload.url(),
+                payload.method(),
+                Map.copyOf(headers),
+                payload.body(),
+                payload.includeExecutionContextHeaders()
+        );
+    }
+
+    private void putUuid(
+            Map<String, String> headers,
+            String name,
+            java.util.UUID value
+    ) {
+        if (value != null) {
+            headers.put(name, value.toString());
         }
     }
 

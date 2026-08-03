@@ -42,6 +42,10 @@ import java.util.UUID;
                         columnList = "workflow_execution_id"
                 ),
                 @Index(
+                        name = "idx_workflow_function_invocations_state_attempt",
+                        columnList = "state_execution_attempt_id"
+                ),
+                @Index(
                         name = "idx_workflow_function_invocations_judge0_token",
                         columnList = "judge0_token"
                 )
@@ -66,6 +70,9 @@ public class FunctionInvocation {
 
     @Column(name = "state_name")
     private String stateName;
+
+    @Column(name = "state_execution_attempt_id")
+    private UUID stateExecutionAttemptId;
 
     @Column(name = "judge0_token")
     private String judge0Token;
