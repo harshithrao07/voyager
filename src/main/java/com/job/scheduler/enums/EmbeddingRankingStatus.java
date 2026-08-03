@@ -4,5 +4,6 @@ package com.job.scheduler.enums;
 public enum EmbeddingRankingStatus {
     RUNNING,
     COMPLETED,
-    FAILED
+    FAILED,
+    CANCELLED
 }

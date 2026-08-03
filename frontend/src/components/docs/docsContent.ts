@@ -85,12 +85,6 @@ const DOC_META: DocMeta[] = [
     group: 'Reference',
     summary: 'Turn telemetry, latency and token metrics, and Langfuse tracing.',
   },
-  {
-    slug: 'jenkins',
-    title: 'Jenkins CI/CD',
-    group: 'Reference',
-    summary: 'Test, publish GHCR images, deploy locally, and roll back safely.',
-  },
 ];
 
 function markdownFor(slug: string): string | undefined {

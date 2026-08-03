@@ -2,7 +2,7 @@ global:
   scrape_interval: 15s
 
 scrape_configs:
-  - job_name: "scheduler"
+  - job_name: "voyager"
     metrics_path: "/actuator/prometheus"
     # DNS SD: docker compose creates an A record for the `app` service that
     # resolves to all replica IPs. Prometheus then scrapes each individually

@@ -11,7 +11,11 @@ with its messages, generated JSON, canvas positions, and settings restored.
 - [Start and resume conversations](#start-and-resume-conversations)
 - [Live turn progress](#live-turn-progress)
 - [Structured output](#structured-output)
+- [Solution reuse (semantic cache)](#solution-reuse-semantic-cache)
 - [What the assistant can use](#what-the-assistant-can-use)
+- [Failure triage](#failure-triage)
+- [Run summaries](#run-summaries)
+- [AI review and explanation](#ai-review-and-explanation)
 - [Conversation context and summarization](#conversation-context-and-summarization)
 - [Retrying a response](#retrying-a-response)
 - [Workspace persistence](#workspace-persistence)
@@ -142,6 +146,29 @@ structured output. Quota exhaustion, rejected credentials, rate limits, timeouts
 failures do not alter the learned capability. Schema-constrained turns use the blocking completion
 path because compatible providers do not consistently combine constrained decoding with SSE.
 
+## Solution reuse (semantic cache)
+
+Voyager does not start every conversation cold. When a validated AI-authored workflow is saved, its
+originating instruction is embedded and stored alongside the validated ASL
+(`workflow_solution_embeddings`). When a **new** conversation starts, Voyager embeds the opening
+instruction, retrieves the nearest prior solution by cosine distance, and — when it falls within the
+adaptation band (`adapt-max-distance`, default `0.35`) — seeds the first prompt with that known-good
+workflow as an *adaptation template*, so the model amends a proven design instead of authoring from
+scratch. Retrieval reuses the default **Embedding** model and the same fixed-width vector column as
+the resource catalog (see [AI Models](ai-models.md#roles-chat-and-embedding)).
+
+The cache only ever seeds the prompt. The model still regenerates, and the result runs through the
+same validators and the live catalog, so a stale or subtly-wrong template can never be served
+verbatim as a broken workflow — it is self-correcting. Every path is failure-safe: with caching
+disabled, no registered embedding model, an empty cache, a blank instruction, an unreachable
+embedding endpoint, or a nearest neighbor beyond the distance band, the turn simply generates cold.
+Nothing about the cache can block saving a workflow or starting a conversation.
+
+Because switching embedding models changes what a stored vector means, a background reconciliation
+re-embeds cached solutions left over from a previous embedding model in place (on a fixed delay), so
+the cache survives a model change instead of being silently lost. Solution reuse is enabled by
+default; see [Operator configuration](#operator-configuration).
+
 ## What the assistant can use
 
 Every build turn is grounded against the resources that exist in Voyager at that moment:
@@ -267,6 +294,34 @@ COLLECTING_WORKFLOW_DETAILS
 
 An invalid candidate can remain visible for correction, but it does not overwrite the last valid,
 authoritative ASL saved for the conversation.
+
+## Run summaries
+
+A completed execution can be turned into a plain-English digest on demand. The run panel's summary
+control calls `POST /app/v1/workflows/{id}/executions/{executionId}/summary`
+(`WorkflowAiRunSummaryService`), which grounds the default **Chat** model in the persisted execution
+trace and returns an overall outcome, a state-by-state report across root, Parallel, and Map scopes,
+and the failure point when the run did not succeed. The summary preserves the real scope, sequence,
+and status metadata from the trace rather than re-deriving it, and its generation state is retained
+across in-app navigation so leaving and returning to the execution does not discard a digest in
+progress. Summaries are read-only reporting; they never modify the run or the workflow.
+
+## AI review and explanation
+
+Two on-demand actions in the manual editor toolbar read the current definition and return advice
+without ever changing it:
+
+- **Explain** (`POST /app/v1/workflows/authoring/explain`) returns a readable summary of what the ASL
+  does — useful for revisions and handoff.
+- **AI review** (`POST /app/v1/workflows/authoring/pre-activation-review`) asks the default Chat model
+  for warning-only observations about operational risk before activation: unguarded `DESTRUCTIVE` MCP
+  calls, possible PII or secrets written to logs or messages, and missing `Retry`/`Catch` handling
+  around fallible work. It is disabled until the definition passes ASL validation.
+
+Both are strictly advisory. The review never rewrites the ASL, proposes a patch, blocks activation, or
+adds latency to a normal save or activate — it is a separate, explicit call. This complements the
+deterministic, blocking [trust confirmation](#what-the-assistant-can-use) gate above, which *does*
+stop a save until elevated MCP trust is acknowledged.
 
 ## Conversation context and summarization
 
@@ -395,6 +450,9 @@ chat models; the full model-management, discovery, and ranking API is documented
 | `scheduler.workflow-ai.context.summary-max-characters` | `WORKFLOW_AI_SUMMARY_MAX_CHARACTERS` | `6000` | Maximum persisted summary length. |
 | `scheduler.workflow-ai.tool-calling.enabled` | `WORKFLOW_AI_TOOL_CALLING_ENABLED` | `true` | Use bounded catalog-search and ASL-validation tools for large catalogs. |
 | `scheduler.workflow-ai.tool-calling.min-catalog-size` | `WORKFLOW_AI_TOOL_CALLING_MIN_CATALOG_SIZE` | `12` | Minimum live resource count before tool calling replaces the prompt catalog. |
+| `scheduler.workflow-ai.solution-cache.enabled` | `WORKFLOW_AI_SOLUTION_CACHE_ENABLED` | `true` | Seed a new conversation with the nearest prior validated workflow as an adaptation template. |
+| `scheduler.workflow-ai.solution-cache.adapt-max-distance` | `WORKFLOW_AI_SOLUTION_CACHE_ADAPT_MAX_DISTANCE` | `0.35` | Cosine-distance ceiling for reusing a prior solution; beyond it, generate cold. |
+| `scheduler.workflow-ai.solution-cache.reconcile-delay-ms` | `WORKFLOW_AI_SOLUTION_CACHE_RECONCILE_DELAY_MS` | `900000` | Interval for re-embedding cached solutions after an embedding-model change. |
 
 Token estimates are deliberately model-independent and character based, so the same compaction logic
 works across local and hosted OpenAI-compatible models without a provider-specific tokenizer.

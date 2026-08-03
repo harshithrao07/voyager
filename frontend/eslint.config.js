@@ -26,6 +26,13 @@ export default defineConfig([
       // Route hydration, editor resets, and server-backed selection changes intentionally
       // synchronize local UI state from external state in effects.
       'react-hooks/set-state-in-effect': 'off',
+      // Honor the `_`-prefix convention for deliberately unused bindings (unused args on
+      // stub callbacks, placeholder catch clauses) already used across the codebase.
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+      }],
       'react-refresh/only-export-components': ['error', {
         allowConstantExport: true,
         allowExportNames: [

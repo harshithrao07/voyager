@@ -1700,7 +1700,7 @@ function HowRankingWorks() {
         <section>
           <h4 className="font-mono-sm text-[10px] font-semibold uppercase tracking-wide text-on-surface">What is measured</h4>
           <p className="mt-1">
-            The five capability columns each score 0–100 across the suite's cases. <span className="font-mono-sm text-on-surface">Cases</span> is
+            The six capability columns each score 0–100 across the suite's cases. <span className="font-mono-sm text-on-surface">Cases</span> is
             passed / total; <span className="font-mono-sm text-on-surface">P95</span> is the 95th-percentile response latency.
           </p>
           <div className="mt-2 space-y-1.5">
@@ -1709,6 +1709,7 @@ function HowRankingWorks() {
               ['ASL', 'Produces a structurally valid JSONata state machine when asked to build a workflow.'],
               ['MCP', 'Correctly routes needs that touch an external service to an MCP requirement.'],
               ['Fn', 'Correctly proposes self-contained, deterministic local functions.'],
+              ['Tools', 'Uses the bounded catalog tool loop, selects a grounded Task URI, and validates the final ASL.'],
               ['Safety', 'Handles unsafe or out-of-scope requests without inventing resources or credentials.'],
             ].map(([label, description]) => (
               <div key={label} className="flex gap-2">
@@ -1893,11 +1894,12 @@ function ModelComparisonBoard({
             <span>#</span>
             <span>Model</span>
             <span>Fit</span>
-            <div className="grid grid-cols-5">
+            <div className="grid grid-cols-6">
               <span className="px-1 text-center">Chat</span>
               <span className="px-1 text-center">ASL</span>
               <span className="px-1 text-center">MCP</span>
               <span className="px-1 text-center">Fn</span>
+              <span className="px-1 text-center">Tools</span>
               <span className="px-1 text-center">Safety</span>
             </div>
             <span>Cases</span>
@@ -2169,10 +2171,11 @@ function MiniCapabilityTape({
     result.capabilities.asl,
     result.capabilities.mcp,
     result.capabilities.functions,
+    toolCapabilityScore(result),
     result.capabilities.safety,
   ];
   return (
-    <div className="grid grid-cols-5 overflow-hidden rounded-DEFAULT border border-border-subtle/50">
+    <div className="grid grid-cols-6 overflow-hidden rounded-DEFAULT border border-border-subtle/50">
       {capabilities.map((score, index) => (
         <span
           key={index}
@@ -2183,6 +2186,20 @@ function MiniCapabilityTape({
       ))}
     </div>
   );
+}
+
+function toolCapabilityScore(result: NonNullable<AiModelEvaluationDTO['result']>) {
+  if (typeof result.capabilities.tools === 'number') return result.capabilities.tools;
+  const scores = [
+    'tool_loop_used',
+    'tool_native_or_fallback',
+    'tool_loop_bounded',
+    'tool_final_validation_clean',
+    'tool_selection_grounded',
+  ]
+    .map((name) => result.metrics[name]?.rate)
+    .filter((score): score is number => typeof score === 'number');
+  return scores.length > 0 ? Math.min(...scores) : 0;
 }
 
 function EvaluationBadge({ evaluation }: { evaluation?: AiModelEvaluationDTO }) {

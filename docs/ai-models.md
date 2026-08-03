@@ -44,6 +44,8 @@ address resolves inside the backend container, not on your host.
 
 This flow works for Ollama, llama.cpp, vLLM, LM Studio, and other OpenAI-compatible servers.
 
+![Add local and cloud AI models](images/ai-models/01-add-models.png)
+
 ## Add cloud models
 
 Under **Add Models → Add API Models**, choose a provider preset (DeepSeek, OpenAI, OpenRouter, Groq,
@@ -106,6 +108,8 @@ Disabled models remain in the registry but do not appear in the chat picker or r
 **Encrypted key** badge means the endpoint has a stored credential; the value is never revealed. An
 **Embedding** badge marks embedding-role models.
 
+![Configured chat and embedding models](images/ai-models/02-added-models.png)
+
 ## Model ranking
 
 The **Model Ranking** tab runs the shared `workflow-ai-v1` capability suite against every enabled chat
@@ -120,11 +124,15 @@ model so you can compare them before choosing one for workflow generation.
 - Cloud models (or a cloud judge) prompt for confirmation first, because every generation and repair
   call may be billed by the provider.
 
+![Chat-model capability ranking](images/ai-models/03-model-ranking.png)
+
 ## Embedding ranking
 
 The **Embedding Ranking** tab benchmarks embedding models on the retrieval task they actually serve —
 ranking relevant functions and MCP tools for the catalog — so you can pick the best embedding model
 independently of the chat models.
+
+![Embedding-model retrieval ranking](images/ai-models/04-embedding-ranking.png)
 
 ## HTTP API
 

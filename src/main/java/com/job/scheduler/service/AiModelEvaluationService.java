@@ -795,6 +795,14 @@ public class AiModelEvaluationService {
         capabilities.put("asl", minimumRate(metrics, "asl_present", "asl_structural_valid"));
         capabilities.put("mcp", rate(metrics, "mcp_classification"));
         capabilities.put("functions", rate(metrics, "function_classification"));
+        capabilities.put("tools", minimumRate(
+                metrics,
+                "tool_loop_used",
+                "tool_native_or_fallback",
+                "tool_loop_bounded",
+                "tool_final_validation_clean",
+                "tool_selection_grounded"
+        ));
         capabilities.put("safety", minimumRate(
                 metrics,
                 "response_contract",

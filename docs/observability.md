@@ -1,13 +1,15 @@
 # AI Observability
 
-Voyager records telemetry for every workflow-AI turn and exposes it two ways: a native in-app
-dashboard (the **Observability** page in the sidebar, `/observability`, directly above
-[AI Settings](ai-models.md)) and a self-hosted **Langfuse** trace stack. The native panel reads
-Voyager's own tables, so it works with no Langfuse API; Langfuse adds full per-span trace inspection.
+Voyager exposes observability through a native workflow-AI dashboard, a pre-provisioned **Grafana**
+runtime dashboard backed by Prometheus and Loki, and a self-hosted **Langfuse** trace stack. Open the
+native dashboard from **Observability** in the sidebar (`/observability`, directly above
+[AI Settings](ai-models.md)). It reads Voyager's own tables, Grafana covers application metrics and
+logs, and Langfuse adds full per-span AI trace inspection.
 
 - [What counts as a turn](#what-counts-as-a-turn)
 - [The dashboard](#the-dashboard)
 - [Time window](#time-window)
+- [Grafana runtime dashboard](#grafana-runtime-dashboard)
 - [Langfuse tracing](#langfuse-tracing)
 - [HTTP API](#http-api)
 
@@ -22,6 +24,8 @@ Token totals sum every pass; use Langfuse to inspect the individual spans inside
 ## The dashboard
 
 The Observability page summarizes activity in the selected [time window](#time-window):
+
+![Native AI observability dashboard](images/observability/01-ai-observability-dashboard.png)
 
 | Metric | Meaning |
 |---|---|
@@ -47,6 +51,19 @@ only, not answer quality. The panel is strictly read-only.
 The **7D / 30D / 90D** switch selects a rolling period ending now — not calendar weeks or months. A
 turn is included when it was created within the last 7, 30, or 90 days. **Refresh** re-pulls the
 current window.
+
+## Grafana runtime dashboard
+
+Select **Open Grafana** on the Observability page or open `http://<host>:3300`. Docker Compose
+provisions Prometheus and Loki as Grafana datasources and opens the bundled **Voyager · Spring Boot
+runtime** dashboard by default. It covers application availability and uptime, HTTP traffic and
+latency, JVM memory and CPU, garbage collection, Kafka consumer lag, and the HikariCP connection
+pool. Container logs collected by Alloy and stored in Loki are searchable from the bundled **Voyager · Logs** dashboard (service selector, throughput, and a live log stream), or ad hoc through Grafana's Explore view.
+
+![Grafana runtime dashboard](images/observability/02-grafana-runtime-dashboard.png)
+
+The Compose defaults enable anonymous Grafana admin access for local development. Disable or
+restrict anonymous access before exposing Grafana beyond a trusted machine.
 
 ## Langfuse tracing
 

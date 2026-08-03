@@ -64,12 +64,13 @@ public class HealthIndicatorConfig {
     }
 
     /**
-     * Judge0 backs {@code voyager://function/name} Task resources. Reports UP only when the
-     * engine advertises languages and has at least one execution worker; the
-     * languages/statuses/worker counts are surfaced as details for diagnostics.
-     * Custom indicators like this one are not part of the liveness/readiness
-     * groups, so a Judge0 outage marks {@code /actuator/health} degraded without
-     * failing the app's probes.
+     * Judge0 backs {@code voyager://function/name} Task resources. Reports UP when the engine
+     * is reachable and advertises languages — the signal that it can accept and run
+     * submissions. Worker counts from {@code /workers} are surfaced as diagnostic details but
+     * do NOT gate health: some Judge0 builds report zero worker pools even while executing
+     * submissions normally, so requiring {@code workers > 0} produced false DOWN states.
+     * Custom indicators like this one are not part of the liveness/readiness groups, so a
+     * Judge0 outage marks {@code /actuator/health} degraded without failing the app's probes.
      */
     @Bean
     public HealthIndicator judge0HealthIndicator(Judge0Client judge0Client) {
@@ -78,7 +79,7 @@ public class HealthIndicatorConfig {
                 int languages = judge0Client.listLanguages().size();
                 int statuses = judge0Client.countStatuses();
                 Judge0Client.WorkerStats workers = judge0Client.workerStats();
-                boolean healthy = languages > 0 && workers.total() > 0;
+                boolean healthy = languages > 0;
                 return (healthy ? Health.up() : Health.down())
                         .withDetail("languages", languages)
                         .withDetail("statuses", statuses)

@@ -132,6 +132,13 @@ public class AiModelController {
         return ResponseEntity.ok(embeddingRankingService.latest());
     }
 
+    @PostMapping("/embeddings/ranking/{runId}/cancel")
+    public ResponseEntity<EmbeddingRankingRunDTO> cancelEmbeddingRanking(
+            @PathVariable UUID runId
+    ) {
+        return ResponseEntity.ok(embeddingRankingService.cancel(runId));
+    }
+
     @PostMapping("/models/{modelId}/evaluations")
     public ResponseEntity<AiModelEvaluationDTO> startEvaluation(
             @PathVariable UUID modelId,

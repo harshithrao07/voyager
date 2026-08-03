@@ -1,0 +1,53 @@
+// Grafana Alloy — tails every compose container's stdout/stderr via the Docker
+// socket and ships it to Loki. No application change: Spring Boot logs to the
+// console, Docker captures that stream, Alloy forwards it. Labels are derived
+// from compose metadata so Grafana can filter by `service` (e.g. service="app").
+
+discovery.docker "compose" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "compose" {
+  targets = discovery.docker.compose.targets
+
+  // Only tail containers in THIS compose project. Without this, Alloy tails every
+  // container on the host (e.g. a standalone open-webui), flooding Loki with
+  // unrelated — and often too-old — log history.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = "voyager"
+    action        = "keep"
+  }
+
+  // compose service name -> `service` (this is what the dashboards filter on)
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  // strip the leading slash Docker puts on container names
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "project"
+  }
+}
+
+loki.source.docker "compose" {
+  host             = "unix:///var/run/docker.sock"
+  targets          = discovery.relabel.compose.output
+  relabel_rules    = discovery.relabel.compose.rules
+  forward_to       = [loki.write.default.receiver]
+  refresh_interval = "10s"
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

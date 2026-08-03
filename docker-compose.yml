@@ -163,6 +163,9 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      # Persist the TSDB so metric history survives container recreation. The image's
+      # default command already points --storage.tsdb.path at /prometheus.
+      - prometheus-data:/prometheus
     depends_on:
       app:
         condition: service_healthy
@@ -172,6 +175,68 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3300:3000"
+    environment:
+      # The frontend links here at <host>:3300 (see ObservabilityPage). Anonymous admin
+      # keeps the dev experience click-through, matching Langfuse's default-creds ethos;
+      # override GRAFANA_* via .env / the deployment secret store for real use.
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3300}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_DEFAULT_THEME: dark
+      # Land on the bundled Spring Boot dashboard instead of the empty Grafana home.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/voyager-spring-boot.json
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:latest
+    # Uses the image's baked-in local-config.yaml (filesystem storage under /loki).
+    # Kept internal-only: Grafana queries it at http://loki:3100 over the compose
+    # network, so it is NOT published to the host (host 3100 belongs to Langfuse).
+    # No healthcheck: the image is distroless (no shell/wget/curl), so a container
+    # probe is impossible. Grafana's Loki datasource health probe is the real check,
+    # and Alloy retries its pushes until Loki is accepting them.
+    expose:
+      - "3100"
+    volumes:
+      - loki-data:/loki
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:latest
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./docker/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Read-only Docker socket: Alloy discovers containers and tails their logs.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      loki:
+        condition: service_started
+    restart: unless-stopped
 
   judge0-server:
     image: judge0/judge0:latest
@@ -396,6 +461,10 @@ volumes:
   postgres-data:
   redis-data:
   kafka-data:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  alloy-data:
   judge0-db-data:
   langfuse_postgres_data:
   langfuse_clickhouse_data:

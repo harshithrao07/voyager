@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, ChevronDown, Info, Loader2, Play, Trophy } from 'lucide-react';
+import { Activity, ChevronDown, Info, Loader2, Play, Square, Trophy } from 'lucide-react';
 import {
+  cancelEmbeddingRanking,
   getEmbeddingRankingLatest,
   listAllAiModels,
   startEmbeddingRanking,
@@ -18,6 +19,7 @@ export function EmbeddingRankingSection() {
   const [run, setRun] = useState<EmbeddingRankingRun | null>(null);
   const [models, setModels] = useState<AiModelConfigDTO[]>([]);
   const [starting, setStarting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
@@ -73,6 +75,19 @@ export function EmbeddingRankingSection() {
     }
   };
 
+  const cancel = async () => {
+    if (!run || run.status !== 'RUNNING') return;
+    setCancelling(true);
+    setError(null);
+    try {
+      setRun(await cancelEmbeddingRanking(run.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not cancel ranking.');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const running = run?.status === 'RUNNING';
   const result = run?.status === 'COMPLETED' ? run.result : null;
 
@@ -97,15 +112,27 @@ export function EmbeddingRankingSection() {
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={start}
-          disabled={starting || running}
-          className="flex h-9 shrink-0 items-center gap-2 rounded-DEFAULT bg-primary px-3 text-body-sm font-medium text-surface-lowest transition-colors hover:bg-primary-fixed disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {starting || running ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-          {running ? 'Ranking…' : starting ? 'Starting…' : 'Run ranking'}
-        </button>
+        {running ? (
+          <button
+            type="button"
+            onClick={cancel}
+            disabled={cancelling}
+            className="flex h-9 shrink-0 items-center gap-2 rounded-DEFAULT border border-status-error/30 px-3 text-body-sm font-medium text-status-error transition-colors hover:bg-status-error/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {cancelling ? <Loader2 size={14} className="animate-spin" /> : <Square size={12} />}
+            {cancelling ? 'Stopping…' : 'Stop ranking'}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={start}
+            disabled={starting}
+            className="flex h-9 shrink-0 items-center gap-2 rounded-DEFAULT bg-primary px-3 text-body-sm font-medium text-surface-lowest transition-colors hover:bg-primary-fixed disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {starting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+            {starting ? 'Starting…' : 'Run ranking'}
+          </button>
+        )}
       </div>
 
       <HowEmbeddingRankingWorks />
@@ -126,6 +153,12 @@ export function EmbeddingRankingSection() {
       {run?.status === 'FAILED' && (
         <div className="mt-3 rounded-DEFAULT border border-status-error/30 bg-status-error/10 px-3 py-2 text-body-sm text-status-error">
           {run.error || 'The ranking run failed.'}
+        </div>
+      )}
+
+      {run?.status === 'CANCELLED' && (
+        <div className="mt-3 rounded-DEFAULT border border-border-subtle/60 bg-surface-container-lowest px-3 py-2 text-body-sm text-on-surface-variant">
+          Ranking cancelled. You can start a new run when ready.
         </div>
       )}
 

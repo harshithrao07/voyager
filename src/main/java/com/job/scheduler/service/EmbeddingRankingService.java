@@ -33,8 +33,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 
 /**
  * Ranks registered EMBEDDING-role models by retrieval quality. Ground truth is synthetic: the
@@ -50,6 +54,7 @@ import java.util.concurrent.Executors;
 @Service
 @RequiredArgsConstructor
 public class EmbeddingRankingService {
+    private static final String CANCELLATION_MARKER = "Embedding ranking cancelled by user.";
     private static final String QUERY_SYSTEM_PROMPT = """
             You write ONE short, natural request a user would type to accomplish a task that the
             given tool or function would satisfy. Describe the user's goal in plain language.
@@ -73,6 +78,7 @@ public class EmbeddingRankingService {
         thread.setDaemon(true);
         return thread;
     });
+    private final Map<UUID, Future<?>> activeRuns = new ConcurrentHashMap<>();
 
     /**
      * Validates prerequisites, records a RUNNING run, and kicks off scoring in the background. If a
@@ -108,8 +114,33 @@ public class EmbeddingRankingService {
         run.setStatus(EmbeddingRankingStatus.RUNNING);
         EmbeddingRankingRun saved = runRepository.save(run);
         UUID runId = saved.getId();
-        executor.submit(() -> execute(runId));
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            execute(runId);
+            return null;
+        });
+        activeRuns.put(runId, task);
+        executor.execute(task);
         return toDto(saved);
+    }
+
+    @Transactional
+    public EmbeddingRankingRunDTO cancel(UUID runId) {
+        EmbeddingRankingRun run = runRepository.findById(runId)
+                .orElseThrow(() -> new IllegalArgumentException("Embedding ranking run not found."));
+        if (run.getStatus() == EmbeddingRankingStatus.RUNNING) {
+            // Older databases have an enum-derived CHECK constraint that cannot be expanded by
+            // Hibernate ddl-auto=update. Persist cancellation as a distinguished terminal failure
+            // and expose it as CANCELLED in the API, preserving compatibility without a migration.
+            run.setStatus(EmbeddingRankingStatus.FAILED);
+            run.setError(CANCELLATION_MARKER);
+            run.setFinishedAt(Instant.now());
+            runRepository.save(run);
+            Future<?> future = activeRuns.remove(runId);
+            if (future != null) {
+                future.cancel(true);
+            }
+        }
+        return toDto(run);
     }
 
     @Transactional(readOnly = true)
@@ -123,7 +154,9 @@ public class EmbeddingRankingService {
 
     private void execute(UUID runId) {
         try {
-            ensureQueries();
+            checkCancelled(runId);
+            ensureQueries(runId);
+            checkCancelled(runId);
             List<CatalogResource> resources = catalogResourceProvider.enabledResources();
             Map<String, String> queries = loadQueries(resources);
             if (queries.isEmpty()) {
@@ -134,7 +167,8 @@ public class EmbeddingRankingService {
 
             List<EmbeddingRankingModelResultDTO> results = new ArrayList<>();
             for (AiModelConfig model : embeddingModels()) {
-                results.add(scoreModel(model, resources, queries));
+                checkCancelled(runId);
+                results.add(scoreModel(runId, model, resources, queries));
             }
             // Successful models first, ranked by recall@k then MRR then latency; errored last.
             results.sort(Comparator
@@ -147,17 +181,33 @@ public class EmbeddingRankingService {
                     topK, resources.size(), queries.size(), Instant.now(), results
             );
             completeRun(runId, result);
+        } catch (CancellationException exception) {
+            log.info("Embedding ranking run {} was cancelled", runId);
         } catch (Exception exception) {
             log.warn("Embedding ranking run {} failed: {}", runId, exception.getMessage());
             failRun(runId, exception.getMessage());
+        } finally {
+            activeRuns.remove(runId);
+        }
+    }
+
+    private void checkCancelled(UUID runId) {
+        if (Thread.currentThread().isInterrupted()
+                || runRepository.findById(runId)
+                .map(run -> CANCELLATION_MARKER.equals(run.getError()))
+                // start() dispatches just before its transaction commits, so the worker can
+                // briefly observe no row. Absence is not cancellation; the interrupt/marker are.
+                .orElse(false)) {
+            throw new CancellationException("Embedding ranking cancelled");
         }
     }
 
     /** (Re)generates the synthetic query for any resource whose text changed or has none. */
-    private void ensureQueries() {
+    private void ensureQueries(UUID runId) {
         AiModelConfig chatConfig = aiModelConfigService.resolveModel(null);
         ChatModel chatModel = modelResolver.resolve(chatConfig);
         for (CatalogResource resource : catalogResourceProvider.enabledResources()) {
+            checkCancelled(runId);
             String hash = hash(resource.text());
             Optional<ResourceEvalQuery> existing = queryRepository
                     .findByResourceTypeAndResourceId(resource.type(), resource.id());
@@ -213,6 +263,7 @@ public class EmbeddingRankingService {
     }
 
     private EmbeddingRankingModelResultDTO scoreModel(
+            UUID runId,
             AiModelConfig model,
             List<CatalogResource> resources,
             Map<String, String> queries
@@ -225,6 +276,7 @@ public class EmbeddingRankingService {
 
             List<float[]> resourceVectors = new ArrayList<>(resources.size());
             for (CatalogResource resource : resources) {
+                checkCancelled(runId);
                 long start = System.nanoTime();
                 float[] vector = embeddingModel.embed(resource.text()).content().vector();
                 totalNanos += System.nanoTime() - start;
@@ -243,6 +295,7 @@ public class EmbeddingRankingService {
             double hitsAtK = 0;
             double reciprocalRankSum = 0;
             for (int i = 0; i < resources.size(); i++) {
+                checkCancelled(runId);
                 String query = queries.get(key(resources.get(i)));
                 if (query == null || query.isBlank()) {
                     continue;
@@ -279,6 +332,9 @@ public class EmbeddingRankingService {
                     null
             );
         } catch (RuntimeException exception) {
+            if (exception instanceof CancellationException cancellation) {
+                throw cancellation;
+            }
             return errorResult(model, exception.getMessage());
         }
     }
@@ -299,6 +355,9 @@ public class EmbeddingRankingService {
 
     private void completeRun(UUID runId, EmbeddingRankingResultDTO result) {
         runRepository.findById(runId).ifPresent(run -> {
+            if (run.getStatus() != EmbeddingRankingStatus.RUNNING) {
+                return;
+            }
             run.setStatus(EmbeddingRankingStatus.COMPLETED);
             run.setResult(objectMapper.writeValueAsString(result));
             run.setFinishedAt(Instant.now());
@@ -308,6 +367,9 @@ public class EmbeddingRankingService {
 
     private void failRun(UUID runId, String message) {
         runRepository.findById(runId).ifPresent(run -> {
+            if (run.getStatus() != EmbeddingRankingStatus.RUNNING) {
+                return;
+            }
             run.setStatus(EmbeddingRankingStatus.FAILED);
             run.setError(message);
             run.setFinishedAt(Instant.now());
@@ -327,9 +389,11 @@ public class EmbeddingRankingService {
         }
         return new EmbeddingRankingRunDTO(
                 run.getId(),
-                run.getStatus(),
+                CANCELLATION_MARKER.equals(run.getError())
+                        ? EmbeddingRankingStatus.CANCELLED
+                        : run.getStatus(),
                 result,
-                run.getError(),
+                CANCELLATION_MARKER.equals(run.getError()) ? null : run.getError(),
                 run.getStartedAt(),
                 run.getFinishedAt()
         );

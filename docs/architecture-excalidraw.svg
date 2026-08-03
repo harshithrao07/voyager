@@ -1,117 +1,131 @@
-<svg width="1280" height="940" viewBox="0 0 1280 940" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">Distributed Job Scheduler architecture</title>
-  <desc id="desc">Architecture diagram for a distributed job scheduler using Spring Boot, PostgreSQL, Kafka, Redis, workers, handlers, and recovery services.</desc>
+<svg width="1440" height="1040" viewBox="0 0 1440 1040" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Voyager architecture</title>
+  <desc id="desc">Three-layer architecture diagram showing Voyager product capabilities, the integrated durable workflow runtime, and infrastructure plus external integrations.</desc>
   <defs>
-    <filter id="paperShadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#1f2937" flood-opacity="0.14"/>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#172033" flood-opacity="0.12"/>
     </filter>
-    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
-      <path d="M2 2 L10 6 L2 10" stroke="#172033" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L9 5L1 9" fill="none" stroke="#334155" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
     <style>
-      .panel { fill: #fffdf8; stroke: #172033; stroke-width: 2.2; }
-      .box { stroke: #172033; stroke-width: 2.4; rx: 18; ry: 18; }
-      .soft { stroke: #172033; stroke-width: 2.1; rx: 16; ry: 16; }
-      .line { stroke: #172033; stroke-width: 2.4; fill: none; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow); }
-      .thin { stroke-width: 2; }
-      .dash { stroke-dasharray: 9 9; }
-      .title { fill: #111827; font-family: "Segoe UI", Arial, sans-serif; font-size: 36px; font-weight: 800; letter-spacing: 0; text-anchor: middle; }
-      .subtitle { fill: #4b5563; font-family: "Segoe UI", Arial, sans-serif; font-size: 16px; font-weight: 500; text-anchor: middle; }
-      .section { fill: #6b7280; font-family: "Segoe UI", Arial, sans-serif; font-size: 13px; font-weight: 800; text-anchor: start; letter-spacing: 0.2px; }
-      .h { fill: #111827; font-family: "Segoe UI", Arial, sans-serif; font-size: 20px; font-weight: 800; text-anchor: middle; }
-      .t { fill: #374151; font-family: "Segoe UI", Arial, sans-serif; font-size: 14px; font-weight: 400; text-anchor: middle; }
-      .label { fill: #374151; font-family: "Segoe UI", Arial, sans-serif; font-size: 12px; font-weight: 700; text-anchor: middle; }
+      .title{font:700 34px Inter,Arial,sans-serif;fill:#172033;text-anchor:middle}
+      .subtitle{font:400 16px Inter,Arial,sans-serif;fill:#526076;text-anchor:middle}
+      .layer{font:700 15px Inter,Arial,sans-serif;letter-spacing:1.6px;fill:#273449}
+      .layerNote{font:400 13px Inter,Arial,sans-serif;fill:#64748b}
+      .h{font:700 16px Inter,Arial,sans-serif;fill:#172033;text-anchor:middle}
+      .t{font:400 12.5px Inter,Arial,sans-serif;fill:#526076;text-anchor:middle}
+      .tag{font:600 11px Inter,Arial,sans-serif;fill:#334155;text-anchor:middle}
+      .line{stroke:#334155;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#arrow)}
+      .soft{stroke:#64748b;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:7 6;marker-end:url(#arrow)}
+      .card{stroke:#334155;stroke-width:1.8;rx:13;filter:url(#shadow)}
     </style>
   </defs>
 
-  <rect width="1280" height="940" fill="#f3f4f6"/>
-  <rect x="44" y="36" width="1192" height="868" rx="30" class="panel" filter="url(#paperShadow)"/>
+  <rect width="1440" height="1040" fill="#FBFCFE"/>
+  <path d="M56 31C231 21 413 36 590 27C806 17 1004 37 1381 26" stroke="#CBD5E1" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+  <text x="720" y="66" class="title">Voyager</text>
+  <text x="720" y="96" class="subtitle">One self-hosted platform: product experience, durable workflow engine, and connected runtimes</text>
 
-  <text x="640" y="86" class="title">Distributed Job Scheduler</text>
-  <text x="640" y="116" class="subtitle">Durable scheduling with PostgreSQL, asynchronous dispatch with Kafka, and worker recovery with Redis-backed coordination.</text>
+  <!-- Layer 1: Voyager product -->
+  <rect x="48" y="130" width="1344" height="248" rx="22" fill="#EEF6FF" stroke="#4C78A8" stroke-width="2.2" stroke-dasharray="10 6"/>
+  <text x="76" y="163" class="layer">01 · VOYAGER PRODUCT LAYER</text>
+  <text x="76" y="187" class="layerNote">What authors and operators use</text>
 
-  <line x1="92" y1="150" x2="1188" y2="150" stroke="#e5e7eb" stroke-width="2"/>
-  <line x1="92" y1="390" x2="1188" y2="390" stroke="#e5e7eb" stroke-width="2"/>
-  <line x1="92" y1="660" x2="1188" y2="660" stroke="#e5e7eb" stroke-width="2"/>
-  <text x="94" y="174" class="section">DURABLE SCHEDULING PATH</text>
-  <text x="94" y="414" class="section">ASYNC WORKER EXECUTION</text>
-  <text x="94" y="684" class="section">RECOVERY AND FAILURE HANDLING</text>
+  <rect x="88" y="216" width="280" height="118" fill="#DDEEFF" class="card"/>
+  <text x="228" y="249" class="h">Authoring workspace</text>
+  <text x="228" y="275" class="t">Visual canvas · Monaco JSON</text>
+  <text x="228" y="297" class="t">drafts · state tests · revisions</text>
+  <rect x="176" y="311" width="104" height="18" rx="9" fill="#BFDDF8"/>
+  <text x="228" y="324" class="tag">React UI</text>
 
-  <!-- Top lane -->
-  <rect x="92" y="210" width="172" height="112" fill="#e8f3ff" class="box"/>
-  <text x="178" y="250" class="h">Client</text>
-  <text x="178" y="278" class="t">submit, list, cancel</text>
-  <text x="178" y="300" class="t">REST requests</text>
+  <rect x="416" y="216" width="280" height="118" fill="#E5E2FF" class="card"/>
+  <text x="556" y="249" class="h">AI workflow design</text>
+  <text x="556" y="275" class="t">persistent chat · tool grounding</text>
+  <text x="556" y="297" class="t">validation · repair · solution reuse</text>
+  <rect x="488" y="311" width="136" height="18" rx="9" fill="#CEC8FA"/>
+  <text x="556" y="324" class="tag">Chat + embeddings</text>
 
-  <rect x="342" y="198" width="212" height="136" fill="#fff2df" class="box"/>
-  <text x="448" y="240" class="h">Spring Boot API</text>
-  <text x="448" y="269" class="t">JobController</text>
-  <text x="448" y="291" class="t">JobService</text>
-  <text x="448" y="313" class="t">Typed payload validation</text>
+  <rect x="744" y="216" width="280" height="118" fill="#E1F5EA" class="card"/>
+  <text x="884" y="249" class="h">Resource ecosystem</text>
+  <text x="884" y="275" class="t">system Tasks · versioned functions</text>
+  <text x="884" y="297" class="t">MCP registry · live tool catalog</text>
+  <rect x="820" y="311" width="128" height="18" rx="9" fill="#BFE5D0"/>
+  <text x="884" y="324" class="tag">Exact Task URIs</text>
 
-  <rect x="646" y="194" width="210" height="136" rx="18" fill="#e9f9ef" stroke="#172033" stroke-width="2.4"/>
-  <text x="751" y="246" class="h">PostgreSQL</text>
-  <text x="751" y="276" class="t">jobs + execution logs</text>
+  <rect x="1072" y="216" width="280" height="118" fill="#FFF0D8" class="card"/>
+  <text x="1212" y="249" class="h">Operations</text>
+  <text x="1212" y="275" class="t">execution traces · cancellation</text>
+  <text x="1212" y="297" class="t">model ranking · AI observability</text>
+  <rect x="1157" y="311" width="110" height="18" rx="9" fill="#F6D9A9"/>
+  <text x="1212" y="324" class="tag">Operate + compare</text>
 
-  <rect x="948" y="198" width="232" height="136" fill="#fff8d7" class="box"/>
-  <text x="1064" y="240" class="h">Due Job Scheduler</text>
-  <text x="1064" y="269" class="t">polls due rows</text>
-  <text x="1064" y="291" class="t">claims with SKIP LOCKED</text>
+  <!-- Product to core -->
+  <path d="M228 334V405H405V449" class="line"/>
+  <path d="M556 334V405H586V449" class="line"/>
+  <path d="M884 334V405H854V449" class="line"/>
+  <path d="M1212 334V405H1035V449" class="line"/>
 
-  <path d="M264 266 L332 266" class="line"/>
-  <text x="298" y="248" class="label">REST</text>
-  <path d="M554 266 L636 266" class="line"/>
-  <text x="595" y="248" class="label">persist first</text>
-  <path d="M856 266 L938 266" class="line"/>
-  <text x="897" y="248" class="label">poll due jobs</text>
+  <!-- Layer 2: integrated app/core -->
+  <rect x="48" y="424" width="1344" height="252" rx="22" fill="#F4F1FF" stroke="#7559B7" stroke-width="2.2" stroke-dasharray="10 6"/>
+  <text x="76" y="457" class="layer">02 · INTEGRATED SPRING BOOT APPLICATION</text>
+  <text x="76" y="481" class="layerNote">Voyager product services and its durable workflow runtime run together</text>
 
-  <!-- Middle lane -->
-  <path d="M1064 334 L1064 446" class="line"/>
-  <text x="1123" y="394" class="label">publish event</text>
+  <rect x="284" y="508" width="244" height="118" fill="#ECE8FF" class="card"/>
+  <text x="406" y="541" class="h">API and services</text>
+  <text x="406" y="567" class="t">REST · WebSocket · validation</text>
+  <text x="406" y="589" class="t">catalog · secrets · revisions</text>
 
-  <rect x="946" y="466" width="232" height="152" fill="#f0ebff" class="box"/>
-  <text x="1062" y="510" class="h">Kafka</text>
-  <text x="1062" y="540" class="t">job-queue</text>
-  <text x="1062" y="562" class="t">job-queue-high</text>
-  <text x="1062" y="584" class="t">job-dlq</text>
+  <rect x="598" y="494" width="244" height="146" fill="#DDD5FF" class="card" stroke-width="2.5"/>
+  <text x="720" y="530" class="h">Durable interpreter</text>
+  <text x="720" y="556" class="t">ASL + JSONata · execution scopes</text>
+  <text x="720" y="578" class="t">Parallel / Map · Retry / Catch</text>
+  <text x="720" y="600" class="t">frontier-driven advancement</text>
+  <rect x="654" y="614" width="132" height="18" rx="9" fill="#C8BCF7"/>
+  <text x="720" y="627" class="tag">persisted execution</text>
 
-  <rect x="608" y="466" width="232" height="152" fill="#e8f3ff" class="box"/>
-  <text x="724" y="510" class="h">Worker Service</text>
-  <text x="724" y="540" class="t">consumes job events</text>
-  <text x="724" y="562" class="t">runs one attempt</text>
-  <text x="724" y="584" class="t">updates lifecycle state</text>
+  <rect x="912" y="508" width="244" height="118" fill="#ECE8FF" class="card"/>
+  <text x="1034" y="541" class="h">Schedulers and workers</text>
+  <text x="1034" y="567" class="t">cron · Wait · retries · watchdogs</text>
+  <text x="1034" y="589" class="t">Task dispatch · recovery · DLQ</text>
 
-  <rect x="286" y="466" width="202" height="152" rx="18" fill="#ffe6e8" stroke="#172033" stroke-width="2.4"/>
-  <text x="387" y="512" class="h">Redis</text>
-  <text x="387" y="540" class="t">worker locks</text>
-  <text x="387" y="562" class="t">idempotency markers</text>
+  <path d="M528 567H590" class="line"/>
+  <path d="M842 567H904" class="line"/>
 
-  <path d="M946 542 L850 542" class="line"/>
-  <text x="898" y="523" class="label">consume</text>
-  <path d="M608 542 L500 542" class="line"/>
-  <text x="554" y="523" class="label">lock + dedupe</text>
-  <path d="M724 466 L724 330" class="line thin dash"/>
-  <text x="668" y="408" class="label">update status + logs</text>
+  <!-- Core to foundation -->
+  <path d="M406 626V720H226V767" class="line"/>
+  <path d="M680 640V720H545V767" class="line"/>
+  <path d="M760 640V720H879V767" class="line"/>
+  <path d="M1034 626V720H1212V767" class="line"/>
 
-  <!-- Handler lane -->
-  <rect x="592" y="704" width="264" height="136" fill="#f9fafb" class="box"/>
-  <text x="724" y="742" class="h">Job Handlers</text>
-  <text x="724" y="774" class="t">SEND_EMAIL</text>
-  <text x="724" y="798" class="t">WEBHOOK</text>
-  <text x="724" y="822" class="t">CLEANUP</text>
+  <!-- Layer 3: infra/integrations -->
+  <rect x="48" y="704" width="1344" height="278" rx="22" fill="#F3F8F4" stroke="#4F8A64" stroke-width="2.2" stroke-dasharray="10 6"/>
+  <text x="76" y="737" class="layer">03 · DURABLE INFRASTRUCTURE AND EXTERNAL RUNTIMES</text>
+  <text x="76" y="761" class="layerNote">State, coordination, execution, AI, and telemetry remain replaceable integration boundaries</text>
 
-  <path d="M724 618 L724 694" class="line"/>
-  <text x="784" y="659" class="label">route by type</text>
+  <rect x="88" y="792" width="276" height="132" fill="#E0F0E5" class="card"/>
+  <text x="226" y="827" class="h">PostgreSQL + pgvector</text>
+  <text x="226" y="853" class="t">definitions · executions · traces</text>
+  <text x="226" y="875" class="t">row locks · encrypted credentials</text>
+  <text x="226" y="897" class="t">embeddings · semantic cache</text>
 
-  <!-- Recovery lane -->
-  <rect x="92" y="720" width="384" height="110" fill="#ecfeff" class="soft"/>
-  <text x="284" y="762" class="h">Recovery Services</text>
-  <text x="284" y="792" class="t">queued + running watchdogs</text>
-  <text x="284" y="814" class="t">Redis health monitor + DLQ publisher</text>
+  <rect x="408" y="792" width="276" height="132" fill="#E0F0E5" class="card"/>
+  <text x="546" y="827" class="h">Kafka + Redis</text>
+  <text x="546" y="853" class="t">Task and priority queues · DLQ</text>
+  <text x="546" y="875" class="t">worker locks · idempotency</text>
+  <text x="546" y="897" class="t">distributed coordination</text>
 
-  <path d="M284 720 L284 704 L548 704 L548 360 L670 360 L670 330" class="line thin dash"/>
-  <text x="416" y="696" class="label">reset stuck jobs</text>
+  <rect x="728" y="792" width="276" height="132" fill="#E0F0E5" class="card"/>
+  <text x="866" y="827" class="h">Judge0 + MCP</text>
+  <text x="866" y="853" class="t">sandboxed function execution</text>
+  <text x="866" y="875" class="t">HTTP-family and STDIO servers</text>
+  <text x="866" y="897" class="t">workflow Task side effects</text>
 
-  <path d="M476 812 L520 860 L916 860 L916 584 L936 584" class="line thin dash"/>
-  <text x="708" y="884" class="label">retry DLQ publish</text>
+  <rect x="1048" y="792" width="304" height="132" fill="#E0F0E5" class="card"/>
+  <text x="1200" y="827" class="h">Models + observability</text>
+  <text x="1200" y="853" class="t">OpenAI-compatible endpoints</text>
+  <text x="1200" y="875" class="t">Langfuse · Prometheus · Grafana</text>
+  <text x="1200" y="897" class="t">Loki · Alloy · failure-safe telemetry</text>
+
+  <path d="M88 961C293 975 509 955 720 966C927 977 1134 954 1352 966" stroke="#86A892" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
 </svg>

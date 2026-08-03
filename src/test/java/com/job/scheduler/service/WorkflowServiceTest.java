@@ -415,7 +415,7 @@ class WorkflowServiceTest {
                   "States": {
                     "Call": {
                       "Type": "Task",
-                      "Resource": "voyager://cleanup",
+                      "Resource": "voyager://system/webhook",
                       "End": true
                     }
                   }

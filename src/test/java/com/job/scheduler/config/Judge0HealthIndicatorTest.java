@@ -37,10 +37,27 @@ class Judge0HealthIndicatorTest {
     }
 
     @Test
-    void downWhenNoWorkers() {
+    void upWhenLanguagesAvailableEvenWithoutReportedWorkers() {
+        // Some Judge0 builds report zero worker pools via /workers even while executing
+        // submissions normally, so worker count must not gate health.
         when(judge0Client.listLanguages())
                 .thenReturn(List.of(new FunctionLanguageDTO(71, "Python", true)));
         when(judge0Client.countStatuses()).thenReturn(14);
+        when(judge0Client.workerStats())
+                .thenReturn(new Judge0Client.WorkerStats(0, 0));
+
+        Health health = indicator.health();
+
+        assertThat(health.getStatus()).isEqualTo(Status.UP);
+        assertThat(health.getDetails())
+                .containsEntry("workers", 0)
+                .containsEntry("availableWorkers", 0);
+    }
+
+    @Test
+    void downWhenNoLanguages() {
+        when(judge0Client.listLanguages()).thenReturn(List.of());
+        when(judge0Client.countStatuses()).thenReturn(0);
         when(judge0Client.workerStats())
                 .thenReturn(new Judge0Client.WorkerStats(0, 0));
 

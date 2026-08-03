@@ -134,6 +134,9 @@ export function ManualWorkflowEditor({
   const [aiAuthoringBusy, setAiAuthoringBusy] = useState(false);
   const [aiAuthoringResult, setAiAuthoringResult] = useState<{ title: string; lines: string[] } | null>(null);
   const [aiAuthoringError, setAiAuthoringError] = useState<string | null>(null);
+  // Dormant natural-language authoring input UI. Kept in place, gated off; flip on
+  // when the NL-edit/patch flow is re-enabled.
+  const AI_AUTHORING_INPUT_ENABLED = false;
   const aiAuthoringInstruction = '';
   const setAiAuthoringInstruction = (_value: string) => {};
   const [aiAuthoringPatch] = useState<null | { definition: AslDefinition; diff: DormantDiffLine[] }>(null);
@@ -870,7 +873,7 @@ export function ManualWorkflowEditor({
               </button>
             </header>
             <div className="space-y-4 p-5">
-              {false && !aiAuthoringResult && (
+              {AI_AUTHORING_INPUT_ENABLED && !aiAuthoringResult && (
                 <label className="block">
                   <span className="mb-2 block font-mono-sm text-[10px] uppercase tracking-[0.08em] text-on-surface-variant">
                     Describe the change
@@ -886,7 +889,7 @@ export function ManualWorkflowEditor({
                   />
                 </label>
               )}
-              {false && !aiAuthoringResult && !aiAuthoringError && !aiAuthoringPatch && (
+              {AI_AUTHORING_INPUT_ENABLED && !aiAuthoringResult && !aiAuthoringError && !aiAuthoringPatch && (
                 <div className="rounded-DEFAULT border border-status-error/30 bg-status-error/8 p-4">
                   <div className="font-mono-sm text-[10px] uppercase tracking-[0.08em] text-status-error">
                     Problems to repair

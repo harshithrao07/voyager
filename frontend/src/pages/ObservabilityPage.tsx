@@ -12,6 +12,7 @@ import {
   Gauge,
   Info,
   KeyRound,
+  LineChart,
   Loader2,
   RefreshCw,
   ShieldCheck,
@@ -33,6 +34,11 @@ export function ObservabilityPage() {
     typeof window === 'undefined'
       ? 'http://localhost:3100'
       : `${window.location.protocol}//${window.location.hostname}:3100`;
+
+  const grafanaUrl =
+    typeof window === 'undefined'
+      ? 'http://localhost:3300'
+      : `${window.location.protocol}//${window.location.hostname}:3300`;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -113,6 +119,14 @@ export function ObservabilityPage() {
                 Refresh
               </button>
               <LangfuseAccess />
+              <a
+                href={grafanaUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex h-9 items-center gap-2 border border-border-subtle bg-surface-base px-3 text-body-sm font-medium text-on-surface transition-colors hover:border-secondary/50 hover:text-secondary"
+              >
+                <LineChart size={14} /> Open Grafana <ArrowUpRight size={14} />
+              </a>
               <a
                 href={langfuseUrl}
                 target="_blank"

@@ -208,6 +208,8 @@ export interface AiModelEvaluationResult {
     asl: number;
     mcp: number;
     functions: number;
+    /** Added after workflow-ai-v1 launched; absent on older persisted results. */
+    tools?: number;
     safety: number;
   };
   judge?: AiModelEvaluationJudgeSummary | null;
@@ -1559,7 +1561,7 @@ export async function setAiModelDefault(modelId: string): Promise<AiModelConfigD
   return response.json();
 }
 
-export type EmbeddingRankingStatus = 'RUNNING' | 'COMPLETED' | 'FAILED';
+export type EmbeddingRankingStatus = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 
 export interface EmbeddingRankingModelResult {
   modelId: string;
@@ -1609,6 +1611,17 @@ export async function getEmbeddingRankingLatest(): Promise<EmbeddingRankingRun |
   }
   const text = await response.text();
   return text ? (JSON.parse(text) as EmbeddingRankingRun) : null;
+}
+
+export async function cancelEmbeddingRanking(runId: string): Promise<EmbeddingRankingRun> {
+  const response = await fetch(`/app/v1/ai/embeddings/ranking/${runId}/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to cancel embedding ranking: ${await readError(response)}`);
+  }
+  return response.json();
 }
 
 export type WorkflowAiObservabilityModelBreakdown = {
