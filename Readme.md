@@ -665,10 +665,10 @@ Latest JaCoCo run across the full Testcontainers-backed suite:
 
 | Metric | Covered | Total | Coverage |
 |---|---:|---:|---:|
-| Instructions | 40,873 | 52,531 | 78% |
-| Branches | 3,737 | 6,016 | 62% |
-| Lines | 8,914 | 11,503 | 77% |
-| Methods | 1,399 | 1,703 | 82% |
+| Instructions | 40,977 | 52,632 | 78% |
+| Branches | 3,744 | 6,026 | 62% |
+| Lines | 8,944 | 11,532 | 78% |
+| Methods | 1,404 | 1,708 | 82% |
 | Classes | 320 | 346 | 92% |
 
 Per-package instruction coverage:
@@ -683,10 +683,10 @@ Per-package instruction coverage:
 | `utility` | 100% |
 | `com.job.scheduler.workflow.asl.validation` | 94% |
 | `handlers` | 93% |
-| `com.job.scheduler.workflow.task` | 91% |
+| `com.job.scheduler.workflow.task` | 92% |
+| `dto.payload` | 91% |
 | `exception` | 89% |
 | `dto` | 89% |
-| `dto.payload` | 89% |
 | `scheduler` (due-job, watchdogs, DLQ) | 89% |
 | `com.job.scheduler.workflow.asl.runtime` | 87% |
 | `com.job.scheduler.entity.converter` | 86% |
