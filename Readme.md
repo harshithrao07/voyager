@@ -665,11 +665,37 @@ Latest JaCoCo run across the full Testcontainers-backed suite:
 
 | Metric | Covered | Total | Coverage |
 |---|---:|---:|---:|
-| Instructions | 34,944 | 42,688 | 82% |
-| Branches | 3,083 | 4,761 | 65% |
-| Lines | 7,688 | 9,454 | 81% |
-| Methods | 1,251 | 1,449 | 86% |
-| Classes | 287 | 300 | 96% |
+| Instructions | 40,873 | 52,531 | 78% |
+| Branches | 3,737 | 6,016 | 62% |
+| Lines | 8,914 | 11,503 | 77% |
+| Methods | 1,399 | 1,703 | 82% |
+| Classes | 320 | 346 | 92% |
+
+Per-package instruction coverage:
+
+| Package | Coverage |
+|---|---:|
+| `consumers` | 100% |
+| `com.job.scheduler.entity` | 100% |
+| `enums` | 100% |
+| `monitoring` | 100% |
+| `producers` | 100% |
+| `utility` | 100% |
+| `com.job.scheduler.workflow.asl.validation` | 94% |
+| `handlers` | 93% |
+| `com.job.scheduler.workflow.task` | 91% |
+| `exception` | 89% |
+| `dto` | 89% |
+| `dto.payload` | 89% |
+| `scheduler` (due-job, watchdogs, DLQ) | 89% |
+| `com.job.scheduler.workflow.asl.runtime` | 87% |
+| `com.job.scheduler.entity.converter` | 86% |
+| `controller` | 82% |
+| `service` (job lifecycle, worker, locks) | 72% |
+| `config` | 66% |
+| `com.job.scheduler` (root) | 38% |
+
+Open `target/site/jacoco/index.html` after `mvn test` for the drill-down view.
 
 <!-- COVERAGE-END -->
 
