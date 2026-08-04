@@ -1,0 +1,219 @@
+{
+  "id": "workflow-generation-ab-v1",
+  "description": "Paired workflow-only evaluation for qwen3:8b generation safeguards.",
+  "instructionPrefix": "/no_think\n",
+  "repetitions": 3,
+  "qualityGates": {},
+  "cases": [
+    {
+      "id": "simple-succeed",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow now with exactly one Succeed state named Done. Do not ask questions. Return the finished workflow.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "simple-wait",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that waits 5 seconds and then succeeds. Use JSONata-only Voyager ASL. Do not ask questions.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "simple-pass-output",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow with a Pass state that outputs an object containing status 'ready' and then reaches a Succeed state. Return it now.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "simple-choice",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow using a JSONata Choice: if input approved is true succeed, otherwise fail with error NotApproved. Do not ask questions.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "simple-dynamic-wait",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that waits for the integer in input.delaySeconds using a JSONata expression, then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "simple-multi-pass",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow with two Pass states named Normalize and BuildResult followed by Succeed. Normalize should preserve the input; BuildResult should output a JSON object with ok true.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "jsonata-select-fields",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that uses Pass Output JSONata to return only customerId and email from its input, then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "jsonata-amount-choice",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that uses JSONata Choice condition input.amount > 1000. Route high amounts to a Pass output requiring review and other amounts to a Pass output approved, then succeed.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "jsonata-assign",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow whose first Pass Assign stores input.firstName & ' ' & input.lastName in variable fullName, and whose next Pass outputs that variable before succeeding. JSONata only.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "jsonata-array-count",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow with a Pass Output containing itemCount calculated with JSONata $count over input.items, then succeed.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "jsonata-choice-default",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow with a JSONata Choice that routes input.priority='urgent' to an Urgent Pass and uses Default for a Normal Pass; both paths end successfully.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "jsonata-fail-cause",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that checks input.valid using JSONata. True succeeds; false enters a Fail state with static Error InvalidInput and Cause Validation failed.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "docs-search",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that uses the registered Tandem documentation MCP tool to search docs for Python SDK installation, then succeeds. Use the exact live Resource URI and argument schema. Return it now.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "docs-get-page",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that fetches and normalizes a Tandem documentation page using the registered get_doc MCP tool, taking the page path from input.path, then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "docs-how-to",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that calls the registered documentation tool which answers how to use Tandem. Pass input.question to the matching tool and then succeed.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "docs-start-path",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that calls the registered Tandem tool for recommending the best documentation start path for a developer, then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "docs-next-reading",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that uses the registered Tandem docs tool to recommend what to read after input.currentPage for input.goal, then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "docs-guide",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that retrieves a structured Tandem learning guide for the Python SDK using the matching registered MCP tool, then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "notion-search",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that searches Notion by the title supplied in input.query using the exact registered read tool, then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "notion-retrieve-page",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that retrieves a Notion page whose id is input.pageId using the matching registered MCP tool, then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "notion-retrieve-database",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that retrieves a Notion database using input.databaseId and the exact matching registered MCP resource, then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "notion-users",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that lists Notion users using the registered read-only MCP tool and then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "notion-comments",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that retrieves Notion comments for input.blockId using the matching registered MCP tool, then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "notion-page-markdown",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that retrieves a Notion page as Markdown using input.pageId and the matching registered MCP tool, then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "parallel-waits",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow with one Parallel state containing two branches. One branch waits 1 second and succeeds; the other waits 2 seconds and succeeds. The workflow then succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "map-items",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled inline Map workflow over input.items with MaxConcurrency 3. Each iteration uses a Pass state to output the current item from JSONata Map context and succeeds.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "parallel-docs",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled Parallel workflow. One branch searches Tandem docs for workflow installation using the matching registered MCP tool; the other waits 2 seconds. Join and succeed.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "map-transform",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled inline Map over input.orders. Use ItemSelector to pass order and index from JSONata Map context, then a Pass state outputs both. Preserve result order and succeed.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "task-retry-catch",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled workflow that searches Tandem docs with the registered MCP resource. Add a Retry for States.Timeout with two attempts and a Catch for States.ALL that routes to a Fail state; success routes to Succeed.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    },
+    {
+      "id": "parallel-map-nested",
+      "category": "asl",
+      "workflowExpected": true,
+      "instruction": "Create a complete unscheduled Parallel workflow with two branches: one branch has an inline Map over input.items whose processor immediately succeeds, and the other branch has a Pass state that ends. Join and succeed.",
+      "metrics": ["asl_present", "asl_structural_valid"]
+    }
+  ]
+}

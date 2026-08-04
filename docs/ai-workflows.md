@@ -450,6 +450,8 @@ chat models; the full model-management, discovery, and ranking API is documented
 | `scheduler.workflow-ai.context.summary-max-characters` | `WORKFLOW_AI_SUMMARY_MAX_CHARACTERS` | `6000` | Maximum persisted summary length. |
 | `scheduler.workflow-ai.tool-calling.enabled` | `WORKFLOW_AI_TOOL_CALLING_ENABLED` | `true` | Use bounded catalog-search and ASL-validation tools for large catalogs. |
 | `scheduler.workflow-ai.tool-calling.min-catalog-size` | `WORKFLOW_AI_TOOL_CALLING_MIN_CATALOG_SIZE` | `12` | Minimum live resource count before tool calling replaces the prompt catalog. |
+| `scheduler.workflow-ai.structured-output.enabled` | `WORKFLOW_AI_STRUCTURED_OUTPUT_ENABLED` | `true` | Use the model's learned JSON-schema/JSON output mode. Disable only for controlled evaluation. |
+| `scheduler.workflow-ai.repair.max-passes` | `WORKFLOW_AI_MAX_REPAIR_PASSES` | `2` | Maximum validator-feedback repair calls after the initial response; `0` is useful for a benchmark baseline. |
 | `scheduler.workflow-ai.solution-cache.enabled` | `WORKFLOW_AI_SOLUTION_CACHE_ENABLED` | `true` | Seed a new conversation with the nearest prior validated workflow as an adaptation template. |
 | `scheduler.workflow-ai.solution-cache.adapt-max-distance` | `WORKFLOW_AI_SOLUTION_CACHE_ADAPT_MAX_DISTANCE` | `0.35` | Cosine-distance ceiling for reusing a prior solution; beyond it, generate cold. |
 | `scheduler.workflow-ai.solution-cache.reconcile-delay-ms` | `WORKFLOW_AI_SOLUTION_CACHE_RECONCILE_DELAY_MS` | `900000` | Interval for re-embedding cached solutions after an embedding-model change. |

@@ -1400,6 +1400,32 @@ class WorkflowAiConversationServiceTest {
     }
 
     @Test
+    void benchmarkCanDisableValidatorRepairPasses() throws Exception {
+        JsonNode invalid = objectMapper.readTree("""
+                {"type":"AdaptiveCard","body":[]}
+                """);
+        ReflectionTestUtils.setField(service, "maxRepairPasses", 0);
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
+        when(aslDefinitionValidator.validate(invalid)).thenReturn(
+                new AslValidationResult(List.of(new AslValidationIssue(
+                        "$", AslValidationCategory.ASL, "START_AT_REQUIRED",
+                        "StartAt is required"
+                )))
+        );
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"ASL_READY","message":"ready","aslDefinition":{"type":"AdaptiveCard","body":[]}}
+                """)));
+
+        WorkflowAiResponseDTO response = service.startConversation(
+                "create a workflow that succeeds", modelConfig.getId(), null, null);
+
+        assertThat(response.validationIssues()).isNotEmpty();
+        verify(chatModel).chat(anyList());
+    }
+
+    @Test
     void generalChatTurnDropsStrayAslInsteadOfEnteringReview() {
         when(aiModelConfigService.resolveModel(modelConfig.getId()))
                 .thenReturn(modelConfig);
@@ -2382,6 +2408,23 @@ class WorkflowAiConversationServiceTest {
                 modelConfig,
                 AiStructuredOutputMode.STRICT_JSON_SCHEMA
         );
+    }
+
+    @Test
+    void benchmarkCanDisableStructuredOutputWithoutChangingModelConfiguration() {
+        ReflectionTestUtils.setField(service, "structuredOutputEnabled", false);
+        when(aiModelConfigService.resolveModel(modelConfig.getId())).thenReturn(modelConfig);
+        when(modelResolver.resolve(modelConfig)).thenReturn(chatModel);
+        when(messageRepository.findByConversationOrderByCreatedAtAsc(any())).thenReturn(List.of());
+        when(chatModel.chat(anyList())).thenReturn(aiResponse(AiMessage.from("""
+                {"stage":"COLLECTING_WORKFLOW_DETAILS","message":"which city?"}
+                """)));
+
+        service.startConversation("build a workflow", modelConfig.getId(), null, null);
+
+        verify(chatModel).chat(anyList());
+        verify(chatModel, never()).chat(any(ChatRequest.class));
+        verify(modelResolver, never()).preferredStructuredOutputMode(any());
     }
 
     @Test

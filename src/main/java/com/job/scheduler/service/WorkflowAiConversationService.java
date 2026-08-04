@@ -113,7 +113,6 @@ public class WorkflowAiConversationService {
     private static final String FAILED_VALIDATION_MESSAGE =
             "I couldn't apply the generated change because it still failed validation after "
                     + "automatic repair attempts. The last valid workflow was preserved.";
-    private static final int MAX_ASSISTANT_GENERATION_ATTEMPTS = 3;
     private static final int THINKING_FLUSH_CHARACTERS = 24;
     private static final int ANSWER_PROGRESS_CHARACTERS = 160;
     /**
@@ -136,6 +135,10 @@ public class WorkflowAiConversationService {
     private boolean toolCallingEnabled;
     @Value("${scheduler.workflow-ai.tool-calling.min-catalog-size:12}")
     private int toolCallingMinCatalogSize = 12;
+    @Value("${scheduler.workflow-ai.structured-output.enabled:true}")
+    private boolean structuredOutputEnabled = true;
+    @Value("${scheduler.workflow-ai.repair.max-passes:2}")
+    private int maxRepairPasses = 2;
 
     // Cheap heuristic to tell a "just chatting" turn (a greeting or a general question) from a real
     // build request, so a general turn can skip shipping the whole function/MCP catalog to the model
@@ -1300,11 +1303,12 @@ public class WorkflowAiConversationService {
         );
         String rejectedAttemptFingerprint = validationIssues.isEmpty()
                 ? null : assistantAttemptFingerprint(attempt);
-        for (int generationAttempt = 1;
+        int boundedRepairPasses = Math.max(0, maxRepairPasses);
+        for (int repairPass = 1;
              !validationIssues.isEmpty()
                      && !telemetry.repeatedInvalidResponse
-                     && generationAttempt < MAX_ASSISTANT_GENERATION_ATTEMPTS;
-             generationAttempt++) {
+                     && repairPass <= boundedRepairPasses;
+             repairPass++) {
             boolean repairIncludesFunctionContract = !prompt.generalTurn()
                     && (attempt.hasFunctionProposalSignal()
                             || validationIssues.stream().anyMatch(
@@ -1317,8 +1321,8 @@ public class WorkflowAiConversationService {
                     turnStream,
                     prompt.generalTurn()
                             ? "Preparing the reply"
-                            : "Repairing the response (attempt " + (generationAttempt + 1)
-                                    + " of " + MAX_ASSISTANT_GENERATION_ATTEMPTS + ")",
+                            : "Repairing the response (attempt " + (repairPass + 1)
+                                    + " of " + (boundedRepairPasses + 1) + ")",
                     prompt.generalTurn()
                             ? generalChatRepairPrompt(messages)
                             : repairPrompt(
@@ -2186,7 +2190,7 @@ public class WorkflowAiConversationService {
             List<ChatMessage> messages,
             Integer maxOutputTokens
     ) {
-        if (modelConfig == null) {
+        if (!structuredOutputEnabled || modelConfig == null) {
             return promptOnlyChat(model, messages, maxOutputTokens);
         }
 

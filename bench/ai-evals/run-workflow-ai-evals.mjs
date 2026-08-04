@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,7 +10,14 @@ const suitePath = resolve(
     ?? resolve(scriptDirectory, '..', '..', 'src', 'main', 'resources', 'ai-evals', 'workflow-ai-v1.json'),
 );
 const baseUrl = (argumentsMap['base-url'] ?? 'http://localhost:8081').replace(/\/+$/, '');
-const suite = JSON.parse(await readFile(suitePath, 'utf8'));
+const suiteText = await readFile(suitePath, 'utf8');
+const suite = JSON.parse(suiteText);
+const selectedCases = argumentsMap['case-id']
+  ? suite.cases.filter((testCase) => testCase.id === argumentsMap['case-id'])
+  : suite.cases;
+if (selectedCases.length === 0) {
+  throw new Error(`Suite case '${argumentsMap['case-id']}' was not found.`);
+}
 const repetitions = positiveInteger(argumentsMap.repetitions) ?? suite.repetitions ?? 1;
 const outputPath = resolve(
   argumentsMap.output
@@ -22,10 +30,10 @@ const observations = [];
 
 console.log(`Voyager AI eval ${suite.id}`);
 console.log(`Model: ${model.displayName} (${model.modelName})`);
-console.log(`Cases: ${suite.cases.length} x ${repetitions}`);
+console.log(`Cases: ${selectedCases.length} x ${repetitions}`);
 
 for (let repetition = 1; repetition <= repetitions; repetition += 1) {
-  for (const testCase of suite.cases) {
+  for (const testCase of selectedCases) {
     const label = `${testCase.id} [${repetition}/${repetitions}]`;
     process.stdout.write(`- ${label} ... `);
     const observation = await runCase(testCase, model.id, repetition);
@@ -41,6 +49,7 @@ const report = {
     id: suite.id,
     description: suite.description,
     path: suitePath,
+    sha256: createHash('sha256').update(suiteText).digest('hex'),
   },
   run: {
     startedAt: new Date(
@@ -48,6 +57,7 @@ const report = {
     ).toISOString(),
     finishedAt: new Date().toISOString(),
     baseUrl,
+    profile: argumentsMap.profile ?? null,
     repetitions,
     model: {
       id: model.id,
@@ -64,6 +74,8 @@ const report = {
       observations.length,
     ),
     latencyMs: latencySummary(observations.map((observation) => observation.latencyMs)),
+    workflowValidation: workflowValidationSummary(observations),
+    tokens: tokenSummary(observations),
     qualityGatesPassed: gates.every((gate) => gate.passed),
   },
   metrics,
@@ -84,7 +96,7 @@ async function runCase(testCase, modelConfigId, repetition) {
     const response = await requestJson(`${baseUrl}/app/v1/workflow-ai/conversations`, {
       method: 'POST',
       body: JSON.stringify({
-        instruction: testCase.instruction,
+        instruction: `${suite.instructionPrefix ?? ''}${testCase.instruction}`,
         modelConfigId,
         userDateTime: new Date().toISOString(),
       }),
@@ -132,6 +144,7 @@ async function runCase(testCase, modelConfigId, repetition) {
     return {
       caseId: testCase.id,
       category: testCase.category,
+      workflowExpected: testCase.workflowExpected ?? testCase.category === 'asl',
       repetition,
       startedAt,
       latencyMs: Date.now() - started,
@@ -143,6 +156,7 @@ async function runCase(testCase, modelConfigId, repetition) {
     return {
       caseId: testCase.id,
       category: testCase.category,
+      workflowExpected: testCase.workflowExpected ?? testCase.category === 'asl',
       repetition,
       startedAt,
       latencyMs: Date.now() - started,
@@ -326,6 +340,8 @@ function evaluateGates(metrics, qualityGates) {
 }
 
 function summarizeResponse(response) {
+  const message = response.assistantMessage ?? {};
+  const telemetry = message.toolTelemetry ?? {};
   return {
     conversationId: response.conversationId,
     stage: response.stage,
@@ -335,7 +351,62 @@ function summarizeResponse(response) {
     hasAsl: Boolean(response.aslDefinition),
     proposedFunctionCount: response.resourcePlan?.functions?.length ?? 0,
     proposedMcpCount: response.resourcePlan?.mcpRequirements?.length ?? 0,
+    inputTokens: message.inputTokens ?? null,
+    outputTokens: message.outputTokens ?? null,
+    totalTokens: message.totalTokens ?? null,
+    modelCalls: telemetry.modelCalls ?? null,
+    toolLoopUsed: telemetry.toolLoopUsed ?? false,
+    promptCatalogTokensPerCall: telemetry.promptCatalogTokensPerCall ?? 0,
+    toolSchemaTokensPerCall: telemetry.toolSchemaTokensPerCall ?? 0,
+    estimatedNetInputTokensSaved: telemetry.estimatedNetInputTokensSaved ?? 0,
   };
+}
+
+function workflowValidationSummary(observations) {
+  const workflows = observations.filter((observation) => observation.workflowExpected);
+  const passed = workflows.filter((observation) =>
+    observation.response?.hasAsl
+      && observation.metrics?.validation_clean?.passed
+      && (observation.metrics?.asl_structural_valid?.passed ?? true)).length;
+  return {
+    passed,
+    total: workflows.length,
+    rate: ratio(passed, workflows.length),
+  };
+}
+
+function tokenSummary(observations) {
+  const measured = observations.filter((observation) =>
+    Number.isFinite(observation.response?.inputTokens)
+      && Number.isFinite(observation.response?.outputTokens)
+      && Number.isFinite(observation.response?.totalTokens));
+  const inputTokens = sum(measured.map((observation) => observation.response.inputTokens));
+  const outputTokens = sum(measured.map((observation) => observation.response.outputTokens));
+  const totalTokens = sum(measured.map((observation) => observation.response.totalTokens));
+  const estimatedNetInputTokensSaved = sum(measured.map(
+    (observation) => observation.response.estimatedNetInputTokensSaved ?? 0));
+  const estimatedBaselineInputTokens = inputTokens + estimatedNetInputTokensSaved;
+  const estimatedBaselineTotalTokens = totalTokens + estimatedNetInputTokensSaved;
+  const validWorkflows = workflowValidationSummary(observations).passed;
+  return {
+    measuredTurns: measured.length,
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    estimatedNetInputTokensSaved,
+    estimatedBaselineInputTokens,
+    estimatedBaselineTotalTokens,
+    estimatedInputReductionRate: ratio(
+      estimatedNetInputTokensSaved, estimatedBaselineInputTokens),
+    estimatedTotalReductionRate: ratio(
+      estimatedNetInputTokensSaved, estimatedBaselineTotalTokens),
+    tokensPerValidWorkflow: validWorkflows === 0
+      ? null : Number((totalTokens / validWorkflows).toFixed(2)),
+  };
+}
+
+function sum(values) {
+  return values.reduce((total, value) => total + value, 0);
 }
 
 function latencySummary(values) {
@@ -430,6 +501,11 @@ function printSummary(report, path) {
     console.log(`  ${gate.passed ? 'PASS' : 'FAIL'} ${gate.metric}: ${actual} >= ${(gate.minimum * 100).toFixed(1)}%`);
   }
   console.log(`\nCase pass rate: ${(report.summary.casePassRate * 100).toFixed(1)}%`);
+  const validation = report.summary.workflowValidation;
+  console.log(`Workflow validation rate: ${(validation.rate * 100).toFixed(1)}% (${validation.passed}/${validation.total})`);
+  const tokens = report.summary.tokens;
+  console.log(`Tokens input/output/total: ${tokens.inputTokens}/${tokens.outputTokens}/${tokens.totalTokens}`);
+  console.log(`Estimated net input tokens saved: ${tokens.estimatedNetInputTokensSaved}`);
   console.log(`Latency p50/p95: ${report.summary.latencyMs.p50}/${report.summary.latencyMs.p95} ms`);
   console.log(`Result: ${path}`);
 }

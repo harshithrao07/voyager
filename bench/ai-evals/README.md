@@ -55,3 +55,21 @@ Practical notes:
 
 Keep the suite unchanged so results remain comparable. When product expectations change, copy it to
 `workflow-ai-v2.json` and document the changed contract instead of silently moving the baseline.
+
+## Workflow-generation A/B benchmark
+
+`workflow-generation-ab-v1.json` contains 30 workflow-only cases. The PowerShell orchestrator runs
+the same cases against a prompt-only/no-repair baseline and the normal enhanced profile (pgvector
+retrieval, bounded tools, structured output, and two repair passes), then restores the ordinary app
+configuration:
+
+```powershell
+.\bench\ai-evals\run-workflow-ai-ab.ps1 -ModelName qwen3:8b -Repetitions 3
+```
+
+Reports include actual provider-reported input/output/total tokens, strict final workflow-validation
+rate, Wilson 95% intervals, paired McNemar significance, and tokens per valid workflow. Run-specific
+outputs stay under `bench/ai-evals/results/` and are ignored by Git.
+
+The first completed qwen3:8b run and its reporting caveats are documented in
+[`WORKFLOW-GENERATION-AB-RESULTS.md`](WORKFLOW-GENERATION-AB-RESULTS.md).
